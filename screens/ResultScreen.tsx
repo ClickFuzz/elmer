@@ -17,6 +17,8 @@ import { saveJob } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
+type Tab = 'social' | 'web';
+
 type Props = {
   payload: GeneratePayload;
   onBack: () => void;
@@ -24,31 +26,37 @@ type Props = {
 
 type State =
   | { status: 'loading' }
-  | { status: 'success'; post: string; transcription: string; isMock: boolean }
+  | {
+      status: 'success';
+      socialPost: string;
+      webContent: string;
+      transcription: string;
+      isMock: boolean;
+    }
   | { status: 'error'; message: string };
 
 export default function ResultScreen({ payload, onBack }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
-  const [editedPost, setEditedPost] = useState('');
+  const [activeTab, setActiveTab] = useState<Tab>('social');
+  const [editedSocial, setEditedSocial] = useState('');
+  const [editedWeb, setEditedWeb] = useState('');
   const isGenerating = useRef(false);
 
   useEffect(() => {
-    generatePost();
+    generate();
   }, []);
 
-  const generatePost = async () => {
+  const generate = async () => {
     if (isGenerating.current) return;
     isGenerating.current = true;
     setState({ status: 'loading' });
 
     try {
-      let data: { post: string; transcription?: string; mock?: boolean };
-
       const classifications = payload.photos.map(p => p.classification);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let data: any;
 
       if (payload.audioUri) {
-        // FileSystem.uploadAsync reliably uploads device files — avoids the
-        // "Unsupported FormDataPart implementation" error in RN's fetch/FormData.
         const result = await FileSystem.uploadAsync(
           `${API_URL}/api/generate`,
           payload.audioUri,
@@ -63,13 +71,11 @@ export default function ResultScreen({ payload, onBack }: Props) {
             },
           }
         );
-
         if (result.status < 200 || result.status >= 300) {
           throw new Error(`Server error ${result.status}: ${result.body}`);
         }
         data = JSON.parse(result.body);
       } else {
-        // No audio — plain JSON request
         const response = await fetch(`${API_URL}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -84,31 +90,35 @@ export default function ResultScreen({ payload, onBack }: Props) {
 
       setState({
         status: 'success',
-        post: data.post,
+        socialPost: data.socialPost ?? '',
+        webContent: data.webContent ?? '',
         transcription: data.transcription ?? '',
         isMock: data.mock === true,
       });
-      setEditedPost(data.post);
+      setEditedSocial(data.socialPost ?? '');
+      setEditedWeb(data.webContent ?? '');
 
-      // Persist job silently — don't block UI
       saveJob({
         audioSourceUri: payload.audioUri,
         transcription: data.transcription ?? '',
-        postContent: data.post,
+        postContent: data.socialPost ?? '',
+        webContent: data.webContent ?? '',
         isMock: data.mock === true,
         photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification })),
       }).catch(err => console.warn('Failed to save job:', err));
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      setState({ status: 'error', message });
+      setState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' });
     } finally {
       isGenerating.current = false;
     }
   };
 
+  const activeText = activeTab === 'social' ? editedSocial : editedWeb;
+  const setActiveText = activeTab === 'social' ? setEditedSocial : setEditedWeb;
+
   const copyToClipboard = () => {
-    Clipboard.setString(editedPost);
-    Alert.alert('Copied!', 'Post copied to clipboard.');
+    Clipboard.setString(activeText);
+    Alert.alert('Copied!', `${activeTab === 'social' ? 'Social media post' : 'Web content'} copied to clipboard.`);
   };
 
   const handlePostEverywhere = () => {
@@ -119,47 +129,83 @@ export default function ResultScreen({ payload, onBack }: Props) {
     );
   };
 
+  const wordCount = (text: string) =>
+    text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Text style={styles.backBtnText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Preview</Text>
         <View style={styles.backBtn} />
       </View>
 
+      {/* Tab bar — only shown when content is ready */}
+      {state.status === 'success' && (
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'social' && styles.tabActive]}
+            onPress={() => setActiveTab('social')}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabText, activeTab === 'social' && styles.tabTextActive]}>
+              Social Media
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'web' && styles.tabActive]}
+            onPress={() => setActiveTab('web')}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabText, activeTab === 'web' && styles.tabTextActive]}>
+              Web Content
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Loading */}
         {state.status === 'loading' && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={colors.orange} />
-            <Text style={styles.loadingText}>Generating your post…</Text>
-            <Text style={styles.loadingSubtext}>Transcribing audio and writing copy.</Text>
+            <Text style={styles.loadingText}>Generating your posts…</Text>
+            <Text style={styles.loadingSubtext}>
+              Transcribing audio and writing social + web content.
+            </Text>
           </View>
         )}
 
+        {/* Error */}
         {state.status === 'error' && (
           <View style={styles.errorContainer}>
             <Text style={styles.errorIcon}>⚠️</Text>
             <Text style={styles.errorTitle}>Something went wrong</Text>
             <Text style={styles.errorMessage}>{state.message}</Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={generatePost} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.retryBtn} onPress={generate} activeOpacity={0.8}>
               <Text style={styles.retryBtnText}>Try Again</Text>
             </TouchableOpacity>
           </View>
         )}
 
+        {/* Success */}
         {state.status === 'success' && (
           <>
             {state.isMock && (
               <View style={styles.mockBanner}>
                 <Text style={styles.mockBannerText}>
-                  ⚠️  MOCK RESPONSE — AI server not connected. Set OPENAI_API_KEY in server/.env to enable real generation.
+                  ⚠️  MOCK RESPONSE — Set OPENAI_API_KEY in server/.env to enable real generation.
                 </Text>
               </View>
             )}
@@ -171,29 +217,56 @@ export default function ResultScreen({ payload, onBack }: Props) {
               </View>
             )}
 
-            <View style={styles.postCard}>
-              <View style={styles.postCardHeader}>
-                <Text style={styles.cardLabel}>Generated Post</Text>
-                <Text style={styles.postCardHint}>Tap to edit</Text>
+            {activeTab === 'social' && (
+              <View style={styles.postCard}>
+                <View style={styles.postCardHeader}>
+                  <View>
+                    <Text style={styles.cardLabel}>Social Media Post</Text>
+                    <Text style={styles.cardMeta}>Google · Facebook · Instagram · X · LinkedIn</Text>
+                  </View>
+                  <Text style={styles.postCardHint}>Tap to edit</Text>
+                </View>
+                <TextInput
+                  style={styles.postInput}
+                  value={editedSocial}
+                  onChangeText={setEditedSocial}
+                  multiline
+                  textAlignVertical="top"
+                  autoCorrect
+                  scrollEnabled={false}
+                />
+                <Text style={styles.metaCount}>{editedSocial.length} characters</Text>
               </View>
-              <TextInput
-                style={styles.postInput}
-                value={editedPost}
-                onChangeText={setEditedPost}
-                multiline
-                textAlignVertical="top"
-                autoCorrect
-                scrollEnabled={false}
-              />
-              <Text style={styles.charCount}>{editedPost.length} characters</Text>
-            </View>
+            )}
+
+            {activeTab === 'web' && (
+              <View style={styles.postCard}>
+                <View style={styles.postCardHeader}>
+                  <View>
+                    <Text style={styles.cardLabel}>Web Content</Text>
+                    <Text style={styles.cardMeta}>WordPress · 500+ words</Text>
+                  </View>
+                  <Text style={styles.postCardHint}>Tap to edit</Text>
+                </View>
+                <TextInput
+                  style={[styles.postInput, styles.postInputLong]}
+                  value={editedWeb}
+                  onChangeText={setEditedWeb}
+                  multiline
+                  textAlignVertical="top"
+                  autoCorrect
+                  scrollEnabled={false}
+                />
+                <Text style={styles.metaCount}>{wordCount(editedWeb)} words</Text>
+              </View>
+            )}
           </>
         )}
       </ScrollView>
 
+      {/* Footer */}
       {state.status === 'success' && (
         <View style={styles.footer}>
-          {/* Post Everywhere — primary, disabled until integrations exist */}
           <TouchableOpacity
             style={styles.postEverywhereBtn}
             onPress={handlePostEverywhere}
@@ -203,16 +276,11 @@ export default function ResultScreen({ payload, onBack }: Props) {
             <Text style={styles.postEverywhereSubtext}>Connect channels in Settings</Text>
           </TouchableOpacity>
 
-          {/* Secondary row */}
           <View style={styles.secondaryRow}>
             <TouchableOpacity style={styles.copyBtn} onPress={copyToClipboard} activeOpacity={0.8}>
-              <Text style={styles.copyBtnText}>Copy Post</Text>
+              <Text style={styles.copyBtnText}>Copy {activeTab === 'social' ? 'Post' : 'Article'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.regenBtn}
-              onPress={generatePost}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.regenBtn} onPress={generate} activeOpacity={0.8}>
               <Text style={styles.regenBtnText}>Regenerate</Text>
             </TouchableOpacity>
           </View>
@@ -236,11 +304,37 @@ const styles = StyleSheet.create({
   backBtn: { width: 80 },
   backBtnText: { color: colors.cream, fontSize: 16, fontWeight: '600' },
   headerTitle: { fontSize: 20, fontWeight: '800', color: colors.cream },
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: colors.navy,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    gap: 10,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: colors.navyLight,
+  },
+  tabActive: {
+    backgroundColor: colors.orange,
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.cream,
+    opacity: 0.6,
+  },
+  tabTextActive: {
+    opacity: 1,
+  },
   scroll: { flex: 1 },
   scrollContent: { padding: 20, paddingBottom: 32 },
   loadingContainer: { marginTop: 60, alignItems: 'center' },
   loadingText: { marginTop: 20, fontSize: 20, fontWeight: '700', color: colors.textDark },
-  loadingSubtext: { marginTop: 8, fontSize: 14, color: colors.textLight },
+  loadingSubtext: { marginTop: 8, fontSize: 14, color: colors.textLight, textAlign: 'center' },
   errorContainer: { marginTop: 40, alignItems: 'center', paddingHorizontal: 20 },
   errorIcon: { fontSize: 48, marginBottom: 16 },
   errorTitle: { fontSize: 22, fontWeight: '700', color: colors.textDark, marginBottom: 10 },
@@ -278,6 +372,11 @@ const styles = StyleSheet.create({
     color: colors.textLight,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  cardMeta: {
+    fontSize: 12,
+    color: colors.textLight,
     marginBottom: 8,
   },
   transcriptionText: { fontSize: 15, color: colors.textMid, lineHeight: 22 },
@@ -291,7 +390,12 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
-  postCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  postCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
   postCardHint: { fontSize: 12, color: colors.orange, fontWeight: '500' },
   postInput: {
     fontSize: 16,
@@ -300,7 +404,10 @@ const styles = StyleSheet.create({
     minHeight: 160,
     padding: 0,
   },
-  charCount: { marginTop: 10, fontSize: 12, color: colors.textLight, textAlign: 'right' },
+  postInputLong: {
+    minHeight: 320,
+  },
+  metaCount: { marginTop: 10, fontSize: 12, color: colors.textLight, textAlign: 'right' },
   footer: {
     padding: 20,
     paddingBottom: 24,
@@ -324,11 +431,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: 'center',
-    shadowColor: colors.orange,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
   },
   copyBtnText: { color: colors.white, fontSize: 16, fontWeight: '700' },
   regenBtn: {

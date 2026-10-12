@@ -2,47 +2,68 @@ import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system/legacy';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
+const SCHEMA_VERSION = 2;
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
   _db = await SQLite.openDatabaseAsync('elmer.db');
-  await _db.execAsync(`
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS jobs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'draft',
-      audio_local_uri TEXT,
-      transcription TEXT,
-      post_content TEXT,
-      is_mock INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS job_photos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id INTEGER NOT NULL,
-      local_uri TEXT NOT NULL,
-      classification TEXT NOT NULL DEFAULT 'General',
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-    );
-  `);
+  await migrate(_db);
   return _db;
+}
+
+async function migrate(db: SQLite.SQLiteDatabase) {
+  // Read current schema version
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const version = row?.user_version ?? 0;
+
+  if (version < 1) {
+    await db.execAsync(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        audio_local_uri TEXT,
+        transcription TEXT,
+        post_content TEXT,
+        web_content TEXT,
+        is_mock INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS job_photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        local_uri TEXT NOT NULL,
+        classification TEXT NOT NULL DEFAULT 'General',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+      );
+    `);
+    await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  } else if (version < 2) {
+    // Add web_content column introduced in v2
+    try {
+      await db.execAsync('ALTER TABLE jobs ADD COLUMN web_content TEXT');
+    } catch {
+      // Column already exists — safe to ignore
+    }
+    await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  }
 }
 
 export async function saveJob(params: {
   audioSourceUri: string | null;
   transcription: string;
   postContent: string;
+  webContent: string;
   isMock: boolean;
   photos: Array<{ uri: string; classification: string }>;
 }): Promise<number> {
   const db = await getDb();
   const now = Date.now();
 
-  // Copy audio to persistent document directory so cache eviction can't delete it
   let audioLocalUri: string | null = null;
   if (params.audioSourceUri) {
     try {
@@ -52,15 +73,14 @@ export async function saveJob(params: {
       await FileSystem.copyAsync({ from: params.audioSourceUri, to: dest });
       audioLocalUri = dest;
     } catch {
-      // If copy fails, store original URI (best-effort)
       audioLocalUri = params.audioSourceUri;
     }
   }
 
   const result = await db.runAsync(
-    `INSERT INTO jobs (created_at, updated_at, status, audio_local_uri, transcription, post_content, is_mock)
-     VALUES (?, ?, 'draft', ?, ?, ?, ?)`,
-    [now, now, audioLocalUri, params.transcription, params.postContent, params.isMock ? 1 : 0]
+    `INSERT INTO jobs (created_at, updated_at, status, audio_local_uri, transcription, post_content, web_content, is_mock)
+     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?)`,
+    [now, now, audioLocalUri, params.transcription, params.postContent, params.webContent, params.isMock ? 1 : 0]
   );
 
   const jobId = result.lastInsertRowId;

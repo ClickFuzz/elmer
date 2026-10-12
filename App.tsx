@@ -18,13 +18,21 @@ export type GeneratePayload = {
   audioUri: string | null;
 };
 
+export type HomeState = {
+  photos: PhotoItem[];
+  audioUri: string | null;
+};
+
 export type AppScreen = 'home' | 'result' | 'settings';
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('home');
   const [payload, setPayload] = useState<GeneratePayload | null>(null);
+  // Preserved so HomeScreen restores its state after back navigation
+  const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
 
   const handleGenerate = (data: GeneratePayload) => {
+    setSavedHomeState({ photos: data.photos, audioUri: data.audioUri });
     setPayload(data);
     setScreen('result');
   };
@@ -36,6 +44,7 @@ export default function App() {
         <HomeScreen
           onGenerate={handleGenerate}
           onShowSettings={() => setScreen('settings')}
+          initialState={savedHomeState}
         />
       )}
       {screen === 'result' && payload && (

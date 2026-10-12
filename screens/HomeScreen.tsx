@@ -22,7 +22,7 @@ import {
   View,
 } from 'react-native';
 import { colors } from '../constants/colors';
-import type { GeneratePayload, PhotoClassification, PhotoItem } from '../App';
+import type { GeneratePayload, HomeState, PhotoClassification, PhotoItem } from '../App';
 
 const MAX_PHOTOS = 5;
 
@@ -38,11 +38,13 @@ const CLASSIFICATION_COLORS: Record<PhotoClassification, string> = {
 type Props = {
   onGenerate: (data: GeneratePayload) => void;
   onShowSettings: () => void;
+  initialState: HomeState | null;
 };
 
-export default function HomeScreen({ onGenerate, onShowSettings }: Props) {
-  const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [audioUri, setAudioUri] = useState<string | null>(null);
+export default function HomeScreen({ onGenerate, onShowSettings, initialState }: Props) {
+  // useState initializer runs on each mount — restores state after back navigation
+  const [photos, setPhotos] = useState<PhotoItem[]>(initialState?.photos ?? []);
+  const [audioUri, setAudioUri] = useState<string | null>(initialState?.audioUri ?? null);
   const [isPlayingBack, setIsPlayingBack] = useState(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
