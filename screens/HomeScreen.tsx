@@ -1,5 +1,13 @@
 import * as ImagePicker from 'expo-image-picker';
-import { Audio } from 'expo-av';
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  createAudioPlayer,
+  RecordingPresets,
+} from 'expo-audio';
+import type { AudioPlayer } from 'expo-audio';
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Alert,
@@ -22,20 +30,25 @@ type Props = {
 
 export default function HomeScreen({ onGenerate }: Props) {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
   const [audioUri, setAudioUri] = useState<string | null>(null);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isPlayingBack, setIsPlayingBack] = useState(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
+
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      soundRef.current?.unloadAsync();
+      playerRef.current?.remove();
     };
   }, []);
+
+  // When recording stops naturally, grab the URI
+  useEffect(() => {
+    if (!recorderState.isRecording && recorder.uri && recorder.uri !== audioUri) {
+      setAudioUri(recorder.uri);
+    }
+  }, [recorderState.isRecording, recorder.uri]);
 
   const addPhotos = async () => {
     const remaining = MAX_PHOTOS - photos.length;
@@ -89,32 +102,24 @@ export default function HomeScreen({ onGenerate }: Props) {
 
   const startRecording = async () => {
     try {
-      const perm = await Audio.requestPermissionsAsync();
+      const perm = await requestRecordingPermissionsAsync();
       if (!perm.granted) {
         Alert.alert('Permission required', 'Microphone access is needed to record audio.');
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
 
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
+      // Stop any active playback
+      if (playerRef.current) {
+        playerRef.current.pause();
+        playerRef.current.remove();
+        playerRef.current = null;
+        setIsPlayingBack(false);
       }
 
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await rec.startAsync();
-      recordingRef.current = rec;
-      setIsRecording(true);
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
       setAudioUri(null);
-      setRecordingSeconds(0);
-
-      timerRef.current = setInterval(() => {
-        setRecordingSeconds(s => s + 1);
-      }, 1000);
     } catch (err) {
       console.error('Failed to start recording', err);
       Alert.alert('Error', 'Could not start recording. Please try again.');
@@ -122,46 +127,39 @@ export default function HomeScreen({ onGenerate }: Props) {
   };
 
   const stopRecording = async () => {
-    if (!recordingRef.current) return;
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
     try {
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-      setIsRecording(false);
-      setAudioUri(uri ?? null);
+      await recorder.stop();
+      // URI is read via the useEffect above
     } catch (err) {
       console.error('Failed to stop recording', err);
-      setIsRecording(false);
     }
   };
 
-  const playback = async () => {
+  const togglePlayback = async () => {
     if (!audioUri) return;
     try {
-      if (isPlayingBack && soundRef.current) {
-        await soundRef.current.stopAsync();
+      if (isPlayingBack && playerRef.current) {
+        playerRef.current.pause();
         setIsPlayingBack(false);
         return;
       }
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
+
+      if (playerRef.current) {
+        playerRef.current.remove();
+        playerRef.current = null;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: audioUri },
-        { shouldPlay: true },
-        (status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIsPlayingBack(false);
-          }
+
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      const player = createAudioPlayer({ uri: audioUri });
+      playerRef.current = player;
+
+      player.addListener('playbackStatusUpdate', (status: { didJustFinish?: boolean }) => {
+        if (status.didJustFinish) {
+          setIsPlayingBack(false);
         }
-      );
-      soundRef.current = sound;
+      });
+
+      player.play();
       setIsPlayingBack(true);
     } catch (err) {
       console.error('Playback failed', err);
@@ -170,11 +168,16 @@ export default function HomeScreen({ onGenerate }: Props) {
   };
 
   const formatSeconds = (s: number) => {
-    const m = Math.floor(s / 60).toString().padStart(2, '0');
-    const sec = (s % 60).toString().padStart(2, '0');
+    const secs = Math.floor(s);
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const sec = (secs % 60).toString().padStart(2, '0');
     return `${m}:${sec}`;
   };
 
+  const isRecording = recorderState.isRecording;
+  const recordingDuration = recorderState.durationMillis
+    ? recorderState.durationMillis / 1000
+    : 0;
   const canGenerate = audioUri !== null || photos.length > 0;
 
   const handleGenerate = () => {
@@ -241,7 +244,6 @@ export default function HomeScreen({ onGenerate }: Props) {
           </Text>
 
           <View style={styles.recordRow}>
-            {/* Record / Stop button */}
             <Pressable
               style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
               onPress={isRecording ? stopRecording : startRecording}
@@ -249,18 +251,17 @@ export default function HomeScreen({ onGenerate }: Props) {
               <View style={[styles.recordDot, isRecording && styles.recordDotActive]} />
               <Text style={styles.recordBtnText}>
                 {isRecording
-                  ? `Stop  ${formatSeconds(recordingSeconds)}`
+                  ? `Stop  ${formatSeconds(recordingDuration)}`
                   : audioUri
                   ? 'Re-record'
                   : 'Record'}
               </Text>
             </Pressable>
 
-            {/* Playback button */}
             {audioUri && !isRecording && (
               <TouchableOpacity
                 style={styles.playBtn}
-                onPress={playback}
+                onPress={togglePlayback}
                 activeOpacity={0.7}
               >
                 <Text style={styles.playBtnText}>
@@ -271,9 +272,7 @@ export default function HomeScreen({ onGenerate }: Props) {
           </View>
 
           {audioUri && !isRecording && (
-            <Text style={styles.recordedNote}>
-              Recording saved · {formatSeconds(recordingSeconds)}
-            </Text>
+            <Text style={styles.recordedNote}>Recording saved</Text>
           )}
         </View>
       </ScrollView>
