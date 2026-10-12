@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Elmer",
+    "slug": "elmer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Elmer uses your camera to capture job photos.",
+        "NSPhotoLibraryUsageDescription": "Elmer accesses your photos to attach job images to posts.",
+        "NSMicrophoneUsageDescription": "Elmer uses your microphone to record a voice description of the job."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0D1B2A",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
