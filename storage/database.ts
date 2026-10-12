@@ -2,7 +2,17 @@ import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system/legacy';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+
+export type SeoMetadata = {
+  seoTitle: string;
+  urlSlug: string;
+  metaDescription: string;
+  mainKeyword: string;
+  secondaryKeywords: string[];
+  imageFilenames: string[];
+  imageAltTexts: string[];
+};
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -14,11 +24,11 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 async function migrate(db: SQLite.SQLiteDatabase) {
-  // Read current schema version
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const version = row?.user_version ?? 0;
 
   if (version < 1) {
+    // Fresh install — create full schema at current version
     await db.execAsync(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS jobs (
@@ -29,7 +39,10 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         audio_local_uri TEXT,
         transcription TEXT,
         post_content TEXT,
+        social_content TEXT,
         web_content TEXT,
+        job_location TEXT,
+        seo_metadata TEXT,
         is_mock INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS job_photos (
@@ -42,13 +55,20 @@ async function migrate(db: SQLite.SQLiteDatabase) {
       );
     `);
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-  } else if (version < 2) {
-    // Add web_content column introduced in v2
-    try {
-      await db.execAsync('ALTER TABLE jobs ADD COLUMN web_content TEXT');
-    } catch {
-      // Column already exists — safe to ignore
-    }
+    return;
+  }
+
+  // Incremental migrations for devices that have an older schema
+  if (version < 2) {
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN web_content TEXT'); } catch { /* already exists */ }
+  }
+  if (version < 3) {
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN social_content TEXT'); } catch { /* already exists */ }
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN job_location TEXT'); } catch { /* already exists */ }
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN seo_metadata TEXT'); } catch { /* already exists */ }
+  }
+
+  if (version < SCHEMA_VERSION) {
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
 }
@@ -56,8 +76,11 @@ async function migrate(db: SQLite.SQLiteDatabase) {
 export async function saveJob(params: {
   audioSourceUri: string | null;
   transcription: string;
-  postContent: string;
+  googlePost: string;
+  socialPost: string;
   webContent: string;
+  location: string;
+  seoMetadata: SeoMetadata | null;
   isMock: boolean;
   photos: Array<{ uri: string; classification: string }>;
 }): Promise<number> {
@@ -78,9 +101,17 @@ export async function saveJob(params: {
   }
 
   const result = await db.runAsync(
-    `INSERT INTO jobs (created_at, updated_at, status, audio_local_uri, transcription, post_content, web_content, is_mock)
-     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?)`,
-    [now, now, audioLocalUri, params.transcription, params.postContent, params.webContent, params.isMock ? 1 : 0]
+    `INSERT INTO jobs
+       (created_at, updated_at, status, audio_local_uri, transcription,
+        post_content, social_content, web_content, job_location, seo_metadata, is_mock)
+     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      now, now, audioLocalUri, params.transcription,
+      params.googlePost, params.socialPost, params.webContent,
+      params.location || null,
+      params.seoMetadata ? JSON.stringify(params.seoMetadata) : null,
+      params.isMock ? 1 : 0,
+    ]
   );
 
   const jobId = result.lastInsertRowId;
