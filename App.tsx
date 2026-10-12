@@ -4,9 +4,13 @@ import { SafeAreaView, StyleSheet } from 'react-native';
 import { colors } from './constants/colors';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
+import SettingsScreen from './screens/SettingsScreen';
+
+export type PhotoClassification = 'General' | 'Before' | 'After' | 'Team';
 
 export type PhotoItem = {
   uri: string;
+  classification: PhotoClassification;
 };
 
 export type GeneratePayload = {
@@ -14,7 +18,7 @@ export type GeneratePayload = {
   audioUri: string | null;
 };
 
-export type AppScreen = 'home' | 'result';
+export type AppScreen = 'home' | 'result' | 'settings';
 
 export default function App() {
   const [screen, setScreen] = useState<AppScreen>('home');
@@ -25,18 +29,20 @@ export default function App() {
     setScreen('result');
   };
 
-  const handleBack = () => {
-    setScreen('home');
-  };
-
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar style="light" />
       {screen === 'home' && (
-        <HomeScreen onGenerate={handleGenerate} />
+        <HomeScreen
+          onGenerate={handleGenerate}
+          onShowSettings={() => setScreen('settings')}
+        />
       )}
       {screen === 'result' && payload && (
-        <ResultScreen payload={payload} onBack={handleBack} />
+        <ResultScreen payload={payload} onBack={() => setScreen('home')} />
+      )}
+      {screen === 'settings' && (
+        <SettingsScreen onBack={() => setScreen('home')} />
       )}
     </SafeAreaView>
   );

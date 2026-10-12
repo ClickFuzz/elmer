@@ -16,23 +16,39 @@ app.use(express.json());
 
 const upload = multer({ dest: path.join(__dirname, 'tmp') });
 
-// Ensure tmp dir exists
 if (!fs.existsSync(path.join(__dirname, 'tmp'))) {
   fs.mkdirSync(path.join(__dirname, 'tmp'));
 }
+
+// Conditionally apply multer — only for multipart uploads (audio present).
+// JSON requests (no audio) are already parsed by express.json() above.
+const optionalAudioUpload = (req, res, next) => {
+  const ct = req.headers['content-type'] ?? '';
+  if (ct.includes('multipart/form-data')) {
+    upload.single('audio')(req, res, next);
+  } else {
+    next();
+  }
+};
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, aiEnabled: !!OPENAI_API_KEY });
 });
 
-app.post('/api/generate', upload.single('audio'), async (req, res) => {
+app.post('/api/generate', optionalAudioUpload, async (req, res) => {
   const photoCount = parseInt(req.body.photoCount ?? '0', 10);
-  const audioFile = req.file;
+  const audioFile = req.file ?? null;
+
+  let classifications = [];
+  try {
+    const raw = req.body.classifications;
+    if (raw) classifications = JSON.parse(raw);
+  } catch {
+    classifications = [];
+  }
 
   if (!OPENAI_API_KEY) {
-    // Clean up uploaded file if any
     if (audioFile) fs.unlink(audioFile.path, () => {});
-
     return res.json({
       mock: true,
       transcription:
@@ -42,19 +58,14 @@ app.post('/api/generate', upload.single('audio'), async (req, res) => {
     });
   }
 
-  // Real AI path
   const OpenAI = require('openai');
   const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
   let transcription = '';
-
   try {
     if (audioFile) {
-      const audioStream = fs.createReadStream(audioFile.path);
-      // Rename so Whisper accepts it (needs an extension)
       const renamedPath = audioFile.path + '.m4a';
       fs.renameSync(audioFile.path, renamedPath);
-
       const whisperResponse = await openai.audio.transcriptions.create({
         file: fs.createReadStream(renamedPath),
         model: 'whisper-1',
@@ -69,16 +80,25 @@ app.post('/api/generate', upload.single('audio'), async (req, res) => {
     return res.status(500).json({ error: 'Transcription failed', detail: String(err) });
   }
 
-  // Build prompt
-  const photoNote =
-    photoCount > 0
-      ? `The contractor also took ${photoCount} photo${photoCount > 1 ? 's' : ''} of the finished job.`
-      : '';
+  // Build photo description with classifications
+  let photoNote = '';
+  if (photoCount > 0) {
+    if (classifications.length === photoCount) {
+      const grouped = {};
+      classifications.forEach(c => { grouped[c] = (grouped[c] ?? 0) + 1; });
+      const parts = Object.entries(grouped).map(([label, count]) =>
+        count === 1 ? label : `${count} ${label}`
+      );
+      photoNote = `The contractor included ${photoCount} photo${photoCount > 1 ? 's' : ''} of the job (${parts.join(', ')}).`;
+    } else {
+      photoNote = `The contractor included ${photoCount} photo${photoCount > 1 ? 's' : ''} of the finished job.`;
+    }
+  }
 
   const prompt = `You are a marketing copywriter helping a contractor promote their business on social media.
 
 The contractor described their completed job as follows:
-"${transcription}"
+"${transcription || '(No audio description provided.)'}"
 ${photoNote}
 
 Write a polished, enthusiastic social media post for this job. The post should:
@@ -99,7 +119,6 @@ Return only the post text, no extra commentary.`;
       temperature: 0.8,
     });
     const post = completion.choices[0]?.message?.content?.trim() ?? '';
-
     return res.json({ mock: false, transcription, post });
   } catch (err) {
     console.error('Generation error:', err);
