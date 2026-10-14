@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import {
   useAudioRecorder,
@@ -21,27 +22,42 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
 import type { GeneratePayload, HomeState, PhotoClassification, PhotoItem } from '../App';
 
 const MAX_PHOTOS = 5;
 
+function extractGpsFromExif(exif: Record<string, unknown> | null | undefined): { lat: number; lng: number } | undefined {
+  if (!exif) return undefined;
+  // iOS stores GPS under '{GPS}' namespace; Android may use root-level keys
+  const ns = (exif['{GPS}'] as Record<string, unknown>) ?? exif;
+  const rawLat = (ns['GPSLatitude'] ?? ns['Latitude']) as number | undefined;
+  const rawLng = (ns['GPSLongitude'] ?? ns['Longitude']) as number | undefined;
+  const latRef = (ns['GPSLatitudeRef'] ?? ns['LatitudeRef']) as string | undefined;
+  const lngRef = (ns['GPSLongitudeRef'] ?? ns['LongitudeRef']) as string | undefined;
+  if (typeof rawLat !== 'number' || typeof rawLng !== 'number' || isNaN(rawLat) || isNaN(rawLng)) return undefined;
+  return {
+    lat: latRef === 'S' ? -rawLat : rawLat,
+    lng: lngRef === 'W' ? -rawLng : rawLng,
+  };
+}
+
 const CLASSIFICATIONS: PhotoClassification[] = ['General', 'Before', 'After', 'Team'];
 
 const CLASSIFICATION_COLORS: Record<PhotoClassification, string> = {
-  General: 'rgba(50,50,50,0.78)',
-  Before: 'rgba(160,90,0,0.82)',
-  After: 'rgba(25,110,30,0.82)',
-  Team: 'rgba(13,27,80,0.82)',
+  General: 'rgba(21,29,50,0.88)',
+  Before: 'rgba(160,80,0,0.88)',
+  After: 'rgba(20,100,65,0.88)',
+  Team: 'rgba(13,40,100,0.88)',
 };
 
 type Props = {
   onGenerate: (data: GeneratePayload) => void;
-  onShowSettings: () => void;
   initialState: HomeState | null;
 };
 
-export default function HomeScreen({ onGenerate, onShowSettings, initialState }: Props) {
+export default function HomeScreen({ onGenerate, initialState }: Props) {
   // useState initializer runs on each mount — restores state after back navigation
   const [photos, setPhotos] = useState<PhotoItem[]>(initialState?.photos ?? []);
   const [audioUri, setAudioUri] = useState<string | null>(initialState?.audioUri ?? null);
@@ -84,7 +100,10 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
           const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
           if (!result.canceled && result.assets.length > 0) {
             setPhotos(prev =>
-              [...prev, { uri: result.assets[0].uri, classification: 'General' as const }].slice(0, MAX_PHOTOS)
+              [...prev, {
+                uri: result.assets[0].uri,
+                classification: 'General' as const,
+              }].slice(0, MAX_PHOTOS)
             );
           }
         },
@@ -102,11 +121,13 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
             allowsMultipleSelection: true,
             selectionLimit: remaining,
             quality: 0.8,
+            exif: true,
           });
           if (!result.canceled) {
             const newPhotos: PhotoItem[] = result.assets.map(a => ({
               uri: a.uri,
-              classification: 'General',
+              classification: 'General' as const,
+              gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
             }));
             setPhotos(prev => [...prev, ...newPhotos].slice(0, MAX_PHOTOS));
           }
@@ -229,30 +250,49 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
 
   const isRecording = recorderState.isRecording;
   const recordingDuration = recorderState.durationMillis ? recorderState.durationMillis / 1000 : 0;
-  const canGenerate = audioUri !== null || photos.length > 0;
+  const canGenerate = audioUri !== null || photos.length > 0 || isRecording;
 
-  const handleGenerate = () => {
-    if (!canGenerate) {
+  const handleGenerate = async () => {
+    let finalAudioUri = audioUri;
+
+    if (isRecording) {
+      try {
+        await recorder.stop();
+        finalAudioUri = recorder.uri;
+      } catch (err) {
+        console.error('Failed to stop recording before generate', err);
+      }
+    }
+
+    if (!finalAudioUri && photos.length === 0) {
       Alert.alert('Nothing to generate', 'Add at least one photo or record a description.');
       return;
     }
-    onGenerate({ photos, audioUri });
+
+    // Copy audio from temp cache to document directory so it survives until upload
+    if (finalAudioUri) {
+      try {
+        const dest = `${FileSystem.documentDirectory}elmer_recording_${Date.now()}.m4a`;
+        await FileSystem.copyAsync({ from: finalAudioUri, to: dest });
+        finalAudioUri = dest;
+      } catch (err) {
+        console.error('Failed to copy audio to permanent storage', err);
+      }
+    }
+
+    onGenerate({ photos, audioUri: finalAudioUri });
   };
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerSide} />
-        <View style={styles.headerCenter}>
-          <Text style={styles.logo}>Elmer</Text>
-          <Text style={styles.tagline}>You do the work. Elmer spreads the word.</Text>
+        <View style={styles.logoRow}>
+          <Text style={styles.logoText}>elmer</Text>
+          <Text style={styles.logoPeriod}>.</Text>
         </View>
-        <View style={styles.headerSide}>
-          <TouchableOpacity onPress={onShowSettings} style={styles.settingsBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Text style={styles.settingsIcon}>⚙</Text>
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.headline}>Turn great work into growth.</Text>
+        <Text style={styles.subheadline}>Take a minute to spread the word</Text>
       </View>
 
       <ScrollView
@@ -260,12 +300,16 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.sectionPrompt}>Finished a job?</Text>
-
         {/* Photos */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>Job Photos</Text>
+            <View style={styles.sectionIconWrap}>
+              <Ionicons name="camera" size={18} color={colors.cyan} />
+            </View>
+            <View style={styles.sectionLabelGroup}>
+              <Text style={styles.sectionLabel}>Job Photos</Text>
+              <Text style={styles.sectionSubLabel}>Add up to {MAX_PHOTOS}</Text>
+            </View>
             <Text style={styles.sectionCount}>{photos.length}/{MAX_PHOTOS}</Text>
           </View>
 
@@ -296,7 +340,7 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
 
             {photos.length < MAX_PHOTOS && (
               <TouchableOpacity style={styles.addPhotoBtn} onPress={addPhotos} activeOpacity={0.7}>
-                <Text style={styles.addPhotoBtnIcon}>+</Text>
+                <Ionicons name="add" size={28} color={colors.textMuted} />
                 <Text style={styles.addPhotoBtnLabel}>
                   {photos.length === 0 ? 'Add Photo' : 'Add More'}
                 </Text>
@@ -311,10 +355,15 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
 
         {/* Audio */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Voice Description</Text>
-          <Text style={styles.sectionHint}>
-            Describe the job in ~15 seconds — what you did, where, any details.
-          </Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIconWrap}>
+              <Ionicons name="mic" size={18} color={colors.cyan} />
+            </View>
+            <View style={styles.sectionLabelGroup}>
+              <Text style={styles.sectionLabel}>Voice Description</Text>
+              <Text style={styles.sectionSubLabel}>Explain the details about this job</Text>
+            </View>
+          </View>
 
           <View style={styles.recordRow}>
             <Pressable
@@ -322,7 +371,7 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
               onPress={isRecording ? stopRecording : startRecording}
             >
               <View style={[styles.recordDot, isRecording && styles.recordDotActive]} />
-              <Text style={styles.recordBtnText}>
+              <Text style={[styles.recordBtnText, isRecording && styles.recordBtnTextActive]}>
                 {isRecording
                   ? `Stop  ${formatSeconds(recordingDuration)}`
                   : audioUri
@@ -339,7 +388,7 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
           </View>
 
           {audioUri && !isRecording && (
-            <Text style={styles.recordedNote}>Recording saved</Text>
+            <Text style={styles.recordedNote}>✓ Recording saved</Text>
           )}
         </View>
       </ScrollView>
@@ -351,7 +400,9 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
           onPress={handleGenerate}
           activeOpacity={0.8}
         >
-          <Text style={styles.generateBtnText}>Generate Preview</Text>
+          <Text style={[styles.generateBtnText, !canGenerate && styles.generateBtnTextDisabled]}>
+            Generate Preview
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -359,39 +410,44 @@ export default function HomeScreen({ onGenerate, onShowSettings, initialState }:
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.cream },
+  container: { flex: 1, backgroundColor: colors.bg },
   header: {
-    backgroundColor: colors.navy,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 22,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-  headerSide: { width: 44, alignItems: 'flex-end' },
-  headerCenter: { flex: 1, alignItems: 'center' },
-  logo: { fontSize: 36, fontWeight: '800', color: colors.cream, letterSpacing: 1 },
-  tagline: { fontSize: 12, color: colors.orange, marginTop: 3, fontStyle: 'italic', textAlign: 'center' },
-  settingsBtn: { padding: 4 },
-  settingsIcon: { fontSize: 22, color: colors.cream, opacity: 0.7 },
+  logoRow: { flexDirection: 'row', alignItems: 'baseline' },
+  logoText: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.textPrimary, letterSpacing: -1 },
+  logoPeriod: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.cyan, letterSpacing: -1 },
+  headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary, marginTop: 10, lineHeight: 30 },
+  subheadline: { fontSize: 15, fontFamily: 'Inter_400Regular', color: colors.textSecondary, marginTop: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20 },
-  sectionPrompt: { fontSize: 26, fontWeight: '700', color: colors.textDark, marginBottom: 24 },
   section: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 18,
     marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  sectionLabel: { fontSize: 17, fontWeight: '700', color: colors.textDark },
-  sectionCount: { fontSize: 14, color: colors.textLight, fontWeight: '600' },
-  sectionHint: { fontSize: 14, color: colors.textMid, marginBottom: 16, lineHeight: 20 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  sectionIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    backgroundColor: 'rgba(83,219,243,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  sectionLabelGroup: { flex: 1 },
+  sectionLabel: { fontSize: 17, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary },
+  sectionSubLabel: { fontSize: 12, fontFamily: 'Inter_400Regular', color: colors.textMuted, marginTop: 1 },
+  sectionCount: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
   photoRow: { flexDirection: 'row' },
   photoItem: { marginRight: 10 },
   photoThumb: {
@@ -415,69 +471,82 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 4,
     right: 4,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     borderRadius: 10,
     width: 22,
     height: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoRemoveText: { color: colors.white, fontSize: 11, fontWeight: '700' },
+  photoRemoveText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   addPhotoBtn: {
     width: 90,
     height: 90,
     borderRadius: 10,
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.cream,
+    backgroundColor: colors.bg,
+    gap: 2,
   },
-  addPhotoBtnIcon: { fontSize: 28, color: colors.textLight, lineHeight: 32 },
-  addPhotoBtnLabel: { fontSize: 11, color: colors.textLight, marginTop: 2, fontWeight: '600' },
-  classHint: { marginTop: 10, fontSize: 12, color: colors.textLight, fontStyle: 'italic' },
+  addPhotoBtnLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '600' },
+  classHint: { marginTop: 10, fontSize: 12, color: colors.textMuted },
   recordRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   recordBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.navy,
+    backgroundColor: colors.bg,
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
     paddingVertical: 16,
     paddingHorizontal: 24,
     flex: 1,
     gap: 10,
   },
-  recordBtnActive: { backgroundColor: colors.danger },
-  recordDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: colors.danger },
-  recordDotActive: { backgroundColor: colors.white },
-  recordBtnText: { color: colors.white, fontSize: 17, fontWeight: '700' },
+  recordBtnActive: {
+    backgroundColor: colors.error,
+    borderColor: colors.error,
+  },
+  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.error },
+  recordDotActive: { backgroundColor: '#fff' },
+  recordBtnText: { color: colors.textSecondary, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
+  recordBtnTextActive: { color: '#fff' },
   playBtn: {
-    backgroundColor: colors.creamDark,
+    backgroundColor: colors.bg,
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
     paddingVertical: 16,
     paddingHorizontal: 18,
   },
-  playBtnText: { fontSize: 15, fontWeight: '600', color: colors.textDark },
+  playBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
   recordedNote: { marginTop: 10, fontSize: 13, color: colors.success, fontWeight: '600' },
   footer: {
     padding: 20,
     paddingBottom: 24,
-    backgroundColor: colors.cream,
+    backgroundColor: colors.bg,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
   generateBtn: {
-    backgroundColor: colors.orange,
+    backgroundColor: colors.cyan,
     borderRadius: 16,
     paddingVertical: 20,
     alignItems: 'center',
-    shadowColor: colors.orange,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  generateBtnDisabled: { backgroundColor: colors.border, shadowOpacity: 0 },
-  generateBtnText: { color: colors.white, fontSize: 20, fontWeight: '800', letterSpacing: 0.3 },
+  generateBtnDisabled: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  generateBtnText: {
+    color: colors.bg,
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    letterSpacing: 0.2,
+  },
+  generateBtnTextDisabled: { color: colors.textMuted },
 });

@@ -1,8 +1,9 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as SecureStore from 'expo-secure-store';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 
 export type SeoMetadata = {
   seoTitle: string;
@@ -53,6 +54,10 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         sort_order INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     return;
@@ -66,6 +71,11 @@ async function migrate(db: SQLite.SQLiteDatabase) {
     try { await db.execAsync('ALTER TABLE jobs ADD COLUMN social_content TEXT'); } catch { /* already exists */ }
     try { await db.execAsync('ALTER TABLE jobs ADD COLUMN job_location TEXT'); } catch { /* already exists */ }
     try { await db.execAsync('ALTER TABLE jobs ADD COLUMN seo_metadata TEXT'); } catch { /* already exists */ }
+  }
+  if (version < 5) {
+    try {
+      await db.execAsync('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    } catch { /* already exists */ }
   }
 
   if (version < SCHEMA_VERSION) {
@@ -82,7 +92,7 @@ export async function saveJob(params: {
   location: string;
   seoMetadata: SeoMetadata | null;
   isMock: boolean;
-  photos: Array<{ uri: string; classification: string }>;
+  photos: { uri: string; classification: string }[];
 }): Promise<number> {
   const db = await getDb();
   const now = Date.now();
@@ -134,6 +144,223 @@ export async function getJobStats(): Promise<{ total: number; drafts: number }> 
      FROM jobs`
   );
   return { total: row?.total ?? 0, drafts: row?.drafts ?? 0 };
+}
+
+export async function getSetting(key: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`, [key]
+  );
+  return row?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
+    [key, value]
+  );
+}
+
+// ── Session token (Elmer account) ─────────────────────────────────────────────
+// Token is stored in SecureStore (Keychain/Keystore); email stays in SQLite.
+
+const SECURE_TOKEN_KEY = 'elmer_session_token';
+
+export async function getSessionToken(): Promise<string | null> {
+  const token = await SecureStore.getItemAsync(SECURE_TOKEN_KEY);
+  if (token) return token;
+  // One-time migration: move any plaintext token left in SQLite to SecureStore.
+  const legacy = await getSetting('session_token');
+  if (legacy) {
+    await SecureStore.setItemAsync(SECURE_TOKEN_KEY, legacy);
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+    return legacy;
+  }
+  return null;
+}
+
+export async function getSessionEmail(): Promise<string | null> {
+  return getSetting('session_email');
+}
+
+export async function setSession(token: string, email: string): Promise<void> {
+  await SecureStore.setItemAsync(SECURE_TOKEN_KEY, token);
+  await setSetting('session_email', email);
+  // Remove any legacy plaintext token that may exist from a prior install.
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+}
+
+export async function clearSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(SECURE_TOKEN_KEY);
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM settings WHERE key IN ('session_token', 'session_email')`);
+}
+
+// ── Connected channels ────────────────────────────────────────────────────────
+
+export type ConnectedChannel = {
+  id: string;
+  platform: 'google' | 'facebook' | 'instagram' | 'twitter' | 'wordpress';
+  accountName: string;
+  accountId?: string;
+};
+
+// Returns channels that have been authorized via OAuth.
+// Falls back to empty array when not available.
+export type BusinessProfile = {
+  name: string;
+  website: string;
+  location: string;
+  category: string;
+  categoryCustom: string;
+  services: string[];
+  serviceAreas: string[];
+  description: string;
+  writingStyle: string;
+};
+
+export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
+  name: '',
+  website: '',
+  location: '',
+  category: '',
+  categoryCustom: '',
+  services: [],
+  serviceAreas: [],
+  description: '',
+  writingStyle: 'Casual / Professional',
+};
+
+export async function getBusinessProfile(): Promise<BusinessProfile> {
+  const raw = await getSetting('business_profile');
+  if (raw) {
+    try { return { ...DEFAULT_BUSINESS_PROFILE, ...JSON.parse(raw) }; } catch { /* fall through */ }
+  }
+  // Migrate legacy standalone key if present
+  const legacyLoc = await getSetting('business_location');
+  return { ...DEFAULT_BUSINESS_PROFILE, ...(legacyLoc ? { location: legacyLoc } : {}) };
+}
+
+export async function saveBusinessProfile(profile: BusinessProfile): Promise<void> {
+  await setSetting('business_profile', JSON.stringify(profile));
+}
+
+export async function getConnectedChannels(): Promise<ConnectedChannel[]> {
+  const raw = await getSetting('connected_channels');
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+}
+
+export async function fetchServerConnectedChannels(
+  token: string,
+  apiUrl: string
+): Promise<ConnectedChannel[]> {
+  try {
+    const res = await fetch(`${apiUrl}/platforms`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.platforms ?? []).map((p: {
+      id: number;
+      platform: string;
+      account_name: string;
+      account_id: string;
+    }) => ({
+      id:          String(p.id),
+      platform:    p.platform as ConnectedChannel['platform'],
+      accountName: p.account_name,
+      accountId:   p.account_id,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export type FacebookPage = {
+  id: number;
+  account_name: string;
+  account_id: string;
+  connected_at: number;
+};
+
+export async function fetchFacebookPages(
+  token: string,
+  apiUrl: string
+): Promise<FacebookPage[]> {
+  try {
+    const res = await fetch(`${apiUrl}/facebook/pages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.pages ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getActiveFacebookPage(): Promise<{ id: number; name: string; accountId: string } | null> {
+  const raw = await getSetting('facebook_active_page');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+export async function setActiveFacebookPage(
+  id: number,
+  name: string,
+  accountId: string
+): Promise<void> {
+  await setSetting('facebook_active_page', JSON.stringify({ id, name, accountId }));
+}
+
+export async function clearActiveFacebookPage(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM settings WHERE key = 'facebook_active_page'`);
+}
+
+export type Job = {
+  id: number;
+  createdAt: number;
+  status: string;
+  socialContent: string | null;
+  webContent: string | null;
+  googlePost: string | null;
+  jobLocation: string | null;
+  isMock: boolean;
+  firstPhotoUri: string | null;
+};
+
+export async function getAllJobs(): Promise<Job[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: number;
+    created_at: number;
+    status: string;
+    social_content: string | null;
+    web_content: string | null;
+    post_content: string | null;
+    job_location: string | null;
+    is_mock: number;
+    first_photo_uri: string | null;
+  }>(`SELECT j.id, j.created_at, j.status, j.social_content, j.web_content,
+             j.post_content, j.job_location, j.is_mock,
+             (SELECT local_uri FROM job_photos WHERE job_id = j.id ORDER BY sort_order ASC LIMIT 1) AS first_photo_uri
+      FROM jobs j ORDER BY j.created_at DESC`);
+  return rows.map(r => ({
+    id: r.id,
+    createdAt: r.created_at,
+    status: r.status,
+    socialContent: r.social_content,
+    webContent: r.web_content,
+    googlePost: r.post_content,
+    jobLocation: r.job_location,
+    isMock: r.is_mock === 1,
+    firstPhotoUri: r.first_photo_uri,
+  }));
 }
 
 export async function deleteOldPublishedMedia(): Promise<void> {

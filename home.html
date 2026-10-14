@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>elmer. — Turn great work into growth.</title>
+  <meta name="description" content="Elmer helps local contractors and service businesses share completed jobs on Google, Facebook, and their website in about a minute. More people see your work. More chances to get hired." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0C1122;
+      color: #e8eaf0;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    img { max-width: 100%; display: block; }
+    a { text-decoration: none; color: inherit; }
+    ul { list-style: none; }
+
+    :root {
+      --navy:       #0C1122;
+      --navy-mid:   #0f1627;
+      --navy-card:  #151D32;
+      --navy-light: #1c2840;
+      --cyan:       #53DBF3;
+      --cyan-soft:  rgba(83,219,243,.12);
+      --white:      #F5F7FF;
+      --off-white:  #A6B5CB;
+      --muted:      #74869F;
+      --border:     rgba(255,255,255,.07);
+      --radius:     14px;
+      --radius-sm:  8px;
+      --transition: 0.25s ease;
+    }
+
+    .container { width: 100%; max-width: 1140px; margin: 0 auto; padding: 0 20px; }
+
+    .text-cyan { color: var(--cyan); }
+
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.25);
+      border-radius: 50px;
+      padding: 5px 14px;
+      margin-bottom: 16px;
+    }
+
+    .section-heading {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--white);
+      margin-bottom: 16px;
+    }
+
+    .section-sub {
+      font-size: 17px;
+      color: var(--off-white);
+      max-width: 560px;
+      line-height: 1.7;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--cyan);
+      color: #0C1122;
+      font-size: 15px;
+      font-weight: 700;
+      padding: 14px 28px;
+      border-radius: 50px;
+      border: none;
+      cursor: pointer;
+      transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+      white-space: nowrap;
+    }
+    .btn-primary:hover {
+      background: #70e8f7;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 28px rgba(83,219,243,.28);
+    }
+
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      color: var(--cyan);
+      font-size: 15px;
+      font-weight: 600;
+      padding: 13px 26px;
+      border-radius: 50px;
+      border: 1.5px solid var(--cyan);
+      cursor: pointer;
+      transition: background var(--transition), transform var(--transition);
+      white-space: nowrap;
+    }
+    .btn-outline:hover { background: var(--cyan-soft); transform: translateY(-2px); }
+
+    /* ── HEADER ── */
+    header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 1000;
+      background: rgba(12,17,34,.92);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--border);
+    }
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 68px;
+      gap: 20px;
+    }
+    .logo-wrap { flex-shrink: 0; display: flex; align-items: center; }
+    .wordmark {
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 36px;
+      color: var(--white);
+      letter-spacing: -0.5px;
+      line-height: 1;
+    }
+    .wordmark-period { color: var(--cyan); }
+
+    nav[data-clickfuzz-nav="primary"] { display: none; }
+    nav[data-clickfuzz-nav="primary"] ul { display: flex; align-items: center; gap: 6px; }
+    nav[data-clickfuzz-nav="primary"] ul li a {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--off-white);
+      padding: 8px 14px;
+      border-radius: 8px;
+      transition: color var(--transition), background var(--transition);
+    }
+    nav[data-clickfuzz-nav="primary"] ul li a:hover { color: var(--white); background: rgba(255,255,255,.06); }
+
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .header-cta { font-size: 13px; padding: 10px 20px; }
+
+    .hamburger {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 5px;
+      width: 44px; height: 44px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 10px;
+      border-radius: 8px;
+      transition: background var(--transition);
+    }
+    .hamburger:hover { background: rgba(255,255,255,.06); }
+    .hamburger span { display: block; width: 22px; height: 2px; background: var(--off-white); border-radius: 2px; transition: transform 0.3s ease, opacity 0.3s ease; }
+    .hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+    .hamburger.open span:nth-child(2) { opacity: 0; }
+    .hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+    .mobile-drawer {
+      display: none;
+      flex-direction: column;
+      background: var(--navy-mid);
+      border-top: 1px solid var(--border);
+      padding: 20px;
+      gap: 12px;
+    }
+    .mobile-drawer.open { display: flex; }
+    .mobile-drawer-cta { display: block; text-align: center; margin-bottom: 8px; }
+    nav[data-clickfuzz-nav="mobile"] ul { display: flex; flex-direction: column; gap: 4px; }
+    nav[data-clickfuzz-nav="mobile"] ul li a {
+      display: block;
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--off-white);
+      padding: 12px 14px;
+      border-radius: 8px;
+      transition: color var(--transition), background var(--transition);
+    }
+    nav[data-clickfuzz-nav="mobile"] ul li a:hover { color: var(--white); background: rgba(255,255,255,.06); }
+    .mobile-contact-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      margin-top: 4px;
+    }
+    .mobile-contact-row a { font-size: 14px; color: var(--muted); transition: color var(--transition); }
+    .mobile-contact-row a:hover { color: var(--cyan); }
+
+    @media (min-width: 768px) {
+      nav[data-clickfuzz-nav="primary"] { display: flex; }
+      .hamburger { display: none; }
+      .header-cta { font-size: 14px; padding: 11px 22px; }
+    }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+      padding: 100px 0 60px;
+      background: var(--navy);
+    }
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 60% at 60% 40%, rgba(83,219,243,.07) 0%, transparent 70%),
+                  radial-gradient(ellipse 50% 50% at 10% 80%, rgba(83,219,243,.04) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .hero-grid { display: grid; grid-template-columns: 1fr; gap: 48px; align-items: center; }
+    .hero-text .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 20px;
+    }
+    .hero-text .eyebrow::before { content: ''; display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); }
+    .hero-heading {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(36px, 6vw, 64px);
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--white);
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+    }
+    .hero-heading em { font-style: normal; color: var(--cyan); }
+    .hero-support-hed {
+      font-size: 19px;
+      font-weight: 600;
+      color: var(--off-white);
+      max-width: 500px;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+    .hero-desc {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 500px;
+      line-height: 1.75;
+      margin-bottom: 36px;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+    .hero-visual { display: flex; justify-content: center; position: relative; }
+    .phone-frame {
+      width: 260px;
+      border-radius: 38px;
+      border: 2px solid rgba(83,219,243,.2);
+      overflow: hidden;
+      box-shadow: 0 32px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(83,219,243,.08), 0 0 60px rgba(83,219,243,.08);
+      position: relative;
+      z-index: 2;
+    }
+    .phone-frame img { width: 100%; height: auto; display: block; }
+    .hero-glow {
+      position: absolute;
+      width: 300px; height: 300px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(83,219,243,.15) 0%, transparent 70%);
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    @media (min-width: 768px) {
+      .hero-grid { grid-template-columns: 1fr 1fr; gap: 60px; }
+      .hero { padding: 120px 0 80px; }
+      .phone-frame { width: 300px; }
+    }
+
+    /* ── STRIP ── */
+    .strip {
+      background: var(--navy-mid);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 24px 0;
+    }
+    .strip-inner { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; align-items: center; }
+    .strip-item { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--off-white); }
+    .strip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); flex-shrink: 0; }
+
+    section { padding: 80px 0; }
+
+    /* ── WHY POSTING MATTERS ── */
+    #why-post { background: var(--navy); }
+    .why-grid { display: grid; grid-template-columns: 1fr; gap: 48px; align-items: center; }
+    .why-text .section-sub { margin-bottom: 28px; }
+    .why-text p { font-size: 16px; color: var(--off-white); line-height: 1.75; margin-bottom: 16px; }
+    .why-text p:last-child { margin-bottom: 0; }
+
+    /* Mock post card visual */
+    .mock-post-card {
+      background: var(--navy-card);
+      border: 1px solid rgba(83,219,243,.15);
+      border-radius: 16px;
+      overflow: hidden;
+      max-width: 340px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,.4), 0 0 40px rgba(83,219,243,.06);
+      margin: 0 auto;
+    }
+    .mock-post-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .mock-avatar {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: var(--cyan-soft);
+      border: 2px solid rgba(83,219,243,.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+    .mock-meta-name { font-size: 13px; font-weight: 700; color: var(--white); }
+    .mock-meta-platform { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px; margin-top: 1px; }
+    .pdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #4285f4; }
+    .mock-post-image {
+      width: 100%;
+      aspect-ratio: 16/9;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+    .mock-before, .mock-after {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 16px;
+    }
+    .mock-before { background: #111a2a; border-right: 1px solid rgba(255,255,255,.05); }
+    .mock-after  { background: #0d1e28; }
+    .ba-label { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .mock-before .ba-label { color: var(--muted); }
+    .mock-after  .ba-label { color: var(--cyan); }
+    .ba-icon {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .mock-before .ba-icon { background: rgba(255,255,255,.06); }
+    .mock-after  .ba-icon { background: var(--cyan-soft); }
+    .ba-icon svg { width: 16px; height: 16px; }
+    .mock-post-body { padding: 14px 16px 18px; }
+    .mock-post-text { font-size: 12px; color: var(--off-white); line-height: 1.65; margin-bottom: 10px; }
+    .mock-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+    .mock-tag { font-size: 11px; color: var(--cyan); background: var(--cyan-soft); border-radius: 50px; padding: 3px 9px; }
+
+    @media (min-width: 768px) {
+      .why-grid { grid-template-columns: 1fr 1fr; gap: 64px; }
+    }
+
+    /* ── HOW IT WORKS ── */
+    #how-it-works { background: var(--navy-mid); }
+    .how-header { text-align: center; margin-bottom: 60px; }
+    .how-header .section-sub { margin: 0 auto; }
+    .how-footer { text-align: center; margin-top: 52px; }
+    .how-footer-tagline {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--off-white);
+      margin-bottom: 28px;
+    }
+    .steps-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
+    .step-card {
+      background: var(--navy-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .step-card:hover { border-color: rgba(83,219,243,.3); transform: translateY(-4px); }
+    .step-number {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-number::before { content: ''; display: block; width: 28px; height: 2px; background: var(--cyan); }
+    .step-card h3 { font-family: 'DM Sans', sans-serif; font-size: 20px; font-weight: 700; color: var(--white); margin-bottom: 10px; }
+    .step-card p { font-size: 15px; color: var(--off-white); line-height: 1.7; }
+    .step-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.2);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 20px;
+    }
+    .step-icon svg { width: 22px; height: 22px; stroke: var(--cyan); fill: none; stroke-width: 1.8; }
+
+    @media (min-width: 768px) { .steps-grid { grid-template-columns: repeat(3, 1fr); } }
+
+    /* ── PLATFORMS ── */
+    #platforms { background: var(--navy); }
+    .platforms-header { margin-bottom: 48px; }
+    .platforms-intro { font-size: 16px; color: var(--off-white); line-height: 1.75; max-width: 640px; margin-top: 4px; }
+    .platforms-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    .platform-card {
+      background: var(--navy-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .platform-card:hover { border-color: rgba(83,219,243,.25); transform: translateY(-3px); }
+    .platform-icon {
+      width: 48px; height: 48px;
+      border-radius: 12px;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.2);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 18px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 17px;
+      color: var(--cyan);
+    }
+    .platform-card h3 { font-family: 'DM Sans', sans-serif; font-size: 19px; font-weight: 700; color: var(--white); margin-bottom: 8px; }
+    .platform-card p { font-size: 15px; color: var(--off-white); line-height: 1.7; }
+
+    @media (min-width: 768px) { .platforms-grid { grid-template-columns: repeat(3, 1fr); } }
+    .platform-card.coming-soon { opacity: .45; position: relative; }
+    .coming-soon-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(255,255,255,.06);
+      border: 1px solid var(--border);
+      border-radius: 50px;
+      padding: 3px 10px;
+      margin-bottom: 14px;
+    }
+
+    /* ── SHOWCASE ── */
+    #showcase { background: var(--navy-mid); overflow: hidden; }
+    .showcase-grid { display: grid; grid-template-columns: 1fr; gap: 48px; align-items: center; }
+    .showcase-text .section-sub { margin-bottom: 32px; }
+    .showcase-list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 36px; }
+    .showcase-list-item { display: flex; align-items: flex-start; gap: 12px; }
+    .check-icon {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.3);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .check-icon svg { width: 11px; height: 11px; stroke: var(--cyan); fill: none; stroke-width: 2.5; }
+    .showcase-list-item span { font-size: 15px; color: var(--off-white); line-height: 1.6; }
+    .preview-phone {
+      width: 240px;
+      border-radius: 34px;
+      border: 2px solid rgba(83,219,243,.18);
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0,0,0,.5), 0 0 40px rgba(83,219,243,.06);
+      margin: 0 auto;
+    }
+    .preview-phone img { width: 100%; height: auto; }
+
+    @media (min-width: 768px) {
+      .showcase-grid { grid-template-columns: 1fr 1fr; gap: 64px; }
+      .preview-phone { width: 280px; margin: 0; }
+    }
+
+    /* ── FEATURES ── */
+    #features { background: var(--navy); }
+    .features-header { margin-bottom: 56px; }
+    .features-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    .feature-card {
+      background: var(--navy-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .feature-card:hover { border-color: rgba(83,219,243,.25); transform: translateY(-3px); }
+    .feature-icon {
+      width: 42px; height: 42px;
+      border-radius: 10px;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.2);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 18px;
+    }
+    .feature-icon svg { width: 20px; height: 20px; stroke: var(--cyan); fill: none; stroke-width: 1.8; }
+    .feature-card h3 { font-family: 'DM Sans', sans-serif; font-size: 17px; font-weight: 700; color: var(--white); margin-bottom: 8px; }
+    .feature-card p { font-size: 14px; color: var(--off-white); line-height: 1.7; }
+
+    @media (min-width: 768px)  { .features-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 1024px) { .features-grid { grid-template-columns: repeat(4, 1fr); } }
+
+    /* ── CTA BAND ── */
+    #cta-band {
+      background: linear-gradient(135deg, #0f1d2e 0%, #0C1122 50%, #0c1a1e 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      text-align: center;
+      padding: 80px 0;
+      position: relative;
+      overflow: hidden;
+    }
+    #cta-band::before {
+      content: '';
+      position: absolute;
+      top: -80px; left: 50%; transform: translateX(-50%);
+      width: 600px; height: 300px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(83,219,243,.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .cta-heading {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(28px, 4.5vw, 48px);
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+    .cta-heading em { font-style: normal; color: var(--cyan); }
+    .cta-sub {
+      font-size: 17px;
+      color: var(--off-white);
+      margin-bottom: 36px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.7;
+    }
+    .cta-actions { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: center; }
+    .cta-email { font-size: 14px; color: var(--muted); margin-top: 20px; }
+    .cta-email a { color: var(--cyan); font-weight: 600; transition: color var(--transition); }
+    .cta-email a:hover { color: var(--white); }
+
+    /* ── CONTACT / EARLY ACCESS ── */
+    #contact { background: var(--navy-mid); }
+    .contact-grid { display: grid; grid-template-columns: 1fr; gap: 48px; }
+    .contact-info h2 {
+      font-family: 'DM Sans', sans-serif;
+      font-size: clamp(24px, 3.5vw, 36px);
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 14px;
+    }
+    .contact-info p { font-size: 16px; color: var(--off-white); line-height: 1.75; margin-bottom: 20px; }
+    .contact-links { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
+    .contact-link-item { display: flex; align-items: center; gap: 14px; }
+    .contact-link-icon {
+      width: 44px; height: 44px;
+      border-radius: 10px;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(83,219,243,.2);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .contact-link-icon svg { width: 18px; height: 18px; stroke: var(--cyan); fill: none; stroke-width: 1.8; }
+    .contact-link-text span { display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+    .contact-link-text a { font-size: 15px; font-weight: 600; color: var(--off-white); transition: color var(--transition); }
+    .contact-link-text a:hover { color: var(--cyan); }
+    .contact-form-shell {
+      background: var(--navy-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 28px;
+    }
+    .contact-form-shell h3 { font-family: 'DM Sans', sans-serif; font-size: 20px; font-weight: 700; color: var(--white); margin-bottom: 6px; }
+    .contact-form-shell > p { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+
+    @media (min-width: 768px) { .contact-grid { grid-template-columns: 1fr 1fr; gap: 60px; align-items: start; } }
+
+    /* ── CLICKFUZZ FORM STYLES ── */
+    .cf-form { width: 100%; }
+    .cf-field { margin-bottom: 18px; }
+    .cf-field label { display: block; font-size: 13px; font-weight: 600; color: var(--off-white); margin-bottom: 6px; letter-spacing: .02em; }
+    .cf-field input,
+    .cf-field textarea,
+    .cf-field select {
+      width: 100%;
+      background: var(--navy-light);
+      border: 1.5px solid rgba(255,255,255,.1);
+      border-radius: var(--radius-sm);
+      color: var(--white);
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      padding: 12px 14px;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .cf-field input:focus,
+    .cf-field textarea:focus,
+    .cf-field select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(83,219,243,.12); }
+    .cf-field textarea { min-height: 110px; resize: vertical; }
+    .cf-field select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2374869F' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 36px;
+    }
+    .cf-field input[type="checkbox"] { width: auto; accent-color: var(--cyan); }
+    .cf-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--off-white); cursor: pointer; }
+    .cf-multi-select { display: flex; flex-wrap: wrap; gap: 8px; }
+    .cf-multi-option, .cf-ms-opt {
+      padding: 7px 14px;
+      border-radius: 50px;
+      border: 1.5px solid rgba(255,255,255,.1);
+      background: var(--navy-light);
+      color: var(--off-white);
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color var(--transition), color var(--transition), background var(--transition);
+    }
+    .cf-multi-option:hover, .cf-ms-opt:hover,
+    .cf-multi-option.selected, .cf-ms-opt.selected { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-soft); }
+    .cf-required { color: var(--cyan); font-size: 12px; margin-left: 3px; }
+    .cf-submit {
+      width: 100%;
+      background: var(--cyan);
+      color: #0C1122;
+      font-size: 15px;
+      font-weight: 700;
+      font-family: 'Inter', sans-serif;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+      margin-top: 6px;
+    }
+    .cf-submit:hover { background: #70e8f7; transform: translateY(-2px); box-shadow: 0 8px 24px rgba(83,219,243,.28); }
+    .cf-msg { margin-top: 14px; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; }
+    .cf-msg.cf-success { background: rgba(83,219,243,.1); border: 1px solid rgba(83,219,243,.3); color: var(--cyan); }
+    .cf-msg.cf-error   { background: rgba(255,80,80,.1);  border: 1px solid rgba(255,80,80,.3);  color: #ff8080; }
+
+    /* ── MODAL ── */
+    [data-clickfuzz-form="quote"][data-clickfuzz-form-mode="modal"] {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8,12,20,.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 400ms ease;
+      padding: 20px;
+    }
+    [data-clickfuzz-form="quote"][data-clickfuzz-form-mode="modal"].cf-form-open { opacity: 1; pointer-events: auto; }
+    @media (prefers-reduced-motion: reduce) { [data-clickfuzz-form="quote"][data-clickfuzz-form-mode="modal"] { transition: none; } }
+    .modal-panel {
+      background: var(--navy-card);
+      border: 1px solid rgba(83,219,243,.2);
+      border-radius: 20px;
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 520px;
+      max-height: 90vh;
+      overflow-y: auto;
+      position: relative;
+      transform: translateY(20px);
+      transition: transform 400ms ease;
+    }
+    [data-clickfuzz-form="quote"][data-clickfuzz-form-mode="modal"].cf-form-open .modal-panel { transform: translateY(0); }
+    @media (prefers-reduced-motion: reduce) { .modal-panel { transition: none; } }
+    .modal-close {
+      position: absolute;
+      top: 16px; right: 16px;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.06);
+      border: 1px solid var(--border);
+      color: var(--off-white);
+      font-size: 18px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+      line-height: 1;
+    }
+    .modal-close:hover { background: rgba(255,255,255,.12); color: var(--white); }
+    .modal-close:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    .modal-panel h2 { font-family: 'DM Sans', sans-serif; font-size: 22px; font-weight: 700; color: var(--white); margin-bottom: 6px; padding-right: 40px; }
+    .modal-panel .modal-sub { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+    @media (max-width: 767px) { .modal-panel { padding: 28px 20px; } }
+
+    /* ── FOOTER ── */
+    footer {
+      background: #080c13;
+      border-top: 1px solid var(--border);
+      padding: 48px 0 28px;
+    }
+    .footer-top { display: grid; grid-template-columns: 1fr; gap: 36px; margin-bottom: 40px; }
+    .footer-wordmark { font-family: 'DM Sans', sans-serif; font-weight: 700; font-size: 32px; color: var(--white); letter-spacing: -0.5px; margin-bottom: 14px; display: block; }
+    .footer-brand p { font-size: 14px; color: var(--muted); line-height: 1.7; max-width: 280px; }
+    .footer-nav-col h4 { font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 14px; }
+    nav[data-clickfuzz-nav="footer"] ul { display: flex; flex-direction: column; gap: 10px; }
+    nav[data-clickfuzz-nav="footer"] ul li a { font-size: 14px; color: var(--off-white); transition: color var(--transition); }
+    nav[data-clickfuzz-nav="footer"] ul li a:hover { color: var(--cyan); }
+    .footer-contact { display: flex; flex-direction: column; gap: 10px; }
+    .footer-contact a { font-size: 14px; color: var(--off-white); transition: color var(--transition); }
+    .footer-contact a:hover { color: var(--cyan); }
+    .footer-bottom {
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .footer-copy { font-size: 13px; color: var(--muted); }
+    .footer-legal { font-size: 13px; color: var(--muted); display: flex; gap: 18px; }
+    .footer-legal a { color: var(--muted); transition: color var(--transition); }
+    .footer-legal a:hover { color: var(--cyan); }
+
+    @media (min-width: 768px) { .footer-top { grid-template-columns: 2fr 1fr 1fr; } }
+
+    /* ── ANIMATIONS ── */
+    .fade-up { opacity: 0; transform: translateY(28px); transition: opacity 0.55s ease, transform 0.55s ease; }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+    @media (prefers-reduced-motion: reduce) { .fade-up { opacity: 1; transform: none; transition: none; } }
+  </style>
+  <style id="cf-mobile-safety">*,*::before,*::after{box-sizing:border-box}body{overflow-x:hidden}img,video,table,iframe{max-width:100%;height:auto}</style>
+</head>
+<body>
+
+<!-- ════════════════ HEADER ════════════════ -->
+<header>
+  <div class="container">
+    <div class="header-inner">
+
+      <div class="logo-wrap">
+        <a href="#hero" aria-label="elmer. Home">
+          <span class="wordmark">elmer<span class="wordmark-period">.</span></span>
+        </a>
+      </div>
+
+      <nav data-clickfuzz-nav="primary" aria-label="Primary navigation">
+        <ul>
+          <!-- cf-nav-start -->
+          <li><a href="#how-it-works">How It Works</a></li>
+          <li><a href="#platforms">Platforms</a></li>
+          <li><a href="#features">Why Elmer</a></li>
+          <li><a href="#contact">Early Access</a></li>
+          <!-- cf-nav-end -->
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary header-cta">Get Early Access</a>
+        <button class="hamburger" id="hamburgerBtn" aria-label="Toggle menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="mobile-drawer" id="mobileDrawer" aria-hidden="true">
+    <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary mobile-drawer-cta">Get Early Access</a>
+    <nav data-clickfuzz-nav="mobile" aria-label="Mobile navigation">
+      <ul>
+        <!-- cf-mobile-nav-start -->
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#platforms">Platforms</a></li>
+        <li><a href="#features">Why Elmer</a></li>
+        <li><a href="#contact">Early Access</a></li>
+        <!-- cf-mobile-nav-end -->
+      </ul>
+    </nav>
+    <div class="mobile-contact-row">
+      <a href="mailto:help@getelmer.com" data-clickfuzz-action="email">help@getelmer.com</a>
+    </div>
+  </div>
+</header>
+
+<!-- ════════════════ MAIN ════════════════ -->
+<main>
+
+  <!-- ── HERO ── -->
+  <section class="hero" id="hero">
+    <div class="hero-bg" aria-hidden="true"></div>
+    <div class="container">
+      <div class="hero-grid">
+        <div class="hero-text fade-up">
+          <div class="eyebrow">For contractors &amp; service businesses</div>
+          <h1 class="hero-heading">
+            Turn great work<br>into <em>growth.</em>
+          </h1>
+          <p class="hero-support-hed">
+            Get more eyes on your work. Get more chances to land your next job.
+          </p>
+          <p class="hero-desc">
+            Finished a job? Take a few photos, tell Elmer what you did, and share it across your connected platforms in about a minute. No writing, no hassle. Just a simple way to show potential customers why they should hire you.
+          </p>
+          <div class="hero-actions">
+            <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary">
+              Get Early Access
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </a>
+            <a href="#how-it-works" class="btn-outline">See How It Works</a>
+          </div>
+        </div>
+        <div class="hero-visual fade-up">
+          <div class="hero-glow" aria-hidden="true"></div>
+          <div class="phone-frame">
+            <img src="https://clickfuzz.com/dashboard/uploads/pitchsnap/media/79/bd26c6fd88299b60dca5293c185d9e41.png"
+                 alt="Elmer app — sharing a completed job" width="300" height="600" loading="eager" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── STRIP ── -->
+  <div class="strip" aria-hidden="true">
+    <div class="container">
+      <div class="strip-inner">
+        <div class="strip-item"><span class="strip-dot"></span> Share completed jobs in about a minute</div>
+        <div class="strip-item"><span class="strip-dot"></span> No writing required</div>
+        <div class="strip-item"><span class="strip-dot"></span> Google, Facebook, Instagram &amp; more</div>
+        <div class="strip-item"><span class="strip-dot"></span> iPhone &amp; Android</div>
+        <div class="strip-item"><span class="strip-dot"></span> Take a minute to spread the word</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WHY POSTING MATTERS ── -->
+  <section id="why-post">
+    <div class="container">
+      <div class="why-grid">
+        <div class="why-text fade-up">
+          <div class="tag">Why It Matters</div>
+          <h2 class="section-heading">Your next customer could be looking at your last job.</h2>
+          <p class="section-sub">Before hiring someone, people want to see what they can do.</p>
+          <p>
+            Every completed job is a chance to show your skills, build trust, and give potential customers another reason to choose your business. Whether it's a finished roof, a fresh paint job, a landscaped backyard, or a rewired panel — your work speaks for itself.
+          </p>
+          <p>
+            But when those photos stay on your phone, nobody gets to see them. They're not helping you win the next job.
+          </p>
+          <p>
+            Elmer helps turn those photos into posts that can introduce your work to your next customer — across every platform you're connected to — without sitting down to write separate posts for each one.
+          </p>
+        </div>
+        <div class="fade-up" style="display:flex; justify-content:center;">
+          <div class="mock-post-card">
+            <div class="mock-post-header">
+              <div class="mock-avatar">R</div>
+              <div>
+                <div class="mock-meta-name">Ridge Line Roofing</div>
+                <div class="mock-meta-platform"><span class="pdot"></span> Google Business Profile</div>
+              </div>
+            </div>
+            <div class="mock-post-image">
+              <div class="mock-before">
+                <div class="ba-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#74869F" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                </div>
+                <div class="ba-label">Before</div>
+              </div>
+              <div class="mock-after">
+                <div class="ba-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#53DBF3" stroke-width="1.8"><path d="M20 7l-8-4-8 4m16 0v10l-8 4m-8-4V7m8 4v10"/></svg>
+                </div>
+                <div class="ba-label">After</div>
+              </div>
+            </div>
+            <div class="mock-post-body">
+              <p class="mock-post-text">Just finished a full tear-off and replacement on this Colonial in Westfield. New architectural shingles, ice &amp; water shield throughout. Clean, solid, and built to last another 30 years.</p>
+              <div class="mock-tags">
+                <span class="mock-tag">#Roofing</span>
+                <span class="mock-tag">#Westfield</span>
+                <span class="mock-tag">#BeforeAndAfter</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section id="how-it-works">
+    <div class="container">
+      <div class="how-header fade-up">
+        <div class="tag">How It Works</div>
+        <h2 class="section-heading">Finish a job. Share it in a minute.</h2>
+        <p class="section-sub">
+          If you can take a photo and talk about your work, you can use Elmer. No writing, no marketing know-how, no learning curve.
+        </p>
+      </div>
+      <div class="steps-grid">
+        <div class="step-card fade-up">
+          <div class="step-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </div>
+          <div class="step-number">Step 01</div>
+          <h3>Snap Your Photos</h3>
+          <p>Take a few pictures of your finished job right from the app — up to five. Before-and-after shots work especially well. They show the transformation and let the quality speak for itself.</p>
+        </div>
+        <div class="step-card fade-up">
+          <div class="step-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </div>
+          <div class="step-number">Step 02</div>
+          <h3>Tell Elmer What You Did</h3>
+          <p>Record a quick voice description. No typing, no scripts — just explain the job the way you would to a customer. "Replaced the roof on a two-story in Springfield, full tear-off, architectural shingles." That's enough.</p>
+        </div>
+        <div class="step-card fade-up">
+          <div class="step-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+          </div>
+          <div class="step-number">Step 03</div>
+          <h3>Review and Publish</h3>
+          <p>Elmer writes the posts for each platform you're connected to. You read them over, make any edits you want, and publish. That's it — you're back to work, and your latest job is out there working for your business.</p>
+        </div>
+      </div>
+      <div class="how-footer fade-up">
+        <p class="how-footer-tagline">You do the work. Elmer spreads the word.</p>
+        <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary">
+          Get Early Access
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── PLATFORMS ── -->
+  <section id="platforms">
+    <div class="container">
+      <div class="platforms-header fade-up">
+        <div class="tag">Platforms</div>
+        <h2 class="section-heading">One job. Every place that matters.</h2>
+        <p class="platforms-intro">
+          One set of photos and one voice description becomes platform-appropriate content for everywhere you're connected. Elmer handles the formatting for each platform — you publish once and your latest job is out across all of them.
+        </p>
+      </div>
+      <div class="platforms-grid">
+        <div class="platform-card fade-up">
+          <div class="platform-icon" aria-hidden="true">G</div>
+          <h3>Google Business Profile</h3>
+          <p>Post completed jobs to your Google listing so people searching for local services can see examples of your work. More posts mean more opportunities to show up when someone in your area needs what you do.</p>
+        </div>
+        <div class="platform-card fade-up">
+          <div class="platform-icon" aria-hidden="true">f</div>
+          <h3>Facebook</h3>
+          <p>Let your local community see what you've been working on. A roofing job nearby, a kitchen remodel down the street, a fresh exterior paint — real work your next customer might recognize or relate to.</p>
+        </div>
+        <div class="platform-card fade-up">
+          <div class="platform-icon" aria-hidden="true">WP</div>
+          <h3>WordPress Website</h3>
+          <p>Build a collection of completed projects right on your website. When someone visits looking for a contractor, they can browse your actual work — not just a list of services and a phone number.</p>
+        </div>
+        <div class="platform-card coming-soon fade-up">
+          <div class="coming-soon-badge">Coming Soon</div>
+          <div class="platform-icon" aria-hidden="true">in</div>
+          <h3>LinkedIn</h3>
+          <p>Share your completed projects with a professional audience — great for commercial work, referral partners, and growing your reputation in your industry.</p>
+        </div>
+        <div class="platform-card coming-soon fade-up">
+          <div class="coming-soon-badge">Coming Soon</div>
+          <div class="platform-icon" aria-hidden="true">X</div>
+          <h3>X (Twitter)</h3>
+          <p>Keep your audience updated on your latest jobs and stay active in your local community with quick, shareable posts from every project you finish.</p>
+        </div>
+        <div class="platform-card coming-soon fade-up">
+          <div class="coming-soon-badge">Coming Soon</div>
+          <div class="platform-icon" aria-hidden="true">IG</div>
+          <h3>Instagram</h3>
+          <p>Before-and-after photos are made for Instagram. Show the transformation, tag your location, and let your best work find the people who are looking for exactly what you do.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SHOWCASE ── -->
+  <section id="showcase">
+    <div class="container">
+      <div class="showcase-grid">
+        <div class="showcase-text fade-up">
+          <div class="tag">Show What You Can Do</div>
+          <h2 class="section-heading">Show them what you can do before they call.</h2>
+          <p class="section-sub">
+            Real job photos help potential customers evaluate your work and feel confident about reaching out.
+          </p>
+          <ul class="showcase-list">
+            <li class="showcase-list-item">
+              <span class="check-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span>Before-and-after photos are especially compelling — they show the transformation and let the quality of your work speak for itself</span>
+            </li>
+            <li class="showcase-list-item">
+              <span class="check-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span>Homeowners searching for a roofer, painter, electrician, or landscaper want to see completed examples — not just a website with a phone number</span>
+            </li>
+            <li class="showcase-list-item">
+              <span class="check-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span>Posting consistently keeps your business visible between jobs — you're always out there, even when you're on the next site</span>
+            </li>
+            <li class="showcase-list-item">
+              <span class="check-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+              <span>Spend one minute showing off today's work. Give tomorrow's customers a reason to call</span>
+            </li>
+          </ul>
+          <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary">Get Early Access</a>
+        </div>
+        <div class="fade-up" style="display:flex; justify-content:center;">
+          <div class="preview-phone">
+            <img src="https://clickfuzz.com/dashboard/uploads/pitchsnap/media/79/bd26c6fd88299b60dca5293c185d9e41.png"
+                 alt="Elmer app showing a completed job post ready to publish" width="280" height="560" loading="lazy" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── WHY OWNERS LOVE IT ── -->
+  <section id="features">
+    <div class="container">
+      <div class="features-header fade-up">
+        <div class="tag">Why Owners Love It</div>
+        <h2 class="section-heading">Marketing shouldn't feel like another job.</h2>
+        <p class="section-sub">
+          You're already running a business. Elmer makes it easy to share your work regularly without sitting down to write captions or manage multiple platforms one by one.
+        </p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card fade-up">
+          <div class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </div>
+          <h3>No Writing Required</h3>
+          <p>Just talk. Record a quick voice description of the job and Elmer turns it into a polished post. If you can explain what you did, Elmer can write the content.</p>
+        </div>
+        <div class="feature-card fade-up">
+          <div class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
+          </div>
+          <h3>No Marketing Skills Needed</h3>
+          <p>You don't need to be a writer, marketer, or social media expert. Elmer handles the difficult part. If you've done the job, you have everything you need to use it.</p>
+        </div>
+        <div class="feature-card fade-up">
+          <div class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <h3>Review Before You Publish</h3>
+          <p>Elmer writes the posts, but you're always in control. Read them over, make any changes you want, and publish when you're ready. Nothing goes out without your approval.</p>
+        </div>
+        <div class="feature-card fade-up">
+          <div class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <h3>Keep a History of Your Work</h3>
+          <p>Every job you share gets saved in your history. Browse past posts, see what you've been sharing, and build a record of your completed projects over time.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA BAND ── -->
+  <section id="cta-band">
+    <div class="container">
+      <div class="fade-up">
+        <h2 class="cta-heading">You did the hard work.<br><em>Let Elmer help it get noticed.</em></h2>
+        <p class="cta-sub">
+          Every completed job is another chance to show people why they should hire you. Start making the most of the work you're already doing.
+        </p>
+        <div class="cta-actions">
+          <a href="#quote-modal" data-clickfuzz-action="quote-form" class="btn-primary">
+            Get Early Access
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </a>
+        </div>
+        <p class="cta-email">
+          Questions? Reach us at <a href="mailto:help@getelmer.com" data-clickfuzz-action="email">help@getelmer.com</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── EARLY ACCESS ── -->
+  <section id="contact">
+    <div class="container">
+      <div class="contact-grid">
+        <div class="contact-info fade-up">
+          <div class="tag">Early Access</div>
+          <h2>You're already doing great work.<br>More people should know about it.</h2>
+          <p>
+            Elmer is currently in development. Sign up for early access and we'll let you know as soon as it's ready to use.
+          </p>
+          <p>
+            More jobs posted means more opportunities to be seen — more potential customers discovering your work, more chances to win the next job.
+          </p>
+          <div class="contact-links">
+            <div class="contact-link-item">
+              <div class="contact-link-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              </div>
+              <div class="contact-link-text">
+                <span>Email</span>
+                <a href="mailto:help@getelmer.com" data-clickfuzz-action="email">help@getelmer.com</a>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="contact-form-shell fade-up" data-clickfuzz-form="contact">
+          <h3>Sign Up for Early Access</h3>
+          <p>Enter your info and we'll reach out when Elmer is ready.</p>
+          <div data-cf-form="127"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ════════════════ FOOTER ════════════════ -->
+<footer>
+  <div class="container">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <span class="footer-wordmark">elmer<span class="wordmark-period">.</span></span>
+        <p>
+          The easiest way for local contractors and service businesses to share completed jobs online — and get more eyes on their work.
+        </p>
+      </div>
+      <div class="footer-nav-col">
+        <h4>Navigation</h4>
+        <nav data-clickfuzz-nav="footer" aria-label="Footer navigation">
+          <ul>
+            <!-- cf-footer-nav-start -->
+            <li><a href="#how-it-works">How It Works</a></li>
+            <li><a href="#platforms">Platforms</a></li>
+            <li><a href="#features">Why Elmer</a></li>
+            <li><a href="#contact">Early Access</a></li>
+            <!-- cf-footer-nav-end -->
+          </ul>
+        </nav>
+      </div>
+      <div class="footer-nav-col">
+        <h4>Contact</h4>
+        <div class="footer-contact">
+          <a href="mailto:help@getelmer.com" data-clickfuzz-action="email">help@getelmer.com</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">&copy; <span data-pitchsnap-current-year></span> Elmer. All rights reserved.</p>
+      <p class="footer-legal">
+        <a href="/privacy-policy">Privacy Policy</a>
+        <a href="/terms-and-conditions">Terms &amp; Conditions</a>
+      </p>
+    </div>
+  </div>
+</footer>
+
+<!-- ════════════════ MODAL ════════════════ -->
+<div id="quote-modal"
+     data-clickfuzz-form="quote"
+     data-clickfuzz-form-mode="modal"
+     hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <button class="modal-close" data-clickfuzz-action="close-form" aria-label="Close form">&#215;</button>
+    <h2 id="modal-title">Get Early Access to Elmer</h2>
+    <p class="modal-sub">Sign up and we'll let you know when Elmer is ready to use.</p>
+    <div data-cf-form="126"></div>
+  </div>
+</div>
+
+<!-- ════════════════ JS ════════════════ -->
+<script>
+  const hamburger = document.getElementById('hamburgerBtn');
+  const mobileDrawer = document.getElementById('mobileDrawer');
+  hamburger.addEventListener('click', function() {
+    const open = mobileDrawer.classList.toggle('open');
+    hamburger.classList.toggle('open', open);
+    hamburger.setAttribute('aria-expanded', open.toString());
+    mobileDrawer.setAttribute('aria-hidden', (!open).toString());
+  });
+  mobileDrawer.querySelectorAll('a').forEach(function(link) {
+    link.addEventListener('click', function() {
+      mobileDrawer.classList.remove('open');
+      hamburger.classList.remove('open');
+      hamburger.setAttribute('aria-expanded', 'false');
+      mobileDrawer.setAttribute('aria-hidden', 'true');
+    });
+  });
+  const fadeEls = document.querySelectorAll('.fade-up');
+  const observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+  fadeEls.forEach(function(el) { observer.observe(el); });
+</script>
+
+<script src="https://clickfuzz.com/dashboard/pitchsnap/runtime.js" data-redesign-token="5e9ee454d2be62d4029ee4fe9eef0661e35b6ae08b820b119fd9b2092a57dee5" data-site-token="445110123dfc4e818ca930934b0f9c8e757a988028d0e7f359f4043376da3349" data-customer-name="Clinton L Gorman"></script>
+</body>
+</html>

@@ -37,6 +37,10 @@ yarn-error.*
 # server
 server/node_modules/
 server/.env
+server/elmer.db
+server/elmer.db-wal
+server/elmer.db-shm
+server/tmp/
 
 # typescript
 *.tsbuildinfo
