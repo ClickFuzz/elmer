@@ -1,40 +1,37 @@
 'use strict';
 
-process.env.DB_PATH               = ':memory:';
-process.env.DISABLE_AUTH          = 'false';
-process.env.DISABLE_RATE_LIMIT    = 'true';
+process.env.DISABLE_AUTH              = 'false';
+process.env.DISABLE_RATE_LIMIT        = 'true';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'b'.repeat(64);
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert  = require('node:assert/strict');
 const request = require('supertest');
 
-const { getDb, closeDb } = require('../db');
-const { createApp }      = require('../app');
+const { setupFreshTestDb } = require('./helpers');
+const { getPool, closeDb } = require('../db');
+const { createApp }        = require('../app');
 
 let app;
 let token;
 let userId;
 
-before(() => {
-  closeDb();
+before(async () => {
+  await setupFreshTestDb();
   app = createApp();
 });
 
-after(() => closeDb());
+after(async () => closeDb());
 
-// Register a user once and reuse across describe blocks.
 beforeEach(async () => {
-  closeDb();
+  await setupFreshTestDb();
   app = createApp();
 
   const res = await request(app)
     .post('/auth/register')
     .send({ email: 'plat@example.com', password: 'password123' });
-  token  = res.body.token;
-  userId = res.body.userId;
+  token = res.body.token;
 
-  // Fetch userId from /auth/me since register doesn't return it.
   const me = await request(app)
     .get('/auth/me')
     .set('Authorization', `Bearer ${token}`);
@@ -149,13 +146,12 @@ describe('POST /platforms/oauth/state/validate', () => {
   });
 
   it('returns 400 for an expired state', async () => {
-    // Insert an already-expired state directly into the DB.
-    const db  = getDb();
     const now = Date.now();
-    db.prepare(
+    await getPool().query(
       `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).run('expiredstate' + 'f'.repeat(36), userId, 'google', now - 20 * 60 * 1000, now - 1);
+       VALUES ($1, $2, $3, $4, $5)`,
+      ['expiredstate' + 'f'.repeat(36), userId, 'google', now - 20 * 60 * 1000, now - 1]
+    );
 
     const res = await request(app)
       .post('/platforms/oauth/state/validate')
@@ -197,8 +193,7 @@ describe('GET /platforms', () => {
     assert.strictEqual(res.status, 401);
   });
 
-  it('returns only the authenticated user\'s platforms', async () => {
-    // Create a second user and insert a platform for them.
+  it("returns only the authenticated user's platforms", async () => {
     const r2 = await request(app)
       .post('/auth/register')
       .send({ email: 'other@example.com', password: 'password123' });
@@ -207,13 +202,13 @@ describe('GET /platforms', () => {
       .set('Authorization', `Bearer ${r2.body.token}`);
     const userId2 = me2.body.userId;
 
-    const db  = getDb();
     const now = Date.now();
-    db.prepare(
+    await getPool().query(
       `INSERT INTO connected_platforms
          (user_id, platform, account_name, account_id, connected_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(userId2, 'google', 'Other Business', 'id-other', now, now);
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId2, 'google', 'Other Business', 'id-other', now, now]
+    );
 
     const res = await request(app)
       .get('/platforms')
@@ -227,23 +222,24 @@ describe('GET /platforms', () => {
 
 describe('DELETE /platforms/:id', () => {
   it('disconnects a platform the user owns', async () => {
-    const db  = getDb();
     const now = Date.now();
-    const { lastInsertRowid } = db.prepare(
+    const { rows: [{ id: insertedId }] } = await getPool().query(
       `INSERT INTO connected_platforms
          (user_id, platform, account_name, account_id, connected_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(userId, 'facebook', 'My Page', 'fb-123', now, now);
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [userId, 'facebook', 'My Page', 'fb-123', now, now]
+    );
 
     const res = await request(app)
-      .delete(`/platforms/${lastInsertRowid}`)
+      .delete(`/platforms/${insertedId}`)
       .set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.ok);
 
-    // Confirm it's gone.
-    const check = db.prepare('SELECT id FROM connected_platforms WHERE id = ?').get(lastInsertRowid);
-    assert.strictEqual(check, undefined);
+    const { rows } = await getPool().query(
+      'SELECT id FROM connected_platforms WHERE id = $1', [insertedId]
+    );
+    assert.strictEqual(rows.length, 0);
   });
 
   it('returns 404 for a platform that does not exist', async () => {
@@ -253,7 +249,7 @@ describe('DELETE /platforms/:id', () => {
     assert.strictEqual(res.status, 404);
   });
 
-  it('returns 404 when trying to disconnect another user\'s platform', async () => {
+  it("returns 404 when trying to disconnect another user's platform", async () => {
     const r2 = await request(app)
       .post('/auth/register')
       .send({ email: 'thief@example.com', password: 'password123' });
@@ -262,17 +258,16 @@ describe('DELETE /platforms/:id', () => {
       .set('Authorization', `Bearer ${r2.body.token}`);
     const userId2 = me2.body.userId;
 
-    const db  = getDb();
     const now = Date.now();
-    const { lastInsertRowid } = db.prepare(
+    const { rows: [{ id: victimId }] } = await getPool().query(
       `INSERT INTO connected_platforms
          (user_id, platform, account_name, account_id, connected_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(userId2, 'wordpress', 'Victim Site', 'wp-1', now, now);
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [userId2, 'wordpress', 'Victim Site', 'wp-1', now, now]
+    );
 
-    // user 1 tries to delete user 2's platform
     const res = await request(app)
-      .delete(`/platforms/${lastInsertRowid}`)
+      .delete(`/platforms/${victimId}`)
       .set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 404);
   });

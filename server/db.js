@@ -1,123 +1,187 @@
 'use strict';
 
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 
 const SCHEMA_VERSION = 1;
 
-let _db = null;
+let _pool        = null;
+let _initialized = false;
 
-function getDb() {
-  if (_db) return _db;
+function getPool() {
+  if (!_pool) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error(
+        'DATABASE_URL is required. Set it to your PostgreSQL connection string, e.g.: ' +
+        'postgresql://user:password@host:5432/dbname'
+      );
+    }
+    const useSSL =
+      process.env.NODE_ENV === 'production' ||
+      connectionString.includes('sslmode=require') ||
+      connectionString.includes('ssl=true');
 
-  const dbPath = process.env.DB_PATH || path.join(__dirname, 'elmer.db');
-
-  // Ensure parent directory exists for file-based DBs
-  if (dbPath !== ':memory:') {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    _pool = new Pool({
+      connectionString,
+      ssl: useSSL ? { rejectUnauthorized: false } : false,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
+    _pool.on('error', (err) => {
+      console.error('[elmer] idle PostgreSQL client error:', err.message);
+    });
   }
-
-  _db = new Database(dbPath);
-  _db.pragma('journal_mode = WAL');
-  _db.pragma('foreign_keys = ON');
-  _db.pragma('busy_timeout = 5000');
-
-  migrate(_db);
-  return _db;
+  return _pool;
 }
 
-function migrate(db) {
-  const version = db.pragma('user_version', { simple: true });
+async function migrate(pool) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (version >= SCHEMA_VERSION) return;
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version    INTEGER PRIMARY KEY,
+        applied_at BIGINT  NOT NULL
+      )
+    `);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT    NOT NULL,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL
+    const { rows } = await client.query(
+      'SELECT version FROM schema_migrations WHERE version = $1',
+      [SCHEMA_VERSION]
+    );
+    if (rows.length > 0) {
+      await client.query('COMMIT');
+      return;
+    }
+
+    // V1 — initial schema
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id            BIGSERIAL PRIMARY KEY,
+        email         TEXT   NOT NULL UNIQUE,
+        password_hash TEXT   NOT NULL,
+        created_at    BIGINT NOT NULL,
+        updated_at    BIGINT NOT NULL
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id         BIGSERIAL PRIMARY KEY,
+        user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token      TEXT   NOT NULL UNIQUE,
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS business_settings (
+        id            BIGSERIAL PRIMARY KEY,
+        user_id       BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        settings_json TEXT   NOT NULL DEFAULT '{}',
+        updated_at    BIGINT NOT NULL
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS connected_platforms (
+        id                BIGSERIAL PRIMARY KEY,
+        user_id           BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        platform          TEXT   NOT NULL
+          CHECK(platform IN ('google','facebook','wordpress')),
+        account_name      TEXT   NOT NULL,
+        account_id        TEXT   NOT NULL,
+        access_token_enc  TEXT,
+        refresh_token_enc TEXT,
+        token_expires_at  BIGINT,
+        connected_at      BIGINT NOT NULL,
+        updated_at        BIGINT NOT NULL,
+        UNIQUE(user_id, platform, account_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        id         BIGSERIAL PRIMARY KEY,
+        state      TEXT   NOT NULL UNIQUE,
+        user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        platform   TEXT   NOT NULL,
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL,
+        used_at    BIGINT
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS publishing_records (
+        id               BIGSERIAL PRIMARY KEY,
+        user_id          BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        platform         TEXT   NOT NULL,
+        platform_post_id TEXT,
+        job_ref          TEXT,
+        status           TEXT   NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending','published','failed')),
+        error_message    TEXT,
+        published_at     BIGINT,
+        created_at       BIGINT NOT NULL,
+        updated_at       BIGINT NOT NULL
+      )
+    `);
+
+    await client.query(
+      'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+      [SCHEMA_VERSION, Date.now()]
     );
 
-    CREATE TABLE IF NOT EXISTS sessions (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id    INTEGER NOT NULL,
-      token      TEXT    NOT NULL UNIQUE,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token);
-    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
-
-    CREATE TABLE IF NOT EXISTS business_settings (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id       INTEGER NOT NULL UNIQUE,
-      settings_json TEXT    NOT NULL DEFAULT '{}',
-      updated_at    INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS connected_platforms (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id           INTEGER NOT NULL,
-      platform          TEXT    NOT NULL
-        CHECK(platform IN ('google','facebook','wordpress')),
-      account_name      TEXT    NOT NULL,
-      account_id        TEXT    NOT NULL,
-      access_token_enc  TEXT,
-      refresh_token_enc TEXT,
-      token_expires_at  INTEGER,
-      connected_at      INTEGER NOT NULL,
-      updated_at        INTEGER NOT NULL,
-      UNIQUE(user_id, platform, account_id),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS oauth_states (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      state      TEXT    NOT NULL UNIQUE,
-      user_id    INTEGER NOT NULL,
-      platform   TEXT    NOT NULL,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      used_at    INTEGER,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state);
-
-    CREATE TABLE IF NOT EXISTS publishing_records (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id          INTEGER NOT NULL,
-      platform         TEXT    NOT NULL,
-      platform_post_id TEXT,
-      job_ref          TEXT,
-      status           TEXT    NOT NULL DEFAULT 'pending'
-        CHECK(status IN ('pending','published','failed')),
-      error_message    TEXT,
-      published_at     INTEGER,
-      created_at       INTEGER NOT NULL,
-      updated_at       INTEGER NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
-
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
-}
-
-function cleanExpiredSessions(db) {
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-}
-
-// Used in tests and graceful shutdown to release the connection.
-function closeDb() {
-  if (_db) {
-    _db.close();
-    _db = null;
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
-module.exports = { getDb, closeDb, cleanExpiredSessions };
+async function initDb() {
+  const pool = getPool();
+  if (!_initialized) {
+    await migrate(pool);
+    _initialized = true;
+    cleanExpiredSessions().catch(err =>
+      console.warn('[elmer] session cleanup error:', err.message)
+    );
+  }
+  return pool;
+}
+
+async function closeDb() {
+  if (_pool) {
+    await _pool.end();
+    _pool        = null;
+    _initialized = false;
+  }
+}
+
+async function cleanExpiredSessions() {
+  await getPool().query(
+    'DELETE FROM sessions WHERE expires_at < $1',
+    [Date.now()]
+  );
+}
+
+// Test-only: inject a mock pool (e.g. pg-mem). Resets initialisation state.
+function _setPoolForTesting(pool) {
+  if (_pool && _pool !== pool) {
+    _pool.end().catch(() => {});
+  }
+  _pool        = pool;
+  _initialized = false;
+}
+
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, _setPoolForTesting };

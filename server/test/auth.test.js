@@ -1,29 +1,28 @@
 'use strict';
 
-process.env.DB_PATH              = ':memory:';
-process.env.DISABLE_AUTH         = 'false';  // auth is enforced in these tests
-process.env.DISABLE_RATE_LIMIT   = 'true';
+process.env.DISABLE_AUTH              = 'false';
+process.env.DISABLE_RATE_LIMIT        = 'true';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert   = require('node:assert/strict');
 const request  = require('supertest');
 
-const { closeDb }    = require('../db');
-const { createApp }  = require('../app');
+const { setupFreshTestDb } = require('./helpers');
+const { closeDb }          = require('../db');
+const { createApp }        = require('../app');
 
 let app;
 
-before(() => {
-  closeDb();
+before(async () => {
+  await setupFreshTestDb();
   app = createApp();
 });
 
-after(() => closeDb());
+after(async () => closeDb());
 
-// Re-open a fresh in-memory DB before each test so tests don't share state.
-beforeEach(() => {
-  closeDb();
+beforeEach(async () => {
+  await setupFreshTestDb();
   app = createApp();
 });
 
@@ -109,8 +108,8 @@ describe('POST /auth/login', () => {
   });
 
   it('does not distinguish between wrong password and unknown email (same error)', async () => {
-    const wrongPw  = await login('user@example.com', 'wrongpassword');
-    const noUser   = await login('nobody@example.com', 'password123');
+    const wrongPw = await login('user@example.com', 'wrongpassword');
+    const noUser  = await login('nobody@example.com', 'password123');
     assert.strictEqual(wrongPw.body.error, noUser.body.error);
   });
 });
@@ -163,7 +162,6 @@ describe('POST /auth/logout', () => {
     assert.strictEqual(logoutRes.status, 200);
     assert.ok(logoutRes.body.ok);
 
-    // Token should no longer work.
     const meRes = await request(app)
       .get('/auth/me')
       .set('Authorization', `Bearer ${token}`);

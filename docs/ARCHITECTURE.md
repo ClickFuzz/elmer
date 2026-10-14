@@ -43,12 +43,13 @@ Elmer is a mobile-first publishing tool for local contractors. The workflow is:
 | AI transcription | OpenAI `whisper-1` |
 | AI content generation | OpenAI `gpt-4o-mini` |
 | Geocoding | Nominatim / OpenStreetMap (no API key required) |
-| Server database | `better-sqlite3` (synchronous, WAL mode) |
+| Server database | PostgreSQL via `pg` (connection pool, async) |
 | Password hashing | `bcryptjs` (12 rounds) |
 | Rate limiting | `express-rate-limit` (in-memory) |
 | Configuration | `server/.env` (gitignored) |
+| Hosting | Railway (production); local Node.js for development |
 
-Do not add PostgreSQL, Redis, Supabase, or Firebase without a specific demonstrated requirement.
+Do not add Redis, Supabase, or Firebase without a specific demonstrated requirement.
 
 ---
 
@@ -133,70 +134,75 @@ CREATE TABLE settings (
 
 ---
 
-## Server-Side Database Schema (better-sqlite3, WAL mode)
+## Server-Side Database Schema (PostgreSQL)
 
-**Database file:** `server/elmer.db` (gitignored)  
-**Schema version: 1** — applied in `server/db.js → migrate()`
+**Connection:** `DATABASE_URL` environment variable (Railway provides this automatically)  
+**Schema version: 1** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
 
 ```sql
 CREATE TABLE users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+  id            BIGSERIAL PRIMARY KEY,
+  email         TEXT    NOT NULL UNIQUE,
   password_hash TEXT    NOT NULL,
-  created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  created_at    BIGINT  NOT NULL,
+  updated_at    BIGINT  NOT NULL
 );
 
 CREATE TABLE sessions (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token      TEXT    NOT NULL UNIQUE,      -- 64 hex chars, random
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
+  created_at BIGINT  NOT NULL,
+  expires_at BIGINT  NOT NULL
 );
 
 CREATE TABLE business_settings (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id       INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  id            BIGSERIAL PRIMARY KEY,
+  user_id       BIGINT  NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   settings_json TEXT    NOT NULL DEFAULT '{}',
-  updated_at    INTEGER NOT NULL
+  updated_at    BIGINT  NOT NULL
 );
 
 CREATE TABLE connected_platforms (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   platform          TEXT    NOT NULL CHECK(platform IN ('google','facebook','wordpress')),
   account_name      TEXT    NOT NULL,
   account_id        TEXT    NOT NULL,
   access_token_enc  TEXT,   -- AES-256-GCM encrypted hex; NULL until connected
   refresh_token_enc TEXT,   -- AES-256-GCM encrypted hex; NULL if not applicable
-  token_expires_at  INTEGER,
-  connected_at      INTEGER NOT NULL,
-  updated_at        INTEGER NOT NULL,
+  token_expires_at  BIGINT,
+  connected_at      BIGINT  NOT NULL,
+  updated_at        BIGINT  NOT NULL,
   UNIQUE(user_id, platform, account_id)
 );
 
 CREATE TABLE oauth_states (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         BIGSERIAL PRIMARY KEY,
   state      TEXT    NOT NULL UNIQUE,   -- 48 hex chars, random; CSRF token
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id    BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   platform   TEXT    NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,          -- 10 minutes from creation
-  used_at    INTEGER                    -- set on first use; NULL = not yet consumed
+  created_at BIGINT  NOT NULL,
+  expires_at BIGINT  NOT NULL,          -- 10 minutes from creation
+  used_at    BIGINT                     -- set on first use; NULL = not yet consumed
 );
 
 CREATE TABLE publishing_records (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id               BIGSERIAL PRIMARY KEY,
+  user_id          BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   platform         TEXT    NOT NULL,
   platform_post_id TEXT,
   job_ref          TEXT,
   status           TEXT    NOT NULL CHECK(status IN ('pending','published','failed')),
   error_message    TEXT,
-  published_at     INTEGER,
-  created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL
+  published_at     BIGINT,
+  created_at       BIGINT  NOT NULL,
+  updated_at       BIGINT  NOT NULL
+);
+
+CREATE TABLE schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at BIGINT  NOT NULL
 );
 ```
 
@@ -246,9 +252,9 @@ All platform endpoints require a valid Bearer token.
 
 | Variable | Default | Description |
 |---|---|---|
+| `DATABASE_URL` | _(required)_ | PostgreSQL connection string; Railway sets this automatically when a DB is linked |
 | `OPENAI_API_KEY` | _(none)_ | Required for real transcription/generation; server returns mock without it |
 | `PORT` | `3001` | HTTP listen port |
-| `DB_PATH` | `./elmer.db` | Path to server-side SQLite file; use `:memory:` for ephemeral testing |
 | `SESSION_TTL_DAYS` | `30` | Session lifetime in days |
 | `CREDENTIAL_ENCRYPTION_KEY` | _(required for OAuth)_ | 64-char hex string (32 bytes) for AES-256-GCM credential encryption |
 | `DISABLE_AUTH` | `false` | Set `true` during local mobile dev before the app sends tokens; **never in production** |
@@ -257,7 +263,7 @@ All platform endpoints require a valid Bearer token.
 | `DISABLE_RATE_LIMIT` | `false` | Disable all rate limiting (tests only) |
 | `FACEBOOK_APP_ID` | _(required for OAuth)_ | Meta App ID — create at https://developers.facebook.com/ |
 | `FACEBOOK_APP_SECRET` | _(required for OAuth)_ | Meta App Secret — keep server-side only, never in mobile code |
-| `FACEBOOK_REDIRECT_URI` | _(required for OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; e.g. `https://your-domain.com/facebook/callback` |
+| `FACEBOOK_REDIRECT_URI` | _(required for OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/facebook/callback` |
 | `FACEBOOK_OAUTH_RETURN_SCHEME` | `elmer` | Custom URI scheme Elmer uses to return from the OAuth browser; must match `scheme` in `app.json` |
 
 ---
@@ -447,10 +453,66 @@ Mobile                          Elmer Server                  Facebook
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js
 ```
 
-Each test file sets its own environment variables (`DB_PATH=:memory:`, `DISABLE_RATE_LIMIT=true`) before requiring any modules. Tests run in isolated worker threads (Node 22 default). No `.env` file is required to run tests.
+Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
+
+---
+
+## Railway Deployment
+
+### Architecture on Railway
+
+```
+GitHub repository
+  └── Railway project
+        ├── Elmer Server (Node.js service)
+        │     Root directory: server/
+        │     Start command:  node index.js
+        │     Health check:   GET /health
+        └── PostgreSQL (Railway-managed database)
+              DATABASE_URL → injected into server service automatically
+```
+
+### Railway setup steps (one-time)
+
+1. Go to [railway.app](https://railway.app) and create a new project
+2. Add a **GitHub** source → connect the `elmer` repository → set **Root Directory** to `server/`
+3. Add a **PostgreSQL** database service to the same project
+4. In the server service → **Variables** — `DATABASE_URL` auto-populates from the linked database; if not, copy it manually from the PostgreSQL service's **Connect** tab
+5. Add remaining required variables: `OPENAI_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI`, `DISABLE_AUTH=false`, `NODE_ENV=production`
+6. Click **Deploy** — Railway runs `node index.js`; database migrations execute automatically on startup
+7. Confirm `GET /health` returns `{"ok":true}` on the provisioned `.up.railway.app` domain
+8. In Railway → **Settings** → **Networking** → add custom domain `api.getelmer.com`
+9. Add the CNAME DNS record Railway provides at your DNS registrar
+10. Wait for HTTPS certificate provisioning (typically < 5 minutes)
+11. In Meta App Dashboard → Facebook Login → Settings → add `https://api.getelmer.com/facebook/callback` as a Valid OAuth Redirect URI
+12. Set `FACEBOOK_REDIRECT_URI=https://api.getelmer.com/facebook/callback` in Railway variables and redeploy
+13. Set `EXPO_PUBLIC_API_URL=https://api.getelmer.com` in the mobile app and rebuild
+
+### Local development with PostgreSQL
+
+```bash
+# macOS (Homebrew)
+brew install postgresql@16 && brew services start postgresql@16
+createdb elmer_dev
+# Add to server/.env:
+# DATABASE_URL=postgresql://localhost/elmer_dev
+cd server && npm start   # migrations run automatically
+```
+
+### PostgreSQL backup and restore
+
+```bash
+# Backup
+pg_dump "$DATABASE_URL" --no-owner --no-acl -Fc -f elmer_backup_$(date +%Y%m%d).dump
+
+# Restore
+pg_restore --no-owner --no-acl -d "$TARGET_DATABASE_URL" elmer_backup_YYYYMMDD.dump
+```
+
+Railway offers automatic daily backups via the database service → **Backups** tab (paid plans).
 
 ---
 

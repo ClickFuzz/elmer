@@ -1,6 +1,5 @@
 'use strict';
 
-process.env.DB_PATH                   = ':memory:';
 process.env.DISABLE_AUTH              = 'false';
 process.env.DISABLE_RATE_LIMIT        = 'true';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'c'.repeat(64);
@@ -12,13 +11,12 @@ const { describe, it, before, after, beforeEach } = require('node:test');
 const assert  = require('node:assert/strict');
 const request = require('supertest');
 
-const { getDb, closeDb }       = require('../db');
-const { createApp }            = require('../app');
-const { encrypt }              = require('../crypto');
+const { setupFreshTestDb } = require('./helpers');
+const { getPool, closeDb } = require('../db');
+const { createApp }        = require('../app');
+const { encrypt }          = require('../crypto');
 
 // ── Mock Graph API factory ─────────────────────────────────────────────────
-// Returns a fetch-compatible function that can be pre-programmed with
-// sequential responses for each call.
 
 function makeGraphMock(responses) {
   let i = 0;
@@ -39,8 +37,6 @@ async function registerAndLogin(app, email = 'fb@example.com', password = 'passw
 }
 
 async function createFbState(app, token) {
-  // Directly insert an oauth_state so the callback endpoint can consume it.
-  // We return both the raw state string and the user data.
   const res = await request(app)
     .post('/platforms/oauth/state')
     .set('Authorization', `Bearer ${token}`)
@@ -48,32 +44,30 @@ async function createFbState(app, token) {
   return res.body.state;
 }
 
-// Inserts a connected Facebook page directly into the DB.
-function insertFbPage(db, userId, pageName = 'My Page', pageAccountId = 'page-123') {
+async function insertFbPage(userId, pageName = 'My Page', pageAccountId = 'page-123') {
   const now = Date.now();
   const tokenEnc = encrypt('fake_page_token');
-  const { lastInsertRowid } = db.prepare(
+  const { rows: [{ id }] } = await getPool().query(
     `INSERT INTO connected_platforms
        (user_id, platform, account_name, account_id, access_token_enc, connected_at, updated_at)
-     VALUES (?, 'facebook', ?, ?, ?, ?, ?)`
-  ).run(userId, pageName, pageAccountId, tokenEnc, now, now);
-  return lastInsertRowid;
+     VALUES ($1, 'facebook', $2, $3, $4, $5, $6) RETURNING id`,
+    [userId, pageName, pageAccountId, tokenEnc, now, now]
+  );
+  return id;
 }
 
 // ── Test suites ────────────────────────────────────────────────────────────
-
-// Each suite gets a fresh in-memory DB and a custom graphFetch mock.
 
 describe('POST /facebook/connect-url', () => {
   let app, token;
 
   beforeEach(async () => {
-    closeDb();
+    await setupFreshTestDb();
     app = createApp();
     ({ token } = await registerAndLogin(app));
   });
 
-  after(() => closeDb());
+  after(async () => closeDb());
 
   it('returns 401 without authentication', async () => {
     const res = await request(app).post('/facebook/connect-url');
@@ -104,23 +98,19 @@ describe('POST /facebook/connect-url', () => {
     assert.ok(res.body.authUrl.includes('facebook.com'), 'should be a Facebook URL');
     assert.ok(res.body.authUrl.includes('pages_manage_posts'), 'should request publishing permission');
 
-    // Confirm state was persisted
-    const db  = getDb();
-    const row = db.prepare(
+    const { rows: [row] } = await getPool().query(
       `SELECT * FROM oauth_states WHERE platform = 'facebook' ORDER BY id DESC LIMIT 1`
-    ).get();
+    );
     assert.ok(row, 'oauth_state row should exist');
     assert.ok(!row.used_at, 'should not be consumed yet');
   });
 });
 
 describe('GET /facebook/callback', () => {
-  // Each test builds its own app with a custom graphFetch so responses are isolated.
-
-  after(() => closeDb());
+  after(async () => closeDb());
 
   it('redirects with error when Facebook returns an error parameter', async () => {
-    closeDb();
+    await setupFreshTestDb();
     const app = createApp();
     const res = await request(app)
       .get('/facebook/callback')
@@ -130,17 +120,17 @@ describe('GET /facebook/callback', () => {
   });
 
   it('redirects with error for missing code or state', async () => {
-    closeDb();
+    await setupFreshTestDb();
     const app = createApp();
     const res = await request(app)
       .get('/facebook/callback')
-      .query({ code: 'abc' }); // state missing
+      .query({ code: 'abc' });
     assert.strictEqual(res.status, 302);
     assert.ok(res.headers.location.includes('error=missing_params'));
   });
 
   it('redirects with error for an invalid state', async () => {
-    closeDb();
+    await setupFreshTestDb();
     const app = createApp();
     const res = await request(app)
       .get('/facebook/callback')
@@ -150,15 +140,13 @@ describe('GET /facebook/callback', () => {
   });
 
   it('redirects with error for an already-used state', async () => {
-    closeDb();
+    await setupFreshTestDb();
     const { createFacebookRouter } = require('../routes/facebook');
     const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: makeGraphMock([]) }) });
     const { token } = await registerAndLogin(app);
     const state = await createFbState(app, token);
 
-    // Manually mark the state as used
-    const db  = getDb();
-    db.prepare('UPDATE oauth_states SET used_at = ? WHERE state = ?').run(Date.now(), state);
+    await getPool().query('UPDATE oauth_states SET used_at = $1 WHERE state = $2', [Date.now(), state]);
 
     const res = await request(app)
       .get('/facebook/callback')
@@ -168,16 +156,13 @@ describe('GET /facebook/callback', () => {
   });
 
   it('stores page tokens and redirects to app scheme on success', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const mockGraphFetch = makeGraphMock([
-      // short-lived token exchange
       { data: { access_token: 'short_token', token_type: 'bearer' } },
-      // long-lived token exchange
       { data: { access_token: 'long_token', expires_in: 5183944, token_type: 'bearer' } },
-      // me/accounts — returns two pages
       { data: { data: [
-        { id: 'page-1', name: 'My Shop', access_token: 'page_token_1', tasks: ['ADVERTISE', 'CREATE_CONTENT'] },
+        { id: 'page-1', name: 'My Shop',  access_token: 'page_token_1', tasks: ['CREATE_CONTENT'] },
         { id: 'page-2', name: 'Side Biz', access_token: 'page_token_2', tasks: ['CREATE_CONTENT'] },
       ] } },
     ]);
@@ -195,26 +180,24 @@ describe('GET /facebook/callback', () => {
     assert.ok(res.headers.location.includes('success=true'));
     assert.ok(res.headers.location.includes('page_count=2'));
 
-    // Confirm pages are in connected_platforms
-    const db    = getDb();
-    const pages = db.prepare(
+    const { rows: pages } = await getPool().query(
       `SELECT account_id, account_name FROM connected_platforms
-       WHERE user_id = ? AND platform = 'facebook'
-       ORDER BY account_name`
-    ).all(ownerId);
+       WHERE user_id = $1 AND platform = 'facebook'
+       ORDER BY account_name`,
+      [ownerId]
+    );
     assert.strictEqual(pages.length, 2);
     assert.strictEqual(pages[0].account_name, 'My Shop');
     assert.strictEqual(pages[1].account_name, 'Side Biz');
   });
 
   it('reconnecting overwrites the existing token without duplicating the row', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short1' } },
       { data: { access_token: 'long1' } },
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_first' }] } },
-      // second connect — same page, new token
       { data: { access_token: 'short2' } },
       { data: { access_token: 'long2' } },
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_second' }] } },
@@ -224,23 +207,21 @@ describe('GET /facebook/callback', () => {
     const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
     const { token, userId } = await registerAndLogin(app);
 
-    // First connect
     const state1 = await createFbState(app, token);
     await request(app).get('/facebook/callback').query({ code: 'c1', state: state1 });
 
-    // Second connect
     const state2 = await createFbState(app, token);
     await request(app).get('/facebook/callback').query({ code: 'c2', state: state2 });
 
-    const db    = getDb();
-    const rows  = db.prepare(
-      `SELECT id FROM connected_platforms WHERE user_id = ? AND platform = 'facebook'`
-    ).all(userId);
+    const { rows } = await getPool().query(
+      `SELECT id FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
     assert.strictEqual(rows.length, 1, 'should not duplicate the row');
   });
 
   it('redirects with no_manageable_pages error when user has no pages', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short_token' } },
@@ -266,12 +247,12 @@ describe('GET /facebook/pages', () => {
   let app, token, userId;
 
   beforeEach(async () => {
-    closeDb();
+    await setupFreshTestDb();
     app = createApp();
     ({ token, userId } = await registerAndLogin(app));
   });
 
-  after(() => closeDb());
+  after(async () => closeDb());
 
   it('returns 401 without authentication', async () => {
     const res = await request(app).get('/facebook/pages');
@@ -287,12 +268,10 @@ describe('GET /facebook/pages', () => {
   });
 
   it('returns only pages belonging to the authenticated user', async () => {
-    // Insert a page for user 1 and a page for user 2
-    const db = getDb();
-    insertFbPage(db, userId, 'User1 Page', 'page-u1');
+    await insertFbPage(userId, 'User1 Page', 'page-u1');
 
     const { userId: userId2 } = await registerAndLogin(app, 'other@example.com');
-    insertFbPage(db, userId2, 'User2 Page', 'page-u2');
+    await insertFbPage(userId2, 'User2 Page', 'page-u2');
 
     const res = await request(app)
       .get('/facebook/pages')
@@ -303,9 +282,8 @@ describe('GET /facebook/pages', () => {
   });
 
   it('returns multiple pages sorted by name', async () => {
-    const db = getDb();
-    insertFbPage(db, userId, 'Zed Page',   'page-z');
-    insertFbPage(db, userId, 'Alpha Page', 'page-a');
+    await insertFbPage(userId, 'Zed Page',   'page-z');
+    await insertFbPage(userId, 'Alpha Page', 'page-a');
 
     const res = await request(app)
       .get('/facebook/pages')
@@ -320,13 +298,13 @@ describe('POST /facebook/publish', () => {
   let app, token, userId, platformId;
 
   beforeEach(async () => {
-    closeDb();
+    await setupFreshTestDb();
     app = createApp();
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
   });
 
-  after(() => closeDb());
+  after(async () => closeDb());
 
   it('returns 401 without authentication', async () => {
     const res = await request(app)
@@ -358,9 +336,8 @@ describe('POST /facebook/publish', () => {
 
   it('returns 404 when platform is not owned by user', async () => {
     const { userId: userId2 } = await registerAndLogin(app, 'other2@example.com');
-    const otherId = insertFbPage(getDb(), userId2, 'Other Page', 'page-other');
+    const otherId = await insertFbPage(userId2, 'Other Page', 'page-other');
 
-    // user1 tries to publish to user2's page
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
@@ -371,14 +348,14 @@ describe('POST /facebook/publish', () => {
   });
 
   it('publishes a text-only post and records the result', async () => {
-    closeDb();
+    await setupFreshTestDb();
     const mockFetch = makeGraphMock([
       { data: { id: 'page-123_post-456' } },
     ]);
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
 
     const res = await request(app)
       .post('/facebook/publish')
@@ -392,17 +369,16 @@ describe('POST /facebook/publish', () => {
     assert.ok(res.body.postId, 'should return postId');
     assert.ok(!res.body.duplicate, 'should not be a duplicate');
 
-    // Verify publishing_records row
-    const db  = getDb();
-    const rec = db.prepare(
-      `SELECT * FROM publishing_records WHERE user_id = ? AND platform = 'facebook' AND status = 'published'`
-    ).get(userId);
+    const { rows: [rec] } = await getPool().query(
+      `SELECT * FROM publishing_records WHERE user_id = $1 AND platform = 'facebook' AND status = 'published'`,
+      [userId]
+    );
     assert.ok(rec, 'should have a published record');
     assert.strictEqual(rec.platform_post_id, 'page-123_post-456');
   });
 
   it('prevents duplicate publishing for the same job_id', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     let callCount = 0;
     const mockFetch = async () => {
@@ -412,7 +388,7 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
 
     const payload = {
       message: 'First post', platform_id: String(platformId), job_id: 'job-dup',
@@ -430,30 +406,28 @@ describe('POST /facebook/publish', () => {
   });
 
   it('publishes with multiple photos and uses the staged-media flow', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const stagingCalls = [];
-    const mockFetch = async (url, opts) => {
+    const mockFetch = async (url, _opts) => {
       if (url.includes('/photos')) {
         stagingCalls.push(url);
         return { ok: true, json: async () => ({ id: `staged-${stagingCalls.length}` }) };
       }
-      // feed post
       return { ok: true, json: async () => ({ id: 'page-123_multi-post' }) };
     };
 
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
 
-    // Create two real temp files to simulate photo uploads
-    const fs_  = require('fs');
-    const os_  = require('os');
+    const fs_   = require('fs');
+    const os_   = require('os');
     const path_ = require('path');
     const tmp1  = path_.join(os_.tmpdir(), `test_photo1_${Date.now()}.jpg`);
     const tmp2  = path_.join(os_.tmpdir(), `test_photo2_${Date.now()}.jpg`);
-    fs_.writeFileSync(tmp1, Uint8Array.from([0xFF, 0xD8, 0xFF, 0xE0])); // minimal JPEG header
+    fs_.writeFileSync(tmp1, Uint8Array.from([0xFF, 0xD8, 0xFF, 0xE0]));
     fs_.writeFileSync(tmp2, Uint8Array.from([0xFF, 0xD8, 0xFF, 0xE0]));
 
     try {
@@ -477,7 +451,7 @@ describe('POST /facebook/publish', () => {
   });
 
   it('returns 422 with fbError flag when the Graph API returns a Facebook error', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const mockFetch = makeGraphMock([
       { ok: false, status: 400, data: { error: { message: 'Invalid OAuth access token.', code: 190 } } },
@@ -485,7 +459,7 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
 
     const res = await request(app)
       .post('/facebook/publish')
@@ -497,18 +471,17 @@ describe('POST /facebook/publish', () => {
     assert.strictEqual(res.status, 422);
     assert.ok(res.body.fbError);
 
-    // Confirm failure record was saved
-    const db  = getDb();
-    const rec = db.prepare(
+    const { rows: [rec] } = await getPool().query(
       `SELECT status, error_message FROM publishing_records
-       WHERE user_id = ? AND platform = 'facebook' AND status = 'failed'`
-    ).get(userId);
+       WHERE user_id = $1 AND platform = 'facebook' AND status = 'failed'`,
+      [userId]
+    );
     assert.ok(rec, 'should have a failed record');
     assert.ok(rec.error_message.includes('Invalid OAuth'));
   });
 
   it('records a failed publish and allows retry', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     let attempt = 0;
     const mockFetch = async () => {
@@ -520,7 +493,7 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = insertFbPage(getDb(), userId);
+    platformId = await insertFbPage(userId);
 
     const payload = {
       message: 'Retry me', platform_id: String(platformId), job_id: 'retry-job',
@@ -539,21 +512,16 @@ describe('POST /facebook/publish', () => {
 describe('Token storage and encryption', () => {
   let app, token, userId;
 
-  before(() => {
-    closeDb();
-    app = createApp();
-  });
-
-  after(() => closeDb());
-
   beforeEach(async () => {
-    closeDb();
+    await setupFreshTestDb();
     app = createApp();
     ({ token, userId } = await registerAndLogin(app));
   });
 
+  after(async () => closeDb());
+
   it('stores page tokens encrypted and never exposes them in GET /facebook/pages', async () => {
-    insertFbPage(getDb(), userId, 'Encrypted Page', 'page-enc');
+    await insertFbPage(userId, 'Encrypted Page', 'page-enc');
 
     const res = await request(app)
       .get('/facebook/pages')
@@ -566,7 +534,7 @@ describe('Token storage and encryption', () => {
   });
 
   it('stores page tokens encrypted and never exposes them in GET /platforms', async () => {
-    insertFbPage(getDb(), userId, 'Platform Page', 'page-plat');
+    await insertFbPage(userId, 'Platform Page', 'page-plat');
 
     const res = await request(app)
       .get('/platforms')
@@ -579,11 +547,10 @@ describe('Token storage and encryption', () => {
   });
 
   it('can decrypt a stored token at publish time', async () => {
-    closeDb();
+    await setupFreshTestDb();
 
     const sentToken = [];
     const mockFetch = async (_url, opts) => {
-      // Capture access_token from URLSearchParams or FormData body
       const body = opts?.body;
       if (body && typeof body.get === 'function') {
         const t = body.get('access_token');
@@ -596,15 +563,14 @@ describe('Token storage and encryption', () => {
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
 
-    // Insert a page with a known token
     const known = 'super_secret_page_token_abc';
-    const db    = getDb();
     const now   = Date.now();
-    const { lastInsertRowid: pid } = db.prepare(
+    const { rows: [{ id: pid }] } = await getPool().query(
       `INSERT INTO connected_platforms
          (user_id, platform, account_name, account_id, access_token_enc, connected_at, updated_at)
-       VALUES (?, 'facebook', 'Test Page', 'page-dec', ?, ?, ?)`
-    ).run(userId, encrypt(known), now, now);
+       VALUES ($1, 'facebook', 'Test Page', 'page-dec', $2, $3, $4) RETURNING id`,
+      [userId, encrypt(known), now, now]
+    );
 
     await request(app)
       .post('/facebook/publish')

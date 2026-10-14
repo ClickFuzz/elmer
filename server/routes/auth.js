@@ -1,9 +1,9 @@
 'use strict';
 
-const { Router }    = require('express');
+const { Router }      = require('express');
 const { randomBytes } = require('crypto');
-const bcrypt        = require('bcryptjs');
-const { getDb }     = require('../db');
+const bcrypt          = require('bcryptjs');
+const { getPool }     = require('../db');
 const { requireAuth, SESSION_TTL_MS } = require('../auth');
 
 const router = Router();
@@ -24,10 +24,14 @@ router.post('/register', wrap(async (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
-  const db = getDb();
+  const pool           = getPool();
   const normalizedEmail = email.toLowerCase().trim();
 
-  if (db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail)) {
+  const { rows: existing } = await pool.query(
+    'SELECT id FROM users WHERE email = $1',
+    [normalizedEmail]
+  );
+  if (existing.length > 0) {
     return res.status(409).json({ error: 'An account with that email already exists' });
   }
 
@@ -35,19 +39,28 @@ router.post('/register', wrap(async (req, res) => {
   const now   = Date.now();
   const token = randomBytes(32).toString('hex');
 
-  const insertUser = db.transaction(() => {
-    const { lastInsertRowid } = db.prepare(
-      'INSERT INTO users (email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)'
-    ).run(normalizedEmail, hash, now, now);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-    db.prepare(
-      'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)'
-    ).run(lastInsertRowid, token, now, now + SESSION_TTL_MS);
+    const { rows: [user] } = await client.query(
+      'INSERT INTO users (email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4) RETURNING id',
+      [normalizedEmail, hash, now, now]
+    );
 
-    return lastInsertRowid;
-  });
+    await client.query(
+      'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES ($1, $2, $3, $4)',
+      [user.id, token, now, now + SESSION_TTL_MS]
+    );
 
-  insertUser();
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
   return res.status(201).json({ token, expiresAt: now + SESSION_TTL_MS });
 }));
 
@@ -59,9 +72,12 @@ router.post('/login', wrap(async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  const db   = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE email = ?')
-                 .get(email.toLowerCase().trim());
+  const pool = getPool();
+  const { rows } = await pool.query(
+    'SELECT * FROM users WHERE email = $1',
+    [email.toLowerCase().trim()]
+  );
+  const user = rows[0];
 
   if (!user) {
     // Consume the same time as a real comparison to prevent user-enumeration via timing.
@@ -76,19 +92,20 @@ router.post('/login', wrap(async (req, res) => {
 
   const now   = Date.now();
   const token = randomBytes(32).toString('hex');
-  db.prepare(
-    'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)'
-  ).run(user.id, token, now, now + SESSION_TTL_MS);
+  await pool.query(
+    'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES ($1, $2, $3, $4)',
+    [user.id, token, now, now + SESSION_TTL_MS]
+  );
 
   return res.json({ token, expiresAt: now + SESSION_TTL_MS });
 }));
 
 // ── POST /auth/logout ──────────────────────────────────────────────────────
-router.post('/logout', requireAuth, (req, res) => {
+router.post('/logout', requireAuth, wrap(async (req, res) => {
   const token = req.headers['authorization'].slice(7);
-  getDb().prepare('DELETE FROM sessions WHERE token = ?').run(token);
+  await getPool().query('DELETE FROM sessions WHERE token = $1', [token]);
   return res.json({ ok: true });
-});
+}));
 
 // ── GET /auth/me ───────────────────────────────────────────────────────────
 router.get('/me', requireAuth, (req, res) => {

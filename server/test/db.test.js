@@ -1,118 +1,106 @@
 'use strict';
 
-// Each test calls getDb() directly; no shared db reference that can go stale.
-// WAL mode is tested on a temp file — in-memory databases fall back to 'memory' mode.
-process.env.DISABLE_AUTH      = 'true';
 process.env.DISABLE_RATE_LIMIT = 'true';
 
 const { describe, it, before, after } = require('node:test');
-const assert  = require('node:assert/strict');
-const os      = require('os');
-const path    = require('path');
-const fs      = require('fs');
+const assert = require('node:assert/strict');
 
-const { getDb, closeDb } = require('../db');
+const { setupFreshTestDb } = require('./helpers');
+const { getPool, closeDb, initDb } = require('../db');
 
-// Use a temp file so WAL mode can be tested properly (WAL is a no-op on :memory:).
-const TEST_DB = path.join(os.tmpdir(), `elmer-db-test-${process.pid}.db`);
-
-before(() => {
-  closeDb();
-  process.env.DB_PATH = TEST_DB;
-  getDb(); // initialise
+before(async () => {
+  await setupFreshTestDb();
 });
 
-after(() => {
-  closeDb();
-  fs.rmSync(TEST_DB, { force: true });
+after(async () => {
+  await closeDb();
 });
 
 describe('Database initialisation', () => {
-  it('creates the users table', () => {
-    const row = getDb().prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-    ).get();
-    assert.ok(row, 'users table should exist');
+  it('creates the users table', async () => {
+    const { rows } = await getPool().query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'users'`
+    );
+    assert.ok(rows.length > 0, 'users table should exist');
   });
 
-  it('creates the sessions table', () => {
-    const row = getDb().prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
-    ).get();
-    assert.ok(row, 'sessions table should exist');
+  it('creates the sessions table', async () => {
+    const { rows } = await getPool().query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'sessions'`
+    );
+    assert.ok(rows.length > 0, 'sessions table should exist');
   });
 
-  it('creates the connected_platforms table', () => {
-    const row = getDb().prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='connected_platforms'"
-    ).get();
-    assert.ok(row, 'connected_platforms table should exist');
+  it('creates the connected_platforms table', async () => {
+    const { rows } = await getPool().query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'connected_platforms'`
+    );
+    assert.ok(rows.length > 0, 'connected_platforms table should exist');
   });
 
-  it('creates the oauth_states table', () => {
-    const row = getDb().prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_states'"
-    ).get();
-    assert.ok(row, 'oauth_states table should exist');
+  it('creates the oauth_states table', async () => {
+    const { rows } = await getPool().query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'oauth_states'`
+    );
+    assert.ok(rows.length > 0, 'oauth_states table should exist');
   });
 
-  it('creates the publishing_records table', () => {
-    const row = getDb().prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='publishing_records'"
-    ).get();
-    assert.ok(row, 'publishing_records table should exist');
+  it('creates the publishing_records table', async () => {
+    const { rows } = await getPool().query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'publishing_records'`
+    );
+    assert.ok(rows.length > 0, 'publishing_records table should exist');
   });
 
-  it('sets schema version to 1', () => {
-    const version = getDb().pragma('user_version', { simple: true });
-    assert.strictEqual(version, 1);
+  it('records schema version 1 in schema_migrations', async () => {
+    const { rows } = await getPool().query(
+      'SELECT version FROM schema_migrations WHERE version = 1'
+    );
+    assert.ok(rows.length > 0, 'schema version 1 should be recorded');
   });
 
-  it('enables WAL journal mode (file-based database)', () => {
-    const mode = getDb().pragma('journal_mode', { simple: true });
-    assert.strictEqual(mode, 'wal');
+  it('migration is idempotent — calling initDb again is safe', async () => {
+    await initDb(); // second call; should not throw or alter data
+    const { rows } = await getPool().query(
+      'SELECT version FROM schema_migrations WHERE version = 1'
+    );
+    assert.ok(rows.length > 0, 'schema version should still be 1');
   });
 
-  it('enforces foreign key constraints', () => {
-    assert.throws(() => {
-      getDb().prepare(
-        'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES (99999, ?, ?, ?)'
-      ).run('tok', Date.now(), Date.now() + 1000);
-    }, /FOREIGN KEY constraint failed/);
+  it('enforces foreign key constraints on sessions', async () => {
+    await assert.rejects(
+      () => getPool().query(
+        'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES ($1, $2, $3, $4)',
+        [99999, 'tok'.repeat(22), Date.now(), Date.now() + 1000]
+      ),
+      /foreign key/i
+    );
   });
 
-  it('multiple getDb() calls return the same instance', () => {
-    assert.strictEqual(getDb(), getDb());
-  });
-
-  it('closeDb() then getDb() returns a fresh connection', () => {
-    const first = getDb();
-    closeDb();
-    const second = getDb();
-    assert.notStrictEqual(first, second, 'should be a new Database instance');
-  });
-
-  it('migration is idempotent — running on an existing schema is safe', () => {
-    // Close and reopen; migrate() should detect version=1 and skip.
-    closeDb();
-    const db = getDb();
-    const version = db.pragma('user_version', { simple: true });
-    assert.strictEqual(version, 1, 'schema version should still be 1');
-  });
-
-  it('connected_platforms rejects invalid platform values', () => {
-    const db  = getDb();
+  it('connected_platforms rejects invalid platform values', async () => {
     const now = Date.now();
-    const { lastInsertRowid } = db.prepare(
-      'INSERT INTO users (email, password_hash, created_at, updated_at) VALUES (?,?,?,?)'
-    ).run('fk@example.com', 'hash', now, now);
+    const { rows: [user] } = await getPool().query(
+      'INSERT INTO users (email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4) RETURNING id',
+      ['fk@example.com', 'hash', now, now]
+    );
 
-    assert.throws(() => {
-      db.prepare(
+    await assert.rejects(
+      () => getPool().query(
         `INSERT INTO connected_platforms
            (user_id, platform, account_name, account_id, connected_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(lastInsertRowid, 'twitter', 'Test', 'id1', now, now);
-    }, /CHECK constraint failed/);
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [user.id, 'twitter', 'Test', 'id1', now, now]
+      ),
+      /check/i
+    );
+  });
+
+  it('getPool() returns the same instance on repeated calls', () => {
+    assert.strictEqual(getPool(), getPool());
   });
 });

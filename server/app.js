@@ -7,7 +7,7 @@ const fs        = require('fs');
 const path      = require('path');
 const rateLimit = require('express-rate-limit');
 
-const { getDb, cleanExpiredSessions } = require('./db');
+// db initialisation happens in index.js (initDb) before createApp is called
 const { requireAuth, optionalAuth }   = require('./auth');
 const authRoutes                      = require('./routes/auth');
 const platformRoutes                  = require('./routes/platforms');
@@ -161,9 +161,6 @@ function createApp({ facebookRouter } = {}) {
 
   app.use(cors());
   app.use(express.json());
-
-  // Clean stale sessions on startup.
-  try { cleanExpiredSessions(getDb()); } catch { /* non-fatal */ }
 
   // Warn if encryption key is missing.
   if (!process.env.CREDENTIAL_ENCRYPTION_KEY) {
