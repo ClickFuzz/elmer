@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
+import { savePendingHomeState } from '../storage/database';
 import type { GeneratePayload, HomeState, PhotoClassification, PhotoItem } from '../App';
 
 const MAX_PHOTOS = 5;
@@ -66,6 +67,11 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
+  // Prevents expo-audio's persisted recorder.uri from falsely showing "Recording saved"
+  // on fresh app open. Set to true only when the user actually starts a recording.
+  const hasRecordedThisSession = useRef(false);
+  // Tracks the last recorder.uri we already copied/processed to avoid duplicate work.
+  const lastProcessedRecorderUri = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -74,10 +80,37 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!recorderState.isRecording && recorder.uri && recorder.uri !== audioUri) {
-      setAudioUri(recorder.uri);
+    if (!hasRecordedThisSession.current) return;
+    if (!recorderState.isRecording && recorder.uri && recorder.uri !== lastProcessedRecorderUri.current) {
+      lastProcessedRecorderUri.current = recorder.uri;
+      // Copy to document dir so the URI survives app restarts
+      (async () => {
+        let uri = recorder.uri!;
+        try {
+          const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
+          await FileSystem.copyAsync({ from: uri, to: dest });
+          uri = dest;
+        } catch { /* use original path */ }
+        setAudioUri(uri);
+      })();
     }
   }, [recorderState.isRecording, recorder.uri]);
+
+  // Persist photos + audio so state survives app restarts
+  useEffect(() => {
+    savePendingHomeState({ photos, audioUri }).catch(() => {});
+  }, [photos, audioUri]);
+
+  const clearAll = () => {
+    setPhotos([]);
+    setAudioUri(null);
+    if (playerRef.current) {
+      playerRef.current.pause();
+      playerRef.current.remove();
+      playerRef.current = null;
+      setIsPlayingBack(false);
+    }
+  };
 
   // ─── Photos ──────────────────────────────────────────────────────────────
 
@@ -194,6 +227,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
+      hasRecordedThisSession.current = true;
       setAudioUri(null);
     } catch (err) {
       console.error('Failed to start recording', err);
@@ -327,7 +361,14 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
               <Text style={styles.sectionLabel}>Job Photos</Text>
               <Text style={styles.sectionSubLabel}>Add up to {MAX_PHOTOS}</Text>
             </View>
-            <Text style={styles.sectionCount}>{photos.length}/{MAX_PHOTOS}</Text>
+            <View style={styles.sectionCountWrap}>
+              {(photos.length > 0 || !!audioUri) && (
+                <TouchableOpacity onPress={clearAll} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={styles.clearAllBtn}>Clear All</Text>
+                </TouchableOpacity>
+              )}
+              <Text style={styles.sectionCount}>{photos.length}/{MAX_PHOTOS}</Text>
+            </View>
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoRow}>
@@ -566,4 +607,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   generateBtnTextDisabled: { color: colors.textMuted },
+  sectionCountWrap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  clearAllBtn: { fontSize: 12, fontFamily: 'Inter_500Medium', color: colors.textMuted },
 });

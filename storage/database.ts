@@ -250,6 +250,34 @@ export async function saveBusinessProfile(profile: BusinessProfile): Promise<voi
   await setSetting('business_profile', JSON.stringify(profile));
 }
 
+// ── Pending home state (draft before generate) ────────────────────────────────
+
+export type PendingPhoto = {
+  uri: string;
+  classification: string;
+  gps?: { lat: number; lng: number };
+};
+
+export type PendingHomeState = {
+  photos: PendingPhoto[];
+  audioUri: string | null;
+};
+
+export async function getPendingHomeState(): Promise<PendingHomeState | null> {
+  const raw = await getSetting('pending_home_state');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+export async function savePendingHomeState(state: PendingHomeState | null): Promise<void> {
+  if (!state) {
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM settings WHERE key = 'pending_home_state'`);
+    return;
+  }
+  await setSetting('pending_home_state', JSON.stringify(state));
+}
+
 export async function getConnectedChannels(): Promise<ConnectedChannel[]> {
   const raw = await getSetting('connected_channels');
   if (!raw) return [];

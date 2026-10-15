@@ -3,10 +3,11 @@ import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-goog
 import { Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
+import { getPendingHomeState, savePendingHomeState } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
@@ -53,11 +54,19 @@ function AppShell() {
   const { bottom: bottomInset } = useSafeAreaInsets();
   const [screen, setScreen] = useState<AppScreen>('home');
   const [payload, setPayload] = useState<GeneratePayload | null>(null);
-  // Preserved so HomeScreen restores its state after back navigation
   const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
 
+  // Restore persisted home state on first launch
+  useEffect(() => {
+    getPendingHomeState().then(state => {
+      if (state) setSavedHomeState(state as HomeState);
+    });
+  }, []);
+
   const handleGenerate = (data: GeneratePayload) => {
-    setSavedHomeState({ photos: data.photos, audioUri: data.audioUri });
+    // Clear persisted draft — home starts fresh after generating
+    savePendingHomeState(null);
+    setSavedHomeState(null);
     setPayload(data);
     setScreen('result');
   };
