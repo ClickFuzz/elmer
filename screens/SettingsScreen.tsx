@@ -426,7 +426,7 @@ export default function SettingsScreen({ onBack }: Props) {
             await setInstagramExplanationShown();
             Alert.alert(
               'Instagram photos',
-              "Your photos will be shared across all connected platforms by default. Want a photo to appear only on Instagram? Tap the photo and select Instagram Only.\n\nInstagram will receive all your photos. Other platforms will receive only photos marked All Platforms.",
+              "Your photos will be shared across all connected platforms by default. Want a photo to appear only on Instagram? Tap the photo and select Instagram Only.\n\nInstagram will receive only photos marked Instagram. Other platforms will receive only photos marked All Platforms.",
               [{ text: 'Got it' }]
             );
           } else {

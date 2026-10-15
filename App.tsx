@@ -18,7 +18,7 @@ export type PhotoClassification = 'General' | 'Before' | 'After' | 'Team';
 export type PhotoItem = {
   uri: string;
   classification: PhotoClassification;
-  destination?: 'all' | 'instagram_only';
+  destination?: 'other_platforms' | 'instagram_only';
   gps?: { lat: number; lng: number };
 };
 
@@ -80,7 +80,7 @@ function AppShell() {
       photos: photos.map(p => ({
         uri: p.localUri,
         classification: p.classification as PhotoClassification,
-        destination: (p.destination === 'instagram_only' ? 'instagram_only' : 'all') as 'all' | 'instagram_only',
+        destination: (p.destination === 'instagram_only' ? 'instagram_only' : 'other_platforms') as 'other_platforms' | 'instagram_only',
       })),
       audioUri: null,
     };

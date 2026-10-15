@@ -78,6 +78,7 @@ type PageResult = {
   postUrl?: string;
   error?: string;
   duplicate?: boolean;
+  skipped?: boolean;
 };
 
 type PublishState =
@@ -226,7 +227,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           location: loc,
           seoMetadata: data.seoMetadata ?? null,
           isMock: data.mock === true,
-          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification, destination: p.destination ?? 'all' })),
+          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification, destination: p.destination ?? 'other_platforms' })),
         }).then(jobId => setSavedJobId(jobId)).catch(err => console.warn('DB save failed:', err));
 
         break; // success — exit retry loop
@@ -290,15 +291,18 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     copiedTimerRef.current = setTimeout(() => setCopiedItem(null), 2000);
   };
 
-  const runFacebookPublish = async (sessionToken: string): Promise<PageResult[]> => {
+  const runFacebookPublish = async (sessionToken: string, igConnected: boolean): Promise<PageResult[]> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
 
     const formData = new FormData();
     formData.append('message', editedSocial);
     formData.append('job_id', jobId);
 
-    // Filter out instagram_only photos — Facebook receives only 'all' photos
-    const fbPhotos = payload.photos.filter(p => (p.destination ?? 'all') !== 'instagram_only');
+    // When Instagram is connected, exclude instagram_only photos from other platforms.
+    // When Instagram is disconnected, include all photos so none are accidentally withheld.
+    const fbPhotos = igConnected
+      ? payload.photos.filter(p => (p.destination ?? 'other_platforms') !== 'instagram_only')
+      : payload.photos;
     fbPhotos.forEach((photo, i) => {
       formData.append(`photo_${i}`, {
         uri: photo.uri,
@@ -334,15 +338,17 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     return rawResults.map(r => ({ ...r, platform: 'facebook' }));
   };
 
-  const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
+  const runInstagramPublish = async (
+    sessionToken: string,
+    igPhotos: Array<{ uri: string; type?: string }>,
+  ): Promise<PageResult> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
 
     const formData = new FormData();
     formData.append('caption', editedSocial);
     formData.append('job_id', jobId);
 
-    // Send ALL photos to Instagram (no destination filtering)
-    payload.photos.forEach((photo, i) => {
+    igPhotos.forEach((photo, i) => {
       formData.append(`photo_${i}`, {
         uri: photo.uri,
         type: 'image/jpeg',
@@ -412,6 +418,9 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     const hasInstagram = connectedChannels.some(ch => ch.platform === 'instagram');
     const channelList  = connectedChannels.map(ch => ch.accountName).join(', ');
 
+    // Photos destined only for Instagram
+    const igPhotos = payload.photos.filter(p => (p.destination ?? 'other_platforms') === 'instagram_only');
+
     Alert.alert(
       'Publish?',
       `Post to: ${channelList}`,
@@ -420,8 +429,21 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           setPublishState({ status: 'publishing' });
           try {
             const tasks: Promise<PageResult[]>[] = [];
-            if (hasFacebook)  tasks.push(runFacebookPublish(token).then(results => results));
-            if (hasInstagram) tasks.push(runInstagramPublish(token).then(r => [r]));
+            if (hasFacebook) tasks.push(runFacebookPublish(token, hasInstagram));
+            if (hasInstagram) {
+              if (igPhotos.length > 0) {
+                tasks.push(runInstagramPublish(token, igPhotos).then(r => [r]));
+              } else {
+                // No Instagram-tagged photos — skip silently, record for confirmation screen
+                tasks.push(Promise.resolve([{
+                  pageId: 'ig',
+                  pageName: 'Instagram',
+                  platform: 'instagram',
+                  ok: true,
+                  skipped: true,
+                }]));
+              }
+            }
 
             const settled = await Promise.allSettled(tasks);
             const allResults: PageResult[] = [];
@@ -429,7 +451,6 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
               if (s.status === 'fulfilled') {
                 allResults.push(...s.value);
               } else {
-                // Network-level error
                 allResults.push({ pageId: 'unknown', pageName: 'Unknown', platform: 'unknown', ok: false, error: s.reason?.message ?? 'Publishing failed' });
               }
             }
@@ -452,7 +473,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
 
   // Full-screen confirmation after a successful publish
   if (publishState.status === 'success') {
-    const anyOk = publishState.results.some(r => r.ok);
+    const anyOk = publishState.results.some(r => !r.skipped && r.ok);
     return (
       <View style={styles.container}>
         <ScrollView
@@ -471,26 +492,34 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           <View style={styles.confirmedButtons}>
             {publishState.results.map((r, i) => {
               const cfg = PLATFORM_CFG[r.platform] ?? PLATFORM_CFG.default;
-              const canOpen = r.ok && !!r.postUrl;
+              const canOpen = !r.skipped && r.ok && !!r.postUrl;
+              const btnBg = r.skipped ? colors.surface : r.ok ? cfg.bg : '#2A3347';
+              const iconColor = r.skipped ? colors.textMuted : r.ok ? cfg.iconColor : colors.textMuted;
               return (
                 <TouchableOpacity
                   key={i}
                   style={[
                     styles.viewOnBtn,
-                    { backgroundColor: r.ok ? cfg.bg : '#2A3347' },
-                    !canOpen && styles.viewOnBtnDim,
+                    { backgroundColor: btnBg },
+                    r.skipped && styles.viewOnBtnSkipped,
+                    !canOpen && !r.skipped && styles.viewOnBtnDim,
                   ]}
                   onPress={() => canOpen && Linking.openURL(r.postUrl!)}
                   activeOpacity={canOpen ? 0.8 : 1}
                 >
-                  <Ionicons name={cfg.icon as any} size={20} color={r.ok ? cfg.iconColor : colors.textMuted} />
+                  <Ionicons name={cfg.icon as any} size={20} color={iconColor} />
                   <View style={styles.viewOnBtnText}>
-                    <Text style={[styles.viewOnLabel, !r.ok && styles.viewOnLabelDim]}>
-                      {r.ok
-                        ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
-                        : `Failed · ${r.pageName}`}
+                    <Text style={[styles.viewOnLabel, (r.skipped || !r.ok) && styles.viewOnLabelDim]}>
+                      {r.skipped
+                        ? `Skipped · ${r.pageName}`
+                        : r.ok
+                          ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
+                          : `Failed · ${r.pageName}`}
                     </Text>
-                    {!r.ok && r.error && (
+                    {r.skipped && (
+                      <Text style={styles.viewOnError}>No Instagram photos selected</Text>
+                    )}
+                    {!r.skipped && !r.ok && r.error && (
                       <Text style={styles.viewOnError} numberOfLines={1}>{r.error}</Text>
                     )}
                   </View>
@@ -1192,6 +1221,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   viewOnBtnDim: { opacity: 0.55 },
+  viewOnBtnSkipped: { borderWidth: 1, borderColor: colors.border },
   viewOnBtnText: { flex: 1 },
   viewOnLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#fff' },
   viewOnLabelDim: { color: colors.textMuted },

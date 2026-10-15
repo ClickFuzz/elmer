@@ -104,7 +104,6 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   }, [photos, audioUri]);
 
   const clearAll = () => {
-    setPhotos(prev => prev.map(p => ({ ...p, destination: 'all' as const })));
     setPhotos([]);
     setAudioUri(null);
     if (playerRef.current) {
@@ -179,19 +178,19 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
 
   const changeClassification = (index: number) => {
     const current = photos[index].classification;
-    const currentDest = photos[index].destination ?? 'all';
+    const currentDest = photos[index].destination ?? 'other_platforms';
 
     const showDestinationPicker = () => {
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
             title: 'Photo Destination',
-            options: ['All Platforms', 'Instagram Only', 'Cancel'],
+            options: ['Other Platforms', 'Instagram Only', 'Cancel'],
             cancelButtonIndex: 2,
           },
           (buttonIndex) => {
             if (buttonIndex === 0) {
-              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'all' as const } : p));
+              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'other_platforms' as const } : p));
             } else if (buttonIndex === 1) {
               setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'instagram_only' as const } : p));
             }
@@ -200,8 +199,8 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
       } else {
         Alert.alert('Photo Destination', undefined, [
           {
-            text: currentDest === 'all' ? 'All Platforms ✓' : 'All Platforms',
-            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'all' as const } : p)),
+            text: currentDest === 'other_platforms' ? 'Other Platforms ✓' : 'Other Platforms',
+            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'other_platforms' as const } : p)),
           },
           {
             text: currentDest === 'instagram_only' ? 'Instagram Only ✓' : 'Instagram Only',
