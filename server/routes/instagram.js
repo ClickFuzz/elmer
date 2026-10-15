@@ -149,7 +149,6 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       }
 
       const shortToken = tokenData.access_token;
-      const igUserId   = String(tokenData.user_id);
 
       // Step 2 — Exchange for long-lived token (~60 days)
       const longParams = new URLSearchParams({
@@ -168,17 +167,24 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       const longToken  = longData.access_token;
       const expiresMs  = (longData.expires_in ?? 5184000) * 1000;
 
-      // Step 3 — Fetch profile
+      // Step 3 — Fetch profile via /me (Instagram Login for Business requires /me,
+      // not /{user_id} — the numeric ID from the token exchange is not a valid node path)
       const profileParams = new URLSearchParams({
         fields:       'id,name,username,account_type',
         access_token: longToken,
       });
-      const profileData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}?${profileParams}`)
-        .then(r => r.json());
+      const profileUrl  = `${IG_GRAPH_BASE}/me?${profileParams}`;
+      const profileResp = await igFetch(profileUrl);
+      const profileData = await profileResp.json();
 
       if (profileData.error) {
+        console.error('[instagram] profile fetch failed — status:', profileResp.status,
+          '| code:', profileData.error.code, '| type:', profileData.error.type,
+          '| message:', profileData.error.message);
         throw new Error(`Profile: ${profileData.error.message}`);
       }
+
+      const igUserId = String(profileData.id);
 
       const accountType = profileData.account_type;
       if (accountType !== 'BUSINESS' && accountType !== 'CREATOR') {

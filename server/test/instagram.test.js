@@ -258,6 +258,30 @@ describe('GET /instagram/callback', () => {
     assert.strictEqual(rows[0].selected, true, 'new account should be selected=true');
   });
 
+  it('fetches profile via graph.instagram.com/me, not via numeric user ID', async () => {
+    await setupFreshTestDb();
+
+    const calledUrls = [];
+    const igFetch = async (url, opts) => {
+      calledUrls.push(typeof url === 'string' ? url.split('?')[0] : String(url));
+      if (calledUrls.length === 1) return { ok: true, json: async () => ({ access_token: 'short', user_id: 99999 }) };
+      if (calledUrls.length === 2) return { ok: true, json: async () => ({ access_token: 'long', expires_in: 5184000 }) };
+      return { ok: true, status: 200, json: async () => ({ id: '99999', name: 'Biz', username: 'biz', account_type: 'BUSINESS' }) };
+    };
+
+    const { createInstagramRouter } = require('../routes/instagram');
+    const app = createApp({ instagramRouter: createInstagramRouter({ igFetch }) });
+    const { token } = await registerAndLogin(app, 'me-test@example.com');
+    const state = await createIgState(app, token);
+
+    await request(app).get('/instagram/callback').query({ code: 'code_me', state });
+
+    const profileUrl = calledUrls[2];
+    assert.ok(profileUrl, 'profile request should be made');
+    assert.ok(profileUrl.endsWith('/me'), `profile URL must end with /me, got: ${profileUrl}`);
+    assert.ok(!profileUrl.includes('/99999'), `profile URL must not contain numeric user ID, got: ${profileUrl}`);
+  });
+
   it('redirects with personal_account_not_supported for personal accounts', async () => {
     await setupFreshTestDb();
 
