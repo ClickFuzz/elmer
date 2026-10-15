@@ -41,7 +41,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
   // ── POST /instagram/connect-url ─────────────────────────────────────────────
   router.post('/connect-url', requireAuth, async (req, res, next) => {
     try {
-      const appId       = process.env.FACEBOOK_APP_ID        ?? '';
+      const appId       = process.env.INSTAGRAM_APP_ID       ?? '';
       const redirectUri = process.env.INSTAGRAM_REDIRECT_URI ?? '';
 
       if (!appId || !redirectUri) {
@@ -73,8 +73,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
   // ── GET /instagram/callback ─────────────────────────────────────────────────
   router.get('/callback', async (req, res) => {
-    const appId        = process.env.FACEBOOK_APP_ID             ?? '';
-    const appSecret    = process.env.FACEBOOK_APP_SECRET         ?? '';
+    const appId        = process.env.INSTAGRAM_APP_ID             ?? '';
+    const appSecret    = process.env.INSTAGRAM_APP_SECRET        ?? '';
     const redirectUri  = process.env.INSTAGRAM_REDIRECT_URI      ?? '';
     const returnScheme = process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer';
     const returnBase   = `${returnScheme}://oauth/callback`;
@@ -180,7 +180,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         throw new Error(`Profile: ${profileData.error.message}`);
       }
 
-      if (profileData.account_type === 'PERSONAL') {
+      const accountType = profileData.account_type;
+      if (accountType !== 'BUSINESS' && accountType !== 'CREATOR') {
         return res.redirect(`${returnBase}?platform=instagram&error=personal_account_not_supported`);
       }
 

@@ -3,8 +3,8 @@
 process.env.DISABLE_AUTH              = 'false';
 process.env.DISABLE_RATE_LIMIT        = 'true';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
-process.env.FACEBOOK_APP_ID           = 'test_app_id';
-process.env.FACEBOOK_APP_SECRET       = 'test_app_secret';
+process.env.INSTAGRAM_APP_ID          = 'test_ig_app_id';
+process.env.INSTAGRAM_APP_SECRET      = 'test_ig_app_secret';
 process.env.INSTAGRAM_REDIRECT_URI    = 'https://test.example.com/instagram/callback';
 process.env.SERVER_URL                = 'https://test.example.com';
 
@@ -124,17 +124,17 @@ describe('POST /instagram/connect-url', () => {
     process.env.INSTAGRAM_REDIRECT_URI = savedUri;
   });
 
-  it('returns 503 when FACEBOOK_APP_ID is not set', async () => {
-    const savedId  = process.env.FACEBOOK_APP_ID;
+  it('returns 503 when INSTAGRAM_APP_ID is not set', async () => {
+    const savedId  = process.env.INSTAGRAM_APP_ID;
     const savedUri = process.env.INSTAGRAM_REDIRECT_URI;
-    delete process.env.FACEBOOK_APP_ID;
+    delete process.env.INSTAGRAM_APP_ID;
 
     const res = await request(app)
       .post('/instagram/connect-url')
       .set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 503);
 
-    process.env.FACEBOOK_APP_ID        = savedId;
+    process.env.INSTAGRAM_APP_ID       = savedId;
     process.env.INSTAGRAM_REDIRECT_URI = savedUri;
   });
 
@@ -275,6 +275,57 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ code: 'code_xyz', state });
+
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.location.includes('error=personal_account_not_supported'));
+  });
+
+  it('accepts Creator accounts', async () => {
+    await setupFreshTestDb();
+
+    const mockIgFetch = makeIgMock([
+      { data: { access_token: 'short_token', user_id: 222 } },
+      { data: { access_token: 'long_token', expires_in: 5184000 } },
+      { data: { id: '222', name: 'Test Creator', username: 'testcreator', account_type: 'CREATOR' } },
+    ]);
+
+    const { createInstagramRouter } = require('../routes/instagram');
+    const app = createApp({ instagramRouter: createInstagramRouter({ igFetch: mockIgFetch }) });
+    const { token, userId } = await registerAndLogin(app);
+    const state = await createIgState(app, token);
+
+    const res = await request(app)
+      .get('/instagram/callback')
+      .query({ code: 'creator_code', state });
+
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.location.includes('success=true'), 'Creator account should be accepted');
+
+    const { rows } = await getPool().query(
+      `SELECT account_name FROM connected_platforms WHERE user_id = $1 AND platform = 'instagram'`,
+      [userId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].account_name, 'Test Creator');
+  });
+
+  it('redirects with personal_account_not_supported for unknown account types', async () => {
+    await setupFreshTestDb();
+
+    const mockIgFetch = makeIgMock([
+      { data: { access_token: 'short_token', user_id: 333 } },
+      { data: { access_token: 'long_token', expires_in: 5184000 } },
+      { data: { id: '333', name: 'Unknown Type', username: 'unknown' } },
+    ]);
+
+    const { createInstagramRouter } = require('../routes/instagram');
+    const app = createApp({ instagramRouter: createInstagramRouter({ igFetch: mockIgFetch }) });
+    const { token } = await registerAndLogin(app);
+    const state = await createIgState(app, token);
+
+    const res = await request(app)
+      .get('/instagram/callback')
+      .query({ code: 'code_unknown', state });
 
     assert.strictEqual(res.status, 302);
     assert.ok(res.headers.location.includes('error=personal_account_not_supported'));

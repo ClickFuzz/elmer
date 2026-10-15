@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -398,9 +399,19 @@ export default function SettingsScreen({ onBack }: Props) {
         if (error) {
           if (error === 'personal_account_not_supported') {
             Alert.alert(
-              'Business Account Required',
-              'Instagram publishing requires a Business or Creator account. Personal Instagram accounts cannot be connected.\n\nSwitch your account to Business or Creator in the Instagram app, then try connecting again.',
-              [{ text: 'OK' }]
+              'Professional Instagram Account Required',
+              'Instagram requires a Business or Creator account to publish through Elmer. Switching is free, and you can keep your existing followers and posts.',
+              [
+                {
+                  text: 'Try Again',
+                  onPress: () => handleConnectInstagram(),
+                },
+                {
+                  text: 'How to Switch',
+                  onPress: () => Linking.openURL('https://help.instagram.com/502981923235522'),
+                },
+                { text: 'Cancel', style: 'cancel' },
+              ]
             );
             return;
           }
