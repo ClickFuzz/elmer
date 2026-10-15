@@ -228,6 +228,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
       await recorder.prepareToRecordAsync();
       recorder.record();
       hasRecordedThisSession.current = true;
+      lastProcessedRecorderUri.current = null; // reset so re-record always captures the new URI
       setAudioUri(null);
     } catch (err) {
       console.error('Failed to start recording', err);
