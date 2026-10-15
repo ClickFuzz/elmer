@@ -11,10 +11,9 @@ import {
 import type { AudioPlayer } from 'expo-audio';
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  ActionSheetIOS,
   Alert,
   Image,
-  Platform,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,7 +23,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
-import { savePendingHomeState, getInstagramConnected } from '../storage/database';
+import { savePendingHomeState } from '../storage/database';
 import type { GeneratePayload, HomeState, PhotoClassification, PhotoItem } from '../App';
 
 const MAX_PHOTOS = 5;
@@ -62,8 +61,12 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   // useState initializer runs on each mount — restores state after back navigation
   const [photos, setPhotos] = useState<PhotoItem[]>(initialState?.photos ?? []);
   const [audioUri, setAudioUri] = useState<string | null>(initialState?.audioUri ?? null);
-  const [igConnected, setIgConnected] = useState(false);
   const [isPlayingBack, setIsPlayingBack] = useState(false);
+  const [photoModal, setPhotoModal] = useState<{
+    index: number;
+    classification: PhotoClassification;
+    instagramOnly: boolean;
+  } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -75,7 +78,6 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   const lastProcessedRecorderUri = useRef<string | null>(null);
 
   useEffect(() => {
-    getInstagramConnected().then(setIgConnected).catch(() => {});
     return () => {
       playerRef.current?.remove();
     };
@@ -176,74 +178,27 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
     setPhotos(prev => prev.filter((_, i) => i !== index));
   };
 
-  const changeClassification = (index: number) => {
-    const current = photos[index].classification;
-    const currentDest = photos[index].destination ?? 'other_platforms';
+  const openPhotoModal = (index: number) => {
+    const photo = photos[index];
+    setPhotoModal({
+      index,
+      classification: photo.classification,
+      instagramOnly: (photo.destination ?? 'other_platforms') === 'instagram_only',
+    });
+  };
 
-    const showDestinationPicker = () => {
-      if (Platform.OS === 'ios') {
-        ActionSheetIOS.showActionSheetWithOptions(
-          {
-            title: 'Photo Destination',
-            options: ['Other Platforms', 'Instagram Only', 'Cancel'],
-            cancelButtonIndex: 2,
-          },
-          (buttonIndex) => {
-            if (buttonIndex === 0) {
-              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'other_platforms' as const } : p));
-            } else if (buttonIndex === 1) {
-              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'instagram_only' as const } : p));
-            }
+  const applyPhotoModal = () => {
+    if (!photoModal) return;
+    setPhotos(prev => prev.map((p, i) =>
+      i === photoModal.index
+        ? {
+            ...p,
+            classification: photoModal.classification,
+            destination: photoModal.instagramOnly ? 'instagram_only' as const : 'other_platforms' as const,
           }
-        );
-      } else {
-        Alert.alert('Photo Destination', undefined, [
-          {
-            text: currentDest === 'other_platforms' ? 'Other Platforms ✓' : 'Other Platforms',
-            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'other_platforms' as const } : p)),
-          },
-          {
-            text: currentDest === 'instagram_only' ? 'Instagram Only ✓' : 'Instagram Only',
-            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'instagram_only' as const } : p)),
-          },
-          { text: 'Cancel', style: 'cancel' },
-        ]);
-      }
-    };
-
-    const applyClassification = (c: PhotoClassification) => {
-      setPhotos(prev => prev.map((p, i) => (i === index ? { ...p, classification: c } : p)));
-      if (igConnected) {
-        // Small delay lets the first sheet close before showing the second on iOS
-        setTimeout(showDestinationPicker, Platform.OS === 'ios' ? 400 : 0);
-      }
-    };
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title: 'Photo Type',
-          options: [...CLASSIFICATIONS, 'Cancel'],
-          cancelButtonIndex: CLASSIFICATIONS.length,
-          destructiveButtonIndex: undefined,
-          message: 'How should this photo be labelled in your post?',
-        },
-        (buttonIndex) => {
-          if (buttonIndex < CLASSIFICATIONS.length) {
-            applyClassification(CLASSIFICATIONS[buttonIndex]);
-          }
-        }
-      );
-    } else {
-      Alert.alert(
-        'Photo Type',
-        'How should this photo be labelled?',
-        CLASSIFICATIONS.map(c => ({
-          text: c === current ? `${c} ✓` : c,
-          onPress: () => applyClassification(c),
-        })).concat([{ text: 'Cancel', onPress: () => {} }])
-      );
-    }
+        : p
+    ));
+    setPhotoModal(null);
   };
 
   // ─── Audio ───────────────────────────────────────────────────────────────
@@ -416,7 +371,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
               <View key={index} style={styles.photoItem}>
                 <TouchableOpacity
                   style={styles.photoThumb}
-                  onPress={() => changeClassification(index)}
+                  onPress={() => openPhotoModal(index)}
                   activeOpacity={0.85}
                 >
                   <Image source={{ uri: photo.uri }} style={styles.photoImage} />
@@ -492,6 +447,62 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
           )}
         </View>
       </ScrollView>
+
+      {/* Photo label modal */}
+      <Modal
+        visible={photoModal !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPhotoModal(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+
+            <Text style={styles.modalSectionTitle}>Type</Text>
+            {CLASSIFICATIONS.map(c => (
+              <TouchableOpacity
+                key={c}
+                style={styles.modalRow}
+                onPress={() => setPhotoModal(prev => prev ? { ...prev, classification: c } : prev)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.radio, photoModal?.classification === c && styles.radioSelected]}>
+                  {photoModal?.classification === c && <View style={styles.radioDot} />}
+                </View>
+                <Text style={[styles.modalRowLabel, photoModal?.classification === c && styles.modalRowLabelSelected]}>
+                  {c}
+                </Text>
+              </TouchableOpacity>
+            ))}
+
+            <View style={styles.modalDivider} />
+
+            <Text style={styles.modalSectionTitle}>Destination</Text>
+            <TouchableOpacity
+              style={styles.modalRow}
+              onPress={() => setPhotoModal(prev => prev ? { ...prev, instagramOnly: !prev.instagramOnly } : prev)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.radio, photoModal?.instagramOnly && styles.radioSelected]}>
+                {photoModal?.instagramOnly && <View style={styles.radioDot} />}
+              </View>
+              <Text style={[styles.modalRowLabel, photoModal?.instagramOnly && styles.modalRowLabelSelected]}>
+                Instagram Only
+              </Text>
+            </TouchableOpacity>
+            <Text style={styles.modalDestHint}>
+              {photoModal?.instagramOnly
+                ? 'This photo will only be posted to Instagram.'
+                : 'This photo will be posted everywhere except Instagram.'}
+            </Text>
+
+            <TouchableOpacity style={styles.modalDoneBtn} onPress={applyPhotoModal} activeOpacity={0.8}>
+              <Text style={styles.modalDoneBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Generate Preview */}
       <View style={styles.footer}>
@@ -651,4 +662,93 @@ const styles = StyleSheet.create({
   generateBtnTextDisabled: { color: colors.textMuted },
   sectionCountWrap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   clearAllBtn: { fontSize: 12, fontFamily: 'Inter_500Medium', color: colors.textMuted },
+
+  // Photo label modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 40,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: colors.border,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 24,
+  },
+  modalSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 11,
+    gap: 14,
+  },
+  modalRowLabel: {
+    fontSize: 16,
+    fontFamily: 'Inter_500Medium',
+    color: colors.textSecondary,
+  },
+  modalRowLabelSelected: {
+    color: colors.textPrimary,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  radio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioSelected: { borderColor: colors.cyan },
+  radioDot: {
+    width: 11,
+    height: 11,
+    borderRadius: 5.5,
+    backgroundColor: colors.cyan,
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: 16,
+  },
+  modalDestHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    lineHeight: 17,
+    paddingLeft: 36,
+    marginTop: -4,
+    marginBottom: 4,
+  },
+  modalDoneBtn: {
+    backgroundColor: colors.cyan,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  modalDoneBtnText: {
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.bg,
+  },
 });
