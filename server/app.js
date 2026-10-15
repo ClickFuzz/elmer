@@ -194,11 +194,12 @@ function createApp({ facebookRouter } = {}) {
       else if (typeof raw === 'string') gpsCoords = JSON.parse(raw);
     } catch { /* ignore */ }
 
-    const businessName        = req.body.businessName        || '';
-    const businessWebsite     = req.body.businessWebsite     || '';
-    const businessCategory    = req.body.businessCategory    || '';
-    const businessDescription = req.body.businessDescription || '';
-    const writingStyle        = req.body.writingStyle        || 'Casual / Professional';
+    const businessName               = req.body.businessName               || '';
+    const businessWebsite            = req.body.businessWebsite            || '';
+    const businessCategory           = req.body.businessCategory           || '';
+    const businessDescription        = req.body.businessDescription        || '';
+    const writingStyle               = req.body.writingStyle               || 'Casual / Professional';
+    const customWritingInstructions  = req.body.customWritingInstructions  || '';
     let businessServices = [];
     let serviceAreasList = [];
     try {
@@ -300,6 +301,17 @@ Rules:
     const tone         = writingToneFor(writingStyle);
     const neverInvent  = 'Never invent services, job details, or claim this job occurred in a service area not confirmed by the description.';
 
+    const hasBeforePhoto  = classifications.includes('Before');
+    const hasAfterPhoto   = classifications.includes('After');
+    const hasBeforeAfter  = hasBeforePhoto && hasAfterPhoto;
+    const beforeAfterRule = hasBeforeAfter
+      ? '- Before and After photos are included — you may reference the transformation if it adds value'
+      : '- Do NOT mention before/after comparisons, transformations, or any before/after narrative — no Before/After photos were provided';
+
+    const customStyleCtx = customWritingInstructions.trim()
+      ? `\nCustom style instructions from the business owner (follow these precisely):\n${customWritingInstructions.trim()}`
+      : '';
+
     const bizLines = [
       businessName        && `Business: ${businessName}`,
       businessCategory    && `Industry: ${businessCategory}`,
@@ -316,9 +328,10 @@ ${photosCtx}Key terms: ${keyTermsStr}
 ${bizLines ? bizLines + '\n' : ''}${serviceAreaCtx ? serviceAreaCtx + '\n' : ''}
 Requirements:
 - 150–300 words
-- Writing tone: ${tone}
+- Writing tone: ${tone}${customStyleCtx}
 - Naturally mention the city/area
 - Describe what was done and the customer benefit
+- ${beforeAfterRule}
 - Clear call to action${businessName ? ` — invite readers to contact ${businessName}` : ''}${businessWebsite ? ` and visit ${businessWebsite} (bare URL, plain text, no markdown)` : ''}
 - Plain text only — no markdown, no brackets, no asterisks
 - 2–4 hashtags at the end
@@ -334,8 +347,8 @@ ${photosCtx}Key terms: ${keyTermsStr}
 ${businessName ? `Business: ${businessName}\n` : ''}
 Requirements:
 - 100–200 words
-- Writing tone: ${tone}
-- If before/after photos are indicated, use that as the narrative frame (never assume before/after from upload order alone)
+- Writing tone: ${tone}${customStyleCtx}
+- ${beforeAfterRule}
 - Emotionally engaging — what did this mean for the customer?
 - Call to action${businessWebsite ? ` — include the bare URL ${businessWebsite} (plain text, no markdown)` : ''}
 - 3–5 hashtags at the end
@@ -353,7 +366,8 @@ ${bizLines ? bizLines + '\n' : ''}${serviceAreaCtx ? serviceAreaCtx + '\n' : ''}
 Requirements:
 - 600–900 words minimum
 - Title (## heading) + 3–4 subheadings (### headings)
-- Writing tone: ${tone}
+- Writing tone: ${tone}${customStyleCtx}
+- ${beforeAfterRule}
 - Educate readers about why this type of work matters
 - Natural keyword usage — never keyword-stuff
 - Ends with a contact/CTA paragraph${businessName ? ` mentioning ${businessName}` : ''} — do not include any website URL in the article

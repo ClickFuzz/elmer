@@ -73,6 +73,7 @@ export default function SettingsScreen({ onBack }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
   const [saved, setSaved] = useState(false);
+  const [savedStyle, setSavedStyle] = useState(false);
   const [bizExpanded, setBizExpanded] = useState(false);
 
   // ── Auth state ─────────────────────────────────────────────────────────────
@@ -123,6 +124,16 @@ export default function SettingsScreen({ onBack }: Props) {
     Keyboard.dismiss();
     saveBusinessProfile(profile)
       .then(() => { setSaved(true); setTimeout(() => setSaved(false), 2000); })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        Alert.alert('Save failed', msg);
+      });
+  };
+
+  const handleSaveStyle = () => {
+    Keyboard.dismiss();
+    saveBusinessProfile(profile)
+      .then(() => { setSavedStyle(true); setTimeout(() => setSavedStyle(false), 2000); })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         Alert.alert('Save failed', msg);
@@ -414,14 +425,6 @@ export default function SettingsScreen({ onBack }: Props) {
               <Text style={styles.fieldLabelAbove}>Business Description</Text>
               <TextInput style={styles.descInput} value={profile.description} onChangeText={description => update({ description })} placeholder="Describe your company, specialties, or what sets you apart…" placeholderTextColor={colors.textMuted} multiline textAlignVertical="top" autoCorrect />
             </View>
-            <View style={styles.divider} />
-            <TouchableOpacity style={styles.fieldRow} onPress={() => showPicker('Writing Style', WRITING_STYLES, writingStyle => update({ writingStyle }))} activeOpacity={0.7}>
-              <Text style={styles.fieldLabel}>Writing Style</Text>
-              <View style={styles.selectorRight}>
-                <Text style={styles.fieldInput}>{profile.writingStyle || 'Casual / Professional'}</Text>
-                <Text style={styles.chevron}>›</Text>
-              </View>
-            </TouchableOpacity>
           </>}
         </View>
 
@@ -433,6 +436,42 @@ export default function SettingsScreen({ onBack }: Props) {
             Business details are stored on-device and used to write more relevant posts.
           </Text>
         </>}
+
+        {/* ── Writing Style ── */}
+        <Text style={styles.groupLabel}>Writing Style</Text>
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.fieldRow}
+            onPress={() => showPicker('Writing Style', WRITING_STYLES, writingStyle => update({ writingStyle }))}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.fieldLabel}>Tone</Text>
+            <View style={styles.selectorRight}>
+              <Text style={styles.fieldInput}>{profile.writingStyle || 'Casual / Professional'}</Text>
+              <Text style={styles.chevron}>›</Text>
+            </View>
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <View style={styles.fieldBlock}>
+            <Text style={styles.fieldLabelAbove}>Custom Instructions</Text>
+            <TextInput
+              style={styles.descInput}
+              value={profile.customWritingInstructions}
+              onChangeText={customWritingInstructions => update({ customWritingInstructions })}
+              placeholder={"No emojis. Avoid exclamation points. Write in a grounded, confident tone — like a tradesperson who takes pride in the work, not a marketer. Here's an example of how I write: \"Came in, assessed the situation, did what needed doing. Customer was happy. That's the job.\""}
+              placeholderTextColor={colors.textMuted}
+              multiline
+              textAlignVertical="top"
+              autoCorrect
+            />
+          </View>
+        </View>
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSaveStyle} activeOpacity={0.8}>
+          <Text style={styles.saveBtnText}>{savedStyle ? 'Saved!' : 'Save Writing Style'}</Text>
+        </TouchableOpacity>
+        <Text style={styles.groupNote}>
+          These instructions are sent to the AI every time you generate a post. Be specific — the more detail you provide, the better the output.
+        </Text>
 
         {/* ── Elmer Account ── */}
         <Text style={styles.groupLabel}>Elmer Account</Text>
@@ -601,32 +640,30 @@ export default function SettingsScreen({ onBack }: Props) {
                       <Text style={styles.cancelPagesBtnText}>Cancel</Text>
                     </TouchableOpacity>
                   </View>
+                  <View style={styles.fbActionsRow}>
+                    <TouchableOpacity
+                      style={styles.fbReconnectBtn}
+                      onPress={handleConnectFacebook}
+                      disabled={fbConnecting}
+                      activeOpacity={0.8}
+                    >
+                      {fbConnecting
+                        ? <ActivityIndicator color={colors.cyan} size="small" />
+                        : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.fbDisconnectBtn}
+                      onPress={handleDisconnectFacebook}
+                      disabled={fbDisconnecting}
+                      activeOpacity={0.8}
+                    >
+                      {fbDisconnecting
+                        ? <ActivityIndicator color={colors.textMuted} size="small" />
+                        : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
-
-              {/* Reconnect / Disconnect */}
-              <View style={styles.fbActionsRow}>
-                <TouchableOpacity
-                  style={styles.fbReconnectBtn}
-                  onPress={handleConnectFacebook}
-                  disabled={fbConnecting}
-                  activeOpacity={0.8}
-                >
-                  {fbConnecting
-                    ? <ActivityIndicator color={colors.cyan} size="small" />
-                    : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.fbDisconnectBtn}
-                  onPress={handleDisconnectFacebook}
-                  disabled={fbDisconnecting}
-                  activeOpacity={0.8}
-                >
-                  {fbDisconnecting
-                    ? <ActivityIndicator color={colors.textMuted} size="small" />
-                    : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
-                </TouchableOpacity>
-              </View>
             </View>
           ) : (
             <View style={styles.row}>
@@ -829,7 +866,7 @@ const styles = StyleSheet.create({
   cancelPagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 
   // Facebook action buttons
-  fbActionsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 14 },
+  fbActionsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 14, paddingTop: 4 },
   fbReconnectBtn: { flex: 1, borderWidth: 1, borderColor: colors.cyan, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
   fbReconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
   fbDisconnectBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },

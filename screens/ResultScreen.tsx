@@ -103,10 +103,11 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
 
     // Load channels — prefer server-side (real OAuth connections) when signed in
     let channels: ConnectedChannel[] = [];
+    let sessionToken: string | null = null;
     try {
-      const token = await getSessionToken();
-      if (token) {
-        channels = await fetchServerConnectedChannels(token, API_URL);
+      sessionToken = await getSessionToken();
+      if (sessionToken) {
+        channels = await fetchServerConnectedChannels(sessionToken, API_URL);
       }
       if (channels.length === 0) channels = await getConnectedChannels();
       setConnectedChannels(channels);
@@ -131,6 +132,10 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
 
         let data: any;
 
+        const authHeader: Record<string, string> = sessionToken
+          ? { Authorization: `Bearer ${sessionToken}` }
+          : {};
+
         if (payload.audioUri) {
           const result = await raceTimeout(FileSystem.uploadAsync(
             `${API_URL}/api/generate`,
@@ -140,6 +145,7 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
               uploadType: FileSystem.FileSystemUploadType.MULTIPART,
               fieldName: 'audio',
               mimeType: 'audio/m4a',
+              headers: authHeader,
               parameters: {
                 photoCount: String(payload.photos.length),
                 classifications: JSON.stringify(classifications),
@@ -149,6 +155,7 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
                 businessCategory: effectiveCategory,
                 businessDescription: profile.description,
                 writingStyle: profile.writingStyle,
+                customWritingInstructions: profile.customWritingInstructions,
                 businessServices: JSON.stringify(profile.services),
                 serviceAreas: JSON.stringify(profile.serviceAreas),
                 platforms: JSON.stringify(platforms),
@@ -162,7 +169,7 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
         } else {
           const response = await raceTimeout(fetch(`${API_URL}/api/generate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...authHeader },
             body: JSON.stringify({
               photoCount: payload.photos.length,
               classifications,
@@ -172,6 +179,7 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
               businessCategory: effectiveCategory,
               businessDescription: profile.description,
               writingStyle: profile.writingStyle,
+              customWritingInstructions: profile.customWritingInstructions,
               businessServices: profile.services,
               serviceAreas: profile.serviceAreas,
               platforms,

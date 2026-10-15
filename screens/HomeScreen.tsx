@@ -280,6 +280,23 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
       }
     }
 
+    const hasBefore = photos.some(p => p.classification === 'Before');
+    const hasAfter  = photos.some(p => p.classification === 'After');
+    if ((hasBefore && !hasAfter) || (!hasBefore && hasAfter)) {
+      const present = hasBefore ? 'Before' : 'After';
+      const missing = hasBefore ? 'After' : 'Before';
+      const capturedUri = finalAudioUri;
+      Alert.alert(
+        `No "${missing}" photo`,
+        `You tagged a photo as "${present}" but didn't add a matching "${missing}" photo. Go back to fix the tags, or continue — the photos will be used as general photos.`,
+        [
+          { text: 'Go Back', style: 'cancel' },
+          { text: 'Continue', onPress: () => onGenerate({ photos, audioUri: capturedUri }) },
+        ]
+      );
+      return;
+    }
+
     onGenerate({ photos, audioUri: finalAudioUri });
   };
 
