@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
 import { GeneratePayload, PhotoClassification } from '../App';
 import {
@@ -70,6 +72,7 @@ const BADGE_COLORS: Record<PhotoClassification, string> = {
 type PageResult = {
   pageId: string;
   pageName: string;
+  platform: string;
   ok: boolean;
   postUrl?: string;
   error?: string;
@@ -333,7 +336,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
         return;
       }
 
-      setPublishState({ status: 'success', results: (data.results as PageResult[]) ?? [] });
+      const rawResults = (data.results as Omit<PageResult, 'platform'>[]) ?? [];
+      setPublishState({
+        status: 'success',
+        results: rawResults.map(r => ({ ...r, platform: 'facebook' })),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Publishing failed';
       setPublishState({ status: 'error', message: msg });
@@ -386,6 +393,66 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
 
   const hasConnections = connectedChannels.length > 0;
   const hasWordpress = connectedChannels.some(ch => ch.platform === 'wordpress');
+
+  // Full-screen confirmation after a successful publish
+  if (publishState.status === 'success') {
+    const anyOk = publishState.results.some(r => r.ok);
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.confirmedContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.confirmedEmoji}>{anyOk ? '🎉' : '⚠️'}</Text>
+          <Text style={styles.confirmedHeading}>
+            {anyOk ? 'Your post was published!' : 'Publishing finished'}
+          </Text>
+          <Text style={styles.confirmedSub}>
+            {anyOk ? "That was easy." : 'Some posts could not be published.'}
+          </Text>
+
+          <View style={styles.confirmedButtons}>
+            {publishState.results.map((r, i) => {
+              const cfg = PLATFORM_CFG[r.platform] ?? PLATFORM_CFG.default;
+              const canOpen = r.ok && !!r.postUrl;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[
+                    styles.viewOnBtn,
+                    { backgroundColor: r.ok ? cfg.bg : '#2A3347' },
+                    !canOpen && styles.viewOnBtnDim,
+                  ]}
+                  onPress={() => canOpen && Linking.openURL(r.postUrl!)}
+                  activeOpacity={canOpen ? 0.8 : 1}
+                >
+                  <Ionicons name={cfg.icon as any} size={20} color={r.ok ? cfg.iconColor : colors.textMuted} />
+                  <View style={styles.viewOnBtnText}>
+                    <Text style={[styles.viewOnLabel, !r.ok && styles.viewOnLabelDim]}>
+                      {r.ok
+                        ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
+                        : `Failed · ${r.pageName}`}
+                    </Text>
+                    {!r.ok && r.error && (
+                      <Text style={styles.viewOnError} numberOfLines={1}>{r.error}</Text>
+                    )}
+                  </View>
+                  {canOpen && (
+                    <Ionicons name="open-outline" size={14} color={cfg.iconColor} style={styles.viewOnExternal} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity style={styles.confirmedDoneBtn} onPress={onBack} activeOpacity={0.8}>
+            <Text style={styles.confirmedDoneBtnText}>Done</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -633,31 +700,6 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
               <Text style={styles.publishingText}>Publishing to Facebook…</Text>
             </View>
           )}
-          {publishState.status === 'success' && (
-            <View style={styles.publishSuccessBanner}>
-              {publishState.results.map((r, i) => (
-                <View key={i} style={[styles.publishResultRow, i > 0 && styles.publishResultBorder]}>
-                  <Text style={[styles.publishResultIcon, !r.ok && styles.publishResultIconError]}>
-                    {r.ok ? '✓' : '✗'}
-                  </Text>
-                  <View style={styles.publishResultInfo}>
-                    <Text style={[styles.publishResultName, !r.ok && styles.publishResultNameError]}>
-                      {r.pageName}
-                    </Text>
-                    {r.duplicate && (
-                      <Text style={styles.publishResultSub}>Already posted</Text>
-                    )}
-                    {!r.ok && r.error && (
-                      <Text style={styles.publishResultSubError}>{r.error}</Text>
-                    )}
-                    {r.ok && !r.duplicate && r.postUrl && (
-                      <Text style={styles.publishResultSub} numberOfLines={1}>{r.postUrl}</Text>
-                    )}
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
           {publishState.status === 'error' && (
             <View style={styles.publishErrorBanner}>
               <Text style={styles.publishErrorText}>{publishState.message}</Text>
@@ -689,6 +731,15 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     </View>
   );
 }
+
+const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string }> = {
+  facebook:  { bg: '#1877F2', iconColor: '#fff',          icon: 'logo-facebook' },
+  google:    { bg: colors.cyan, iconColor: colors.bg,     icon: 'logo-google' },
+  wordpress: { bg: '#3D454E', iconColor: '#A0AEC0',       icon: 'globe-outline' },
+  instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
+  twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
+  default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
+};
 
 function platformLabel(platform: ConnectedChannel['platform']): string {
   const labels: Record<ConnectedChannel['platform'], string> = {
@@ -1051,4 +1102,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   regenBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
+
+  // Published confirmation screen
+  confirmedContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    paddingVertical: 48,
+  },
+  confirmedEmoji: { fontSize: 56, marginBottom: 20 },
+  confirmedHeading: {
+    fontSize: 28,
+    fontFamily: 'DMSans_700Bold',
+    color: colors.textPrimary,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  confirmedSub: {
+    fontSize: 17,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  confirmedButtons: { width: '100%', gap: 12, marginBottom: 32 },
+  viewOnBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  viewOnBtnDim: { opacity: 0.55 },
+  viewOnBtnText: { flex: 1 },
+  viewOnLabel: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#fff' },
+  viewOnLabelDim: { color: colors.textMuted },
+  viewOnError: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  viewOnExternal: { opacity: 0.7 },
+  confirmedDoneBtn: {
+    width: '100%',
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  confirmedDoneBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
 });
