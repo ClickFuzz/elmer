@@ -22,6 +22,7 @@ import {
   ConnectedChannel,
   SeoMetadata,
   getSessionToken,
+  Job,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -39,6 +40,7 @@ function raceTimeout<T>(promise: Promise<T>): Promise<T> {
 
 type Props = {
   payload: GeneratePayload;
+  draftJob?: Job | null;
   onBack: () => void;
   onShowSettings: () => void;
 };
@@ -80,7 +82,7 @@ type PublishState =
   | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
-export default function ResultScreen({ payload, onBack, onShowSettings }: Props) {
+export default function ResultScreen({ payload, draftJob, onBack, onShowSettings }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedWordpress, setEditedWordpress] = useState('');
@@ -90,7 +92,7 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
   const [connectedChannels, setConnectedChannels] = useState<ConnectedChannel[]>([]);
   const [copiedItem, setCopiedItem] = useState<'social' | 'web' | null>(null);
   const [publishState, setPublishState] = useState<PublishState>({ status: 'idle' });
-  const [savedJobId, setSavedJobId] = useState<number | null>(null);
+  const [savedJobId, setSavedJobId] = useState<number | null>(draftJob?.id ?? null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isGenerating = useRef(false);
   // Google post is generated server-side and saved to DB but not surfaced in this UI
@@ -240,7 +242,38 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
   };
 
   useEffect(() => {
-    generate();
+    if (draftJob) {
+      // Load from saved draft — no API call needed
+      const social = draftJob.socialContent ?? '';
+      const web = draftJob.webContent ?? '';
+      const loc = draftJob.jobLocation ?? '';
+      setState({
+        status: 'success',
+        googlePost: draftJob.googlePost ?? '',
+        socialPost: social,
+        webContent: web,
+        transcription: '',
+        location: loc,
+        seoMetadata: null,
+        isMock: draftJob.isMock,
+      });
+      googlePostRef.current = draftJob.googlePost ?? '';
+      setEditedSocial(social);
+      setEditedWordpress(web);
+      setEditedLocation(loc);
+      // Still need to load channels for publishing
+      (async () => {
+        try {
+          const token = await getSessionToken();
+          let channels: ConnectedChannel[] = [];
+          if (token) channels = await fetchServerConnectedChannels(token, API_URL);
+          if (channels.length === 0) channels = await getConnectedChannels();
+          setConnectedChannels(channels);
+        } catch { /* ignore */ }
+      })();
+    } else {
+      generate();
+    }
     return () => {
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     };

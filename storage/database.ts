@@ -360,6 +360,34 @@ export type Job = {
   firstPhotoUri: string | null;
 };
 
+export async function deleteJob(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM jobs WHERE id = ?', [id]);
+}
+
+export type JobPhoto = {
+  localUri: string;
+  classification: string;
+  sortOrder: number;
+};
+
+export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    local_uri: string;
+    classification: string;
+    sort_order: number;
+  }>(
+    'SELECT local_uri, classification, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
+    [jobId]
+  );
+  return rows.map(r => ({
+    localUri: r.local_uri,
+    classification: r.classification,
+    sortOrder: r.sort_order,
+  }));
+}
+
 export async function getAllJobs(): Promise<Job[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{

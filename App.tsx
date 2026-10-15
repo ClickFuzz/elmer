@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, Job } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
@@ -55,6 +55,7 @@ function AppShell() {
   const [screen, setScreen] = useState<AppScreen>('home');
   const [payload, setPayload] = useState<GeneratePayload | null>(null);
   const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
+  const [draftJob, setDraftJob] = useState<Job | null>(null);
 
   // Restore persisted home state on first launch
   useEffect(() => {
@@ -67,7 +68,22 @@ function AppShell() {
     // Clear persisted draft — home starts fresh after generating
     savePendingHomeState(null);
     setSavedHomeState(null);
+    setDraftJob(null);
     setPayload(data);
+    setScreen('result');
+  };
+
+  const handlePublishDraft = async (job: Job) => {
+    const photos = await getJobPhotos(job.id);
+    const syntheticPayload: GeneratePayload = {
+      photos: photos.map(p => ({
+        uri: p.localUri,
+        classification: p.classification as PhotoClassification,
+      })),
+      audioUri: null,
+    };
+    setDraftJob(job);
+    setPayload(syntheticPayload);
     setScreen('result');
   };
 
@@ -84,7 +100,8 @@ function AppShell() {
         {screen === 'result' && payload && (
           <ResultScreen
             payload={payload}
-            onBack={() => setScreen('home')}
+            draftJob={draftJob}
+            onBack={() => { setDraftJob(null); setScreen(draftJob ? 'history' : 'home'); }}
             onShowSettings={() => setScreen('settings')}
           />
         )}
@@ -92,7 +109,10 @@ function AppShell() {
           <SettingsScreen onBack={() => setScreen('home')} />
         )}
         {screen === 'history' && (
-          <HistoryScreen onBack={() => setScreen('home')} />
+          <HistoryScreen
+            onBack={() => setScreen('home')}
+            onPublishDraft={handlePublishDraft}
+          />
         )}
       </View>
       <View style={[navStyles.bar, { paddingBottom: Math.max(bottomInset, 10) }]}>

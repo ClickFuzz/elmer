@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Clipboard,
+  Alert,
   Image,
   ScrollView,
   StyleSheet,
@@ -9,12 +9,16 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { colors } from '../constants/colors';
-import { getAllJobs, Job } from '../storage/database';
+import { getAllJobs, deleteJob, Job } from '../storage/database';
 
-type Props = { onBack: () => void };
+type Props = {
+  onBack: () => void;
+  onPublishDraft: (job: Job) => void;
+};
 
-export default function HistoryScreen({ onBack }: Props) {
+export default function HistoryScreen({ onBack, onPublishDraft }: Props) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -31,10 +35,29 @@ export default function HistoryScreen({ onBack }: Props) {
   }, []);
 
   const copy = (key: string, text: string) => {
-    Clipboard.setString(text);
+    Clipboard.setStringAsync(text);
     if (timerRef.current) clearTimeout(timerRef.current);
     setCopiedKey(key);
     timerRef.current = setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleDeleteDraft = (job: Job) => {
+    Alert.alert(
+      'Delete Draft',
+      'This will permanently remove this draft. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteJob(job.id).catch(() => {});
+            setJobs(prev => prev.filter(j => j.id !== job.id));
+            if (expandedId === job.id) setExpandedId(null);
+          },
+        },
+      ]
+    );
   };
 
   const toggleExpand = (id: number) => {
@@ -144,6 +167,25 @@ export default function HistoryScreen({ onBack }: Props) {
                         )}
                       </View>
                     ) : null}
+
+                    {job.status === 'draft' && (
+                      <View style={styles.draftActions}>
+                        <TouchableOpacity
+                          style={styles.publishBtn}
+                          onPress={() => onPublishDraft(job)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.publishBtnText}>Publish</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.deleteBtn}
+                          onPress={() => handleDeleteDraft(job)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.deleteBtnText}>Delete Draft</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 )}
               </View>
@@ -274,4 +316,29 @@ const styles = StyleSheet.create({
   postText: { fontSize: 14, color: colors.textPrimary, lineHeight: 21 },
   articleText: { fontSize: 13, color: colors.textSecondary, lineHeight: 20, marginBottom: 10 },
   copyRow: { alignItems: 'flex-end' },
+  draftActions: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 14,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  publishBtn: {
+    flex: 1,
+    backgroundColor: colors.cyan,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  publishBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  deleteBtn: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  deleteBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 });
