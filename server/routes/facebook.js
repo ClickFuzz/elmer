@@ -13,7 +13,10 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
 const GRAPH_BASE         = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const FB_DIALOG_URL      = 'https://www.facebook.com/dialog/oauth';
-const FB_PERMISSIONS     = 'pages_show_list,pages_read_engagement,pages_manage_posts';
+
+// business_management is required for Pages managed via Meta Business Portfolio.
+const FB_PERMISSIONS =
+  'pages_show_list,pages_read_engagement,pages_manage_posts,business_management';
 
 function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {}) {
   const TMP_DIR = path.join(__dirname, '..', 'tmp');
@@ -156,7 +159,13 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         .then(r => r.json());
 
       if (pagesData.error) {
-        throw new Error(`Pages fetch: ${pagesData.error.message}`);
+        const fbCode = pagesData.error.code;
+        // Facebook error codes 10 and 200 indicate a permissions/scope problem.
+        const isPermission = fbCode === 10 || fbCode === 200;
+        throw Object.assign(
+          new Error(`Pages fetch: ${pagesData.error.message}`),
+          { isPermissionError: isPermission }
+        );
       }
 
       const pages = (pagesData.data ?? []).filter(p => p.id && p.access_token);
@@ -165,18 +174,23 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         return res.redirect(`${returnBase}?platform=facebook&error=no_manageable_pages`);
       }
 
-      // Step 4 — Persist each page's access token encrypted
+      // Step 4 — Persist each page's access token encrypted.
+      // New rows are inserted with selected=true so they are immediately publishable.
+      // Reconnects (ON CONFLICT) preserve the existing selected state.
       for (const page of pages) {
-        const tokenEnc = encrypt(page.access_token);
+        const tokenEnc  = encrypt(page.access_token);
+        const tasksJson = JSON.stringify(page.tasks ?? []);
         await pool.query(
           `INSERT INTO connected_platforms
-             (user_id, platform, account_name, account_id, access_token_enc, connected_at, updated_at)
-           VALUES ($1, 'facebook', $2, $3, $4, $5, $6)
+             (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
+              selected, connected_at, updated_at)
+           VALUES ($1, 'facebook', $2, $3, $4, $5, true, $6, $7)
            ON CONFLICT(user_id, platform, account_id) DO UPDATE SET
              account_name     = EXCLUDED.account_name,
              access_token_enc = EXCLUDED.access_token_enc,
+             tasks_json       = EXCLUDED.tasks_json,
              updated_at       = EXCLUDED.updated_at`,
-          [stateRow.user_id, page.name, page.id, tokenEnc, now, now]
+          [stateRow.user_id, page.name, page.id, tokenEnc, tasksJson, now, now]
         );
       }
 
@@ -186,7 +200,8 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
     } catch (err) {
       console.error('[facebook] callback error:', err.message);
-      return res.redirect(`${returnBase}?platform=facebook&error=auth_failed`);
+      const errorCode = err.isPermissionError ? 'insufficient_permissions' : 'auth_failed';
+      return res.redirect(`${returnBase}?platform=facebook&error=${errorCode}`);
     }
   });
 
@@ -194,7 +209,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
   router.get('/pages', requireAuth, async (req, res, next) => {
     try {
       const { rows: pages } = await getPool().query(
-        `SELECT id, account_name, account_id, connected_at
+        `SELECT id, account_name, account_id, selected, connected_at
          FROM connected_platforms
          WHERE user_id = $1 AND platform = 'facebook'
          ORDER BY account_name ASC`,
@@ -206,24 +221,54 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
     }
   });
 
+  // ── POST /facebook/pages/selection ─────────────────────────────────────────
+  // Replaces the current selection for this user. page_ids not belonging to the
+  // user are silently ignored (they will not be selected).
+  router.post('/pages/selection', requireAuth, async (req, res, next) => {
+    try {
+      const { page_ids } = req.body ?? {};
+      if (!Array.isArray(page_ids)) {
+        return res.status(400).json({ error: 'page_ids must be an array' });
+      }
+      const ids = page_ids
+        .map(id => parseInt(id, 10))
+        .filter(id => Number.isInteger(id) && id > 0);
+
+      const pool = getPool();
+      // Deselect all pages for this user first.
+      await pool.query(
+        `UPDATE connected_platforms SET selected = false
+         WHERE user_id = $1 AND platform = 'facebook'`,
+        [req.userId]
+      );
+      // Select only the specified pages owned by this user.
+      for (const id of ids) {
+        await pool.query(
+          `UPDATE connected_platforms SET selected = true
+           WHERE user_id = $1 AND platform = 'facebook' AND id = $2`,
+          [req.userId, id]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ── POST /facebook/publish ──────────────────────────────────────────────────
+  // Publishes to all selected pages for the authenticated user. Returns an array
+  // of per-page results so partial success is preserved.
   router.post('/publish', requireAuth, upload.any(), async (req, res) => {
     const uploadedFiles = req.files ?? [];
     const cleanup = () => {
       for (const f of uploadedFiles) fs.unlink(f.path, () => {});
     };
 
-    const { message, platform_id, job_id } = req.body ?? {};
+    const { message, job_id } = req.body ?? {};
 
     if (!message || typeof message !== 'string' || !message.trim()) {
       cleanup();
       return res.status(400).json({ error: 'message is required' });
-    }
-
-    const platformId = parseInt(platform_id, 10);
-    if (!Number.isInteger(platformId) || platformId < 1) {
-      cleanup();
-      return res.status(400).json({ error: 'platform_id must be a positive integer' });
     }
 
     if (!job_id || typeof job_id !== 'string') {
@@ -231,126 +276,139 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       return res.status(400).json({ error: 'job_id is required' });
     }
 
-    const pool     = getPool();
-    const now      = Date.now();
-    const jobRef   = `fb_${req.userId}_${job_id}`;
-    let   recordId = null;
+    const pool = getPool();
+    const now  = Date.now();
 
-    const markFailed = async (msg) => {
-      if (!recordId) return;
-      await pool.query(
-        `UPDATE publishing_records SET status = 'failed', error_message = $1, updated_at = $2
-         WHERE id = $3`,
-        [msg, Date.now(), recordId]
-      ).catch(() => {});
-    };
-
+    // Fetch all selected pages for this user.
+    let selectedPages;
     try {
-      // Verify the requested page belongs to this user
-      const { rows: pageRows } = await pool.query(
-        `SELECT account_id, access_token_enc
+      const { rows } = await pool.query(
+        `SELECT id, account_id, account_name, access_token_enc, tasks_json
          FROM connected_platforms
-         WHERE id = $1 AND user_id = $2 AND platform = 'facebook'`,
-        [platformId, req.userId]
+         WHERE user_id = $1 AND platform = 'facebook' AND selected = true
+         ORDER BY account_name ASC`,
+        [req.userId]
       );
-      const pageRow = pageRows[0];
+      selectedPages = rows;
+    } catch (err) {
+      cleanup();
+      return res.status(500).json({ error: 'Database error', detail: err.message });
+    }
 
-      if (!pageRow) {
-        cleanup();
-        return res.status(404).json({ error: 'Facebook page not found' });
+    if (selectedPages.length === 0) {
+      cleanup();
+      return res.status(422).json({
+        error: 'no_pages_selected',
+        detail: 'No Facebook pages are selected for publishing. Go to Settings → Manage Pages.',
+      });
+    }
+
+    // Sort photo files by field name (photo_0, photo_1, …)
+    const photoFiles = uploadedFiles
+      .filter(f => /^photo_\d+$/.test(f.fieldname))
+      .sort((a, b) => {
+        const ai = parseInt(a.fieldname.replace('photo_', ''), 10);
+        const bi = parseInt(b.fieldname.replace('photo_', ''), 10);
+        return ai - bi;
+      })
+      .slice(0, 5);
+
+    const results = [];
+
+    for (const pageRow of selectedPages) {
+      // Idempotency key is scoped per user + job + Facebook page account ID.
+      const jobRef = `fb_${req.userId}_${job_id}_${pageRow.account_id}`;
+
+      // Validate CREATE_CONTENT or MANAGE task when tasks are known.
+      const tasks = JSON.parse(pageRow.tasks_json ?? '[]');
+      if (tasks.length > 0 && !tasks.includes('CREATE_CONTENT') && !tasks.includes('MANAGE')) {
+        results.push({
+          pageId:   pageRow.account_id,
+          pageName: pageRow.account_name,
+          ok:       false,
+          error:    'Page does not have CREATE_CONTENT permission.',
+        });
+        continue;
       }
 
-      // Idempotency — return immediately if this job was already published
-      const { rows: publishedRows } = await pool.query(
-        `SELECT id, platform_post_id
-         FROM publishing_records
-         WHERE user_id = $1 AND platform = 'facebook' AND job_ref = $2 AND status = 'published'
-         LIMIT 1`,
-        [req.userId, jobRef]
-      );
-      const published = publishedRows[0];
-
-      if (published) {
-        cleanup();
-        return res.json({ ok: true, duplicate: true, postId: published.platform_post_id });
+      // Idempotency — skip if already successfully published.
+      let alreadyPublished;
+      try {
+        const { rows } = await pool.query(
+          `SELECT id, platform_post_id
+           FROM publishing_records
+           WHERE user_id = $1 AND platform = 'facebook' AND job_ref = $2 AND status = 'published'
+           LIMIT 1`,
+          [req.userId, jobRef]
+        );
+        alreadyPublished = rows[0];
+      } catch (err) {
+        results.push({ pageId: pageRow.account_id, pageName: pageRow.account_name, ok: false, error: err.message });
+        continue;
       }
 
-      // Decrypt the page access token
+      if (alreadyPublished) {
+        const postId  = alreadyPublished.platform_post_id;
+        const postUrl = `https://www.facebook.com/${String(postId).replace('_', '/posts/')}`;
+        results.push({
+          pageId: pageRow.account_id, pageName: pageRow.account_name,
+          ok: true, duplicate: true, postId, postUrl,
+        });
+        continue;
+      }
+
+      // Decrypt the page access token.
       let pageToken;
       try {
         pageToken = decrypt(pageRow.access_token_enc);
       } catch (err) {
-        cleanup();
-        console.error('[facebook] token decrypt error:', err.message);
-        return res.status(500).json({ error: 'Could not read page credentials' });
+        console.error('[facebook] token decrypt error for page', pageRow.account_name, ':', err.message);
+        results.push({ pageId: pageRow.account_id, pageName: pageRow.account_name, ok: false, error: 'Could not read page credentials.' });
+        continue;
       }
 
-      const pageId = pageRow.account_id;
+      const pageId  = pageRow.account_id;
+      let   recordId = null;
 
-      // Record pending publish attempt
-      const { rows: [record] } = await pool.query(
-        `INSERT INTO publishing_records
-           (user_id, platform, job_ref, status, created_at, updated_at)
-         VALUES ($1, 'facebook', $2, 'pending', $3, $4) RETURNING id`,
-        [req.userId, jobRef, now, now]
-      );
-      recordId = record.id;
+      const markFailed = async (msg) => {
+        if (!recordId) return;
+        await pool.query(
+          `UPDATE publishing_records SET status = 'failed', error_message = $1, updated_at = $2
+           WHERE id = $3`,
+          [msg, Date.now(), recordId]
+        ).catch(() => {});
+      };
 
-      // Sort photo files by field name (photo_0, photo_1, …)
-      const photoFiles = uploadedFiles
-        .filter(f => /^photo_\d+$/.test(f.fieldname))
-        .sort((a, b) => {
-          const ai = parseInt(a.fieldname.replace('photo_', ''), 10);
-          const bi = parseInt(b.fieldname.replace('photo_', ''), 10);
-          return ai - bi;
-        })
-        .slice(0, 5);
-
-      let postId;
-
-      if (photoFiles.length === 0) {
-        const body = new URLSearchParams({ message, access_token: pageToken });
-        const data = await graphFetch(`${GRAPH_BASE}/${pageId}/feed`, {
-          method: 'POST', body,
-        }).then(r => r.json());
-
-        if (data.error) {
-          const e = Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
-          throw e;
-        }
-        postId = data.id;
-
-      } else if (photoFiles.length === 1) {
-        const form = new FormData();
-        form.append(
-          'source',
-          new Blob([fs.readFileSync(photoFiles[0].path)], { type: photoFiles[0].mimetype || 'image/jpeg' }),
-          photoFiles[0].originalname || 'photo.jpg'
+      try {
+        const { rows: [record] } = await pool.query(
+          `INSERT INTO publishing_records
+             (user_id, platform, job_ref, status, created_at, updated_at)
+           VALUES ($1, 'facebook', $2, 'pending', $3, $4) RETURNING id`,
+          [req.userId, jobRef, now, now]
         );
-        form.append('message', message);
-        form.append('access_token', pageToken);
+        recordId = record.id;
 
-        const data = await graphFetch(`${GRAPH_BASE}/${pageId}/photos`, {
-          method: 'POST', body: form,
-        }).then(r => r.json());
+        let postId;
 
-        if (data.error) {
-          const e = Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
-          throw e;
-        }
-        postId = data.post_id ?? data.id;
+        if (photoFiles.length === 0) {
+          const body = new URLSearchParams({ message, access_token: pageToken });
+          const data = await graphFetch(`${GRAPH_BASE}/${pageId}/feed`, {
+            method: 'POST', body,
+          }).then(r => r.json());
 
-      } else {
-        const mediaFbids = [];
+          if (data.error) {
+            throw Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
+          }
+          postId = data.id;
 
-        for (const photoFile of photoFiles) {
+        } else if (photoFiles.length === 1) {
           const form = new FormData();
           form.append(
             'source',
-            new Blob([fs.readFileSync(photoFile.path)], { type: photoFile.mimetype || 'image/jpeg' }),
-            photoFile.originalname || 'photo.jpg'
+            new Blob([fs.readFileSync(photoFiles[0].path)], { type: photoFiles[0].mimetype || 'image/jpeg' }),
+            photoFiles[0].originalname || 'photo.jpg'
           );
-          form.append('published', 'false');
+          form.append('message', message);
           form.append('access_token', pageToken);
 
           const data = await graphFetch(`${GRAPH_BASE}/${pageId}/photos`, {
@@ -358,50 +416,77 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
           }).then(r => r.json());
 
           if (data.error) {
-            const e = Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
-            throw e;
+            throw Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
           }
-          mediaFbids.push(data.id);
+          postId = data.post_id ?? data.id;
+
+        } else {
+          const mediaFbids = [];
+
+          for (const photoFile of photoFiles) {
+            const form = new FormData();
+            form.append(
+              'source',
+              new Blob([fs.readFileSync(photoFile.path)], { type: photoFile.mimetype || 'image/jpeg' }),
+              photoFile.originalname || 'photo.jpg'
+            );
+            form.append('published', 'false');
+            form.append('access_token', pageToken);
+
+            const data = await graphFetch(`${GRAPH_BASE}/${pageId}/photos`, {
+              method: 'POST', body: form,
+            }).then(r => r.json());
+
+            if (data.error) {
+              throw Object.assign(new Error(data.error.message), { isFbError: true, fbCode: data.error.code });
+            }
+            mediaFbids.push(data.id);
+          }
+
+          const body = new URLSearchParams({
+            message,
+            access_token:   pageToken,
+            attached_media: JSON.stringify(mediaFbids.map(id => ({ media_fbid: id }))),
+          });
+          const feedData = await graphFetch(`${GRAPH_BASE}/${pageId}/feed`, {
+            method: 'POST', body,
+          }).then(r => r.json());
+
+          if (feedData.error) {
+            throw Object.assign(new Error(feedData.error.message), { isFbError: true, fbCode: feedData.error.code });
+          }
+          postId = feedData.id;
         }
 
-        const body = new URLSearchParams({
-          message,
-          access_token:   pageToken,
-          attached_media: JSON.stringify(mediaFbids.map(id => ({ media_fbid: id }))),
+        const postUrl = `https://www.facebook.com/${String(postId).replace('_', '/posts/')}`;
+
+        await pool.query(
+          `UPDATE publishing_records
+           SET status = 'published', platform_post_id = $1, published_at = $2, updated_at = $3
+           WHERE id = $4`,
+          [postId, now, now, recordId]
+        );
+
+        results.push({ pageId, pageName: pageRow.account_name, ok: true, postId, postUrl });
+
+      } catch (err) {
+        console.error('[facebook] publish error for page', pageRow.account_name, ':', err.message);
+        await markFailed(err.message);
+        results.push({
+          pageId:   pageRow.account_id,
+          pageName: pageRow.account_name,
+          ok:       false,
+          error:    err.message,
+          fbError:  err.isFbError ?? false,
+          fbCode:   err.fbCode    ?? null,
         });
-        const feedData = await graphFetch(`${GRAPH_BASE}/${pageId}/feed`, {
-          method: 'POST', body,
-        }).then(r => r.json());
-
-        if (feedData.error) {
-          const e = Object.assign(new Error(feedData.error.message), { isFbError: true, fbCode: feedData.error.code });
-          throw e;
-        }
-        postId = feedData.id;
       }
-
-      const postUrl = `https://www.facebook.com/${String(postId).replace('_', '/posts/')}`;
-
-      await pool.query(
-        `UPDATE publishing_records
-         SET status = 'published', platform_post_id = $1, published_at = $2, updated_at = $3
-         WHERE id = $4`,
-        [postId, now, now, recordId]
-      );
-
-      cleanup();
-      return res.json({ ok: true, postId, postUrl });
-
-    } catch (err) {
-      console.error('[facebook] publish error:', err.message);
-      await markFailed(err.message);
-      cleanup();
-
-      if (err.isFbError) {
-        return res.status(422).json({ error: err.message, fbError: true, fbCode: err.fbCode ?? null });
-      }
-      return res.status(502).json({ error: 'Failed to publish to Facebook', detail: err.message });
     }
+
+    cleanup();
+
+    const anyOk = results.some(r => r.ok);
+    return res.status(200).json({ ok: anyOk, results });
   });
 
   return router;

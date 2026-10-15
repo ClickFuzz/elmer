@@ -7,7 +7,7 @@ process.env.FACEBOOK_APP_ID           = 'test_app_id';
 process.env.FACEBOOK_APP_SECRET       = 'test_app_secret';
 process.env.FACEBOOK_REDIRECT_URI     = 'http://localhost:3001/facebook/callback';
 
-const { describe, it, before, after, beforeEach } = require('node:test');
+const { describe, it, after, beforeEach } = require('node:test');
 const assert  = require('node:assert/strict');
 const request = require('supertest');
 
@@ -44,16 +44,27 @@ async function createFbState(app, token) {
   return res.body.state;
 }
 
-async function insertFbPage(userId, pageName = 'My Page', pageAccountId = 'page-123') {
-  const now = Date.now();
+// opts.selected defaults to true; opts.tasks defaults to ['CREATE_CONTENT']
+async function insertFbPage(userId, pageName = 'My Page', pageAccountId = 'page-123', opts = {}) {
+  const now      = Date.now();
   const tokenEnc = encrypt('fake_page_token');
+  const selected = opts.selected ?? true;
+  const tasksJson = JSON.stringify(opts.tasks ?? ['CREATE_CONTENT']);
   const { rows: [{ id }] } = await getPool().query(
     `INSERT INTO connected_platforms
-       (user_id, platform, account_name, account_id, access_token_enc, connected_at, updated_at)
-     VALUES ($1, 'facebook', $2, $3, $4, $5, $6) RETURNING id`,
-    [userId, pageName, pageAccountId, tokenEnc, now, now]
+       (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
+        selected, connected_at, updated_at)
+     VALUES ($1, 'facebook', $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [userId, pageName, pageAccountId, tokenEnc, tasksJson, selected, now, now]
   );
   return id;
+}
+
+async function selectFbPages(app, token, pageIds) {
+  return request(app)
+    .post('/facebook/pages/selection')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ page_ids: pageIds });
 }
 
 // ── Test suites ────────────────────────────────────────────────────────────
@@ -103,6 +114,14 @@ describe('POST /facebook/connect-url', () => {
     );
     assert.ok(row, 'oauth_state row should exist');
     assert.ok(!row.used_at, 'should not be consumed yet');
+  });
+
+  it('includes business_management in the auth scope for Business Portfolio support', async () => {
+    const res = await request(app)
+      .post('/facebook/connect-url')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.authUrl.includes('business_management'), 'should request business_management scope');
   });
 });
 
@@ -181,7 +200,7 @@ describe('GET /facebook/callback', () => {
     assert.ok(res.headers.location.includes('page_count=2'));
 
     const { rows: pages } = await getPool().query(
-      `SELECT account_id, account_name FROM connected_platforms
+      `SELECT account_id, account_name, selected FROM connected_platforms
        WHERE user_id = $1 AND platform = 'facebook'
        ORDER BY account_name`,
       [ownerId]
@@ -189,6 +208,9 @@ describe('GET /facebook/callback', () => {
     assert.strictEqual(pages.length, 2);
     assert.strictEqual(pages[0].account_name, 'My Shop');
     assert.strictEqual(pages[1].account_name, 'Side Biz');
+    // New pages must be auto-selected on first connect
+    assert.strictEqual(pages[0].selected, true, 'new pages should be selected=true');
+    assert.strictEqual(pages[1].selected, true, 'new pages should be selected=true');
   });
 
   it('reconnecting overwrites the existing token without duplicating the row', async () => {
@@ -210,14 +232,22 @@ describe('GET /facebook/callback', () => {
     const state1 = await createFbState(app, token);
     await request(app).get('/facebook/callback').query({ code: 'c1', state: state1 });
 
+    // Deselect the page between connects to verify selection is preserved
+    await getPool().query(
+      `UPDATE connected_platforms SET selected = false WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
+
     const state2 = await createFbState(app, token);
     await request(app).get('/facebook/callback').query({ code: 'c2', state: state2 });
 
     const { rows } = await getPool().query(
-      `SELECT id FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
+      `SELECT id, selected FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
       [userId]
     );
     assert.strictEqual(rows.length, 1, 'should not duplicate the row');
+    // Reconnect must NOT change selected — user's choice is preserved
+    assert.strictEqual(rows[0].selected, false, 'reconnect should not change selected state');
   });
 
   it('redirects with no_manageable_pages error when user has no pages', async () => {
@@ -240,6 +270,32 @@ describe('GET /facebook/callback', () => {
 
     assert.strictEqual(res.status, 302);
     assert.ok(res.headers.location.includes('error=no_manageable_pages'));
+  });
+
+  it('redirects with insufficient_permissions when Graph API returns permission error', async () => {
+    await setupFreshTestDb();
+
+    // Facebook error code 10 = Application does not have permission
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { ok: false, data: { error: { message: 'Permissions error', code: 10 } } },
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app)
+      .get('/facebook/callback')
+      .query({ code: 'code_xyz', state });
+
+    assert.strictEqual(res.status, 302);
+    assert.ok(
+      res.headers.location.includes('error=insufficient_permissions'),
+      `expected insufficient_permissions, got: ${res.headers.location}`
+    );
   });
 });
 
@@ -265,6 +321,19 @@ describe('GET /facebook/pages', () => {
       .set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body.pages, []);
+  });
+
+  it('returns pages with a selected field', async () => {
+    await insertFbPage(userId, 'Selected Page', 'page-s', { selected: true });
+    await insertFbPage(userId, 'Deselected Page', 'page-d', { selected: false });
+
+    const res = await request(app)
+      .get('/facebook/pages')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    const byName = Object.fromEntries(res.body.pages.map(p => [p.account_name, p]));
+    assert.strictEqual(byName['Selected Page'].selected, true);
+    assert.strictEqual(byName['Deselected Page'].selected, false);
   });
 
   it('returns only pages belonging to the authenticated user', async () => {
@@ -294,14 +363,89 @@ describe('GET /facebook/pages', () => {
   });
 });
 
-describe('POST /facebook/publish', () => {
-  let app, token, userId, platformId;
+describe('POST /facebook/pages/selection', () => {
+  let app, token, userId;
 
   beforeEach(async () => {
     await setupFreshTestDb();
     app = createApp();
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+  });
+
+  after(async () => closeDb());
+
+  it('returns 401 without authentication', async () => {
+    const res = await request(app)
+      .post('/facebook/pages/selection')
+      .send({ page_ids: [] });
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('returns 400 when page_ids is not an array', async () => {
+    const res = await request(app)
+      .post('/facebook/pages/selection')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ page_ids: 'not-an-array' });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('selects specified pages and deselects the rest', async () => {
+    const id1 = await insertFbPage(userId, 'Page A', 'page-a', { selected: true });
+    const id2 = await insertFbPage(userId, 'Page B', 'page-b', { selected: true });
+    const id3 = await insertFbPage(userId, 'Page C', 'page-c', { selected: true });
+
+    // Deselect Page A and C, keep only B
+    const res = await selectFbPages(app, token, [id2]);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.ok);
+
+    const { rows } = await getPool().query(
+      `SELECT account_name, selected FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook' ORDER BY account_name`,
+      [userId]
+    );
+    const byName = Object.fromEntries(rows.map(r => [r.account_name, r.selected]));
+    assert.strictEqual(byName['Page A'], false);
+    assert.strictEqual(byName['Page B'], true);
+    assert.strictEqual(byName['Page C'], false);
+  });
+
+  it('deselects all pages when page_ids is empty', async () => {
+    await insertFbPage(userId, 'Page A', 'page-a', { selected: true });
+    await insertFbPage(userId, 'Page B', 'page-b', { selected: true });
+
+    const res = await selectFbPages(app, token, []);
+    assert.strictEqual(res.status, 200);
+
+    const { rows } = await getPool().query(
+      `SELECT selected FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
+    assert.ok(rows.every(r => r.selected === false), 'all pages should be deselected');
+  });
+
+  it('silently ignores page IDs that belong to another user', async () => {
+    const { userId: userId2 } = await registerAndLogin(app, 'other@example.com');
+    const otherId = await insertFbPage(userId2, 'Other Page', 'page-other', { selected: false });
+
+    // Try to select another user's page — should silently fail (not select it)
+    const res = await selectFbPages(app, token, [otherId]);
+    assert.strictEqual(res.status, 200);
+
+    const { rows } = await getPool().query(
+      `SELECT selected FROM connected_platforms WHERE id = $1`,
+      [otherId]
+    );
+    assert.strictEqual(rows[0].selected, false, 'should not select another user\'s page');
+  });
+});
+
+describe('POST /facebook/publish', () => {
+  let app, token, userId;
+
+  beforeEach(async () => {
+    await setupFreshTestDb();
+    app = createApp();
+    ({ token, userId } = await registerAndLogin(app));
   });
 
   after(async () => closeDb());
@@ -310,41 +454,37 @@ describe('POST /facebook/publish', () => {
     const res = await request(app)
       .post('/facebook/publish')
       .field('message', 'Hello')
-      .field('platform_id', String(platformId))
       .field('job_id', '1');
     assert.strictEqual(res.status, 401);
   });
 
   it('returns 400 when message is missing', async () => {
+    await insertFbPage(userId);
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
-      .field('platform_id', String(platformId))
       .field('job_id', '1');
     assert.strictEqual(res.status, 400);
   });
 
-  it('returns 400 when platform_id is invalid', async () => {
+  it('returns 400 when job_id is missing', async () => {
+    await insertFbPage(userId);
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
-      .field('message', 'Hello')
-      .field('platform_id', 'abc')
-      .field('job_id', '1');
+      .field('message', 'Hello');
     assert.strictEqual(res.status, 400);
   });
 
-  it('returns 404 when platform is not owned by user', async () => {
-    const { userId: userId2 } = await registerAndLogin(app, 'other2@example.com');
-    const otherId = await insertFbPage(userId2, 'Other Page', 'page-other');
-
+  it('returns 422 no_pages_selected when no pages are selected', async () => {
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: false });
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
       .field('message', 'Hello')
-      .field('platform_id', String(otherId))
-      .field('job_id', '42');
-    assert.strictEqual(res.status, 404);
+      .field('job_id', 'job-no-pages');
+    assert.strictEqual(res.status, 422);
+    assert.strictEqual(res.body.error, 'no_pages_selected');
   });
 
   it('publishes a text-only post and records the result', async () => {
@@ -355,19 +495,21 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: true });
 
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
       .field('message', 'Great job done today!')
-      .field('platform_id', String(platformId))
       .field('job_id', 'job-1');
 
     assert.strictEqual(res.status, 200);
-    assert.ok(res.body.ok);
-    assert.ok(res.body.postId, 'should return postId');
-    assert.ok(!res.body.duplicate, 'should not be a duplicate');
+    assert.ok(res.body.ok, 'overall ok should be true');
+    assert.strictEqual(res.body.results.length, 1);
+    const result = res.body.results[0];
+    assert.ok(result.ok, 'page result ok should be true');
+    assert.ok(result.postId, 'should return postId');
+    assert.ok(!result.duplicate, 'should not be a duplicate');
 
     const { rows: [rec] } = await getPool().query(
       `SELECT * FROM publishing_records WHERE user_id = $1 AND platform = 'facebook' AND status = 'published'`,
@@ -377,7 +519,7 @@ describe('POST /facebook/publish', () => {
     assert.strictEqual(rec.platform_post_id, 'page-123_post-456');
   });
 
-  it('prevents duplicate publishing for the same job_id', async () => {
+  it('prevents duplicate publishing for the same job_id and page', async () => {
     await setupFreshTestDb();
 
     let callCount = 0;
@@ -388,21 +530,96 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: true });
 
-    const payload = {
-      message: 'First post', platform_id: String(platformId), job_id: 'job-dup',
-    };
-
-    const first  = await request(app).post('/facebook/publish').set('Authorization', `Bearer ${token}`).field(payload);
-    const second = await request(app).post('/facebook/publish').set('Authorization', `Bearer ${token}`).field(payload);
+    const first  = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'First post').field('job_id', 'job-dup');
+    const second = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'First post').field('job_id', 'job-dup');
 
     assert.strictEqual(first.status, 200);
-    assert.ok(!first.body.duplicate);
+    assert.ok(!first.body.results[0].duplicate);
 
     assert.strictEqual(second.status, 200);
-    assert.ok(second.body.duplicate, 'second attempt should be a duplicate');
+    assert.ok(second.body.results[0].duplicate, 'second attempt should be a duplicate');
     assert.strictEqual(callCount, 1, 'Graph API should be called only once');
+  });
+
+  it('uses separate idempotency keys for different pages on the same job', async () => {
+    await setupFreshTestDb();
+
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      return { ok: true, json: async () => ({ id: `post-${callCount}` }) };
+    };
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app));
+    await insertFbPage(userId, 'Page A', 'page-aaa', { selected: true });
+    await insertFbPage(userId, 'Page B', 'page-bbb', { selected: true });
+
+    const res = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Multi-page job').field('job_id', 'job-multi');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.results.length, 2);
+    assert.ok(res.body.results.every(r => r.ok));
+    assert.strictEqual(callCount, 2, 'each page should be published independently');
+  });
+
+  it('publishes to multiple pages and returns per-page results', async () => {
+    await setupFreshTestDb();
+
+    const mockFetch = makeGraphMock([
+      { data: { id: 'page-aaa_post-1' } },
+      { data: { id: 'page-bbb_post-2' } },
+    ]);
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app));
+    await insertFbPage(userId, 'Alpha Page', 'page-aaa', { selected: true });
+    await insertFbPage(userId, 'Beta Page',  'page-bbb', { selected: true });
+
+    const res = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Two pages').field('job_id', 'job-two-pages');
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.ok, 'overall ok should be true when any page succeeds');
+    assert.strictEqual(res.body.results.length, 2);
+    assert.ok(res.body.results.every(r => r.ok), 'all results should be ok');
+    const names = res.body.results.map(r => r.pageName).sort();
+    assert.deepStrictEqual(names, ['Alpha Page', 'Beta Page']);
+  });
+
+  it('returns partial success when one page fails and one succeeds', async () => {
+    await setupFreshTestDb();
+
+    let callN = 0;
+    const mockFetch = async () => {
+      callN++;
+      if (callN === 1) throw new Error('Network failure');
+      return { ok: true, json: async () => ({ id: 'page-bbb_post-ok' }) };
+    };
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app));
+    await insertFbPage(userId, 'Alpha Page', 'page-aaa', { selected: true });
+    await insertFbPage(userId, 'Beta Page',  'page-bbb', { selected: true });
+
+    const res = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Partial').field('job_id', 'job-partial');
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.ok, 'overall ok should be true when at least one page succeeded');
+    const byName = Object.fromEntries(res.body.results.map(r => [r.pageName, r]));
+    assert.strictEqual(byName['Alpha Page'].ok, false, 'first page should have failed');
+    assert.strictEqual(byName['Beta Page'].ok, true, 'second page should have succeeded');
   });
 
   it('publishes with multiple photos and uses the staged-media flow', async () => {
@@ -420,7 +637,7 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: true });
 
     const fs_   = require('fs');
     const os_   = require('os');
@@ -435,22 +652,22 @@ describe('POST /facebook/publish', () => {
         .post('/facebook/publish')
         .set('Authorization', `Bearer ${token}`)
         .field('message', 'Before and after!')
-        .field('platform_id', String(platformId))
         .field('job_id', 'multi-job-1')
         .attach('photo_0', tmp1)
         .attach('photo_1', tmp2);
 
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.ok);
+      assert.ok(res.body.results[0].ok);
       assert.strictEqual(stagingCalls.length, 2, 'should stage two photos');
-      assert.ok(!res.body.duplicate);
+      assert.ok(!res.body.results[0].duplicate);
     } finally {
       fs_.unlinkSync(tmp1);
       fs_.unlinkSync(tmp2);
     }
   });
 
-  it('returns 422 with fbError flag when the Graph API returns a Facebook error', async () => {
+  it('returns a failed result (not 422) when the Graph API returns a Facebook error', async () => {
     await setupFreshTestDb();
 
     const mockFetch = makeGraphMock([
@@ -459,17 +676,19 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: true });
 
     const res = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
       .field('message', 'Post text')
-      .field('platform_id', String(platformId))
       .field('job_id', 'error-job-1');
 
-    assert.strictEqual(res.status, 422);
-    assert.ok(res.body.fbError);
+    // Multi-page API always returns 200; failures appear as results items
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, false, 'overall ok should be false when all pages fail');
+    assert.strictEqual(res.body.results[0].ok, false);
+    assert.ok(res.body.results[0].fbError, 'fbError should be flagged in the result');
 
     const { rows: [rec] } = await getPool().query(
       `SELECT status, error_message FROM publishing_records
@@ -493,19 +712,37 @@ describe('POST /facebook/publish', () => {
     const { createFacebookRouter } = require('../routes/facebook');
     app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
     ({ token, userId } = await registerAndLogin(app));
-    platformId = await insertFbPage(userId);
+    await insertFbPage(userId, 'My Page', 'page-123', { selected: true });
 
-    const payload = {
-      message: 'Retry me', platform_id: String(platformId), job_id: 'retry-job',
-    };
+    const first = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Retry me').field('job_id', 'retry-job');
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(first.body.results[0].ok, false, 'first attempt should fail');
 
-    const first = await request(app).post('/facebook/publish').set('Authorization', `Bearer ${token}`).field(payload);
-    assert.strictEqual(first.status, 502, 'first attempt should fail');
+    const second = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Retry me').field('job_id', 'retry-job');
+    assert.strictEqual(second.status, 200);
+    assert.ok(second.body.results[0].ok, 'retry should succeed');
+    assert.ok(!second.body.results[0].duplicate, 'retry should not be flagged as duplicate');
+  });
 
-    const second = await request(app).post('/facebook/publish').set('Authorization', `Bearer ${token}`).field(payload);
-    assert.strictEqual(second.status, 200, 'retry should succeed');
-    assert.ok(second.body.ok);
-    assert.ok(!second.body.duplicate);
+  it('skips pages without CREATE_CONTENT or MANAGE task', async () => {
+    await setupFreshTestDb();
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: makeGraphMock([]) }) });
+    ({ token, userId } = await registerAndLogin(app));
+    await insertFbPage(userId, 'Restricted Page', 'page-restricted', { selected: true, tasks: ['ADVERTISE'] });
+
+    const res = await request(app).post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Test').field('job_id', 'job-restricted');
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, false);
+    assert.ok(res.body.results[0].error.includes('CREATE_CONTENT'));
   });
 });
 
@@ -565,18 +802,18 @@ describe('Token storage and encryption', () => {
 
     const known = 'super_secret_page_token_abc';
     const now   = Date.now();
-    const { rows: [{ id: pid }] } = await getPool().query(
+    await getPool().query(
       `INSERT INTO connected_platforms
-         (user_id, platform, account_name, account_id, access_token_enc, connected_at, updated_at)
-       VALUES ($1, 'facebook', 'Test Page', 'page-dec', $2, $3, $4) RETURNING id`,
-      [userId, encrypt(known), now, now]
+         (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
+          selected, connected_at, updated_at)
+       VALUES ($1, 'facebook', 'Test Page', 'page-dec', $2, $3, true, $4, $5)`,
+      [userId, encrypt(known), JSON.stringify(['CREATE_CONTENT']), now, now]
     );
 
     await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
       .field('message', 'Token test')
-      .field('platform_id', String(pid))
       .field('job_id', 'decrypt-job-1');
 
     assert.ok(sentToken.some(t => t === known), 'decrypted token should be used in Graph API call');

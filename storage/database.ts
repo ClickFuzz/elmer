@@ -264,17 +264,22 @@ export async function fetchServerConnectedChannels(
     });
     if (!res.ok) return [];
     const data = await res.json();
-    return (data.platforms ?? []).map((p: {
-      id: number;
-      platform: string;
-      account_name: string;
-      account_id: string;
-    }) => ({
-      id:          String(p.id),
-      platform:    p.platform as ConnectedChannel['platform'],
-      accountName: p.account_name,
-      accountId:   p.account_id,
-    }));
+    return (data.platforms ?? [])
+      .filter((p: { platform: string; selected?: boolean }) =>
+        // For Facebook, only include pages the user has explicitly selected.
+        p.platform !== 'facebook' || p.selected === true
+      )
+      .map((p: {
+        id: number;
+        platform: string;
+        account_name: string;
+        account_id: string;
+      }) => ({
+        id:          String(p.id),
+        platform:    p.platform as ConnectedChannel['platform'],
+        accountName: p.account_name,
+        accountId:   p.account_id,
+      }));
   } catch {
     return [];
   }
@@ -284,6 +289,7 @@ export type FacebookPage = {
   id: number;
   account_name: string;
   account_id: string;
+  selected: boolean;
   connected_at: number;
 };
 
@@ -303,23 +309,13 @@ export async function fetchFacebookPages(
   }
 }
 
-export async function getActiveFacebookPage(): Promise<{ id: number; name: string; accountId: string } | null> {
-  const raw = await getSetting('facebook_active_page');
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
+export async function getMultiPageWarningShown(): Promise<boolean> {
+  const val = await getSetting('fb_multi_page_warned');
+  return val === '1';
 }
 
-export async function setActiveFacebookPage(
-  id: number,
-  name: string,
-  accountId: string
-): Promise<void> {
-  await setSetting('facebook_active_page', JSON.stringify({ id, name, accountId }));
-}
-
-export async function clearActiveFacebookPage(): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(`DELETE FROM settings WHERE key = 'facebook_active_page'`);
+export async function setMultiPageWarningShown(): Promise<void> {
+  await setSetting('fb_multi_page_warned', '1');
 }
 
 export type Job = {

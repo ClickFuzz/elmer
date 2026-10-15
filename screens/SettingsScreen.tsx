@@ -26,9 +26,8 @@ import {
   clearSession,
   fetchFacebookPages,
   FacebookPage,
-  getActiveFacebookPage,
-  setActiveFacebookPage,
-  clearActiveFacebookPage,
+  getMultiPageWarningShown,
+  setMultiPageWarningShown,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -88,21 +87,17 @@ export default function SettingsScreen({ onBack }: Props) {
 
   // ── Facebook state ─────────────────────────────────────────────────────────
   const [fbPages, setFbPages] = useState<FacebookPage[]>([]);
+  const [selectedPageIds, setSelectedPageIds] = useState<number[]>([]);
   const [fbConnecting, setFbConnecting] = useState(false);
-  const [activeFbPage, setActiveFbPage] = useState<{ id: number; name: string; accountId: string } | null>(null);
   const [fbDisconnecting, setFbDisconnecting] = useState(false);
+  const [managePagesOpen, setManagePagesOpen] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<number[]>([]);
+  const [savingSelection, setSavingSelection] = useState(false);
 
   const refreshFbPages = async (token: string) => {
     const pages = await fetchFacebookPages(token, API_URL);
     setFbPages(pages);
-    if (pages.length > 0) {
-      const active = await getActiveFacebookPage();
-      if (!active) {
-        const first = pages[0];
-        await setActiveFacebookPage(first.id, first.account_name, first.account_id);
-        setActiveFbPage({ id: first.id, name: first.account_name, accountId: first.account_id });
-      }
-    }
+    setSelectedPageIds(pages.filter(p => p.selected).map(p => p.id));
   };
 
   useEffect(() => {
@@ -112,12 +107,10 @@ export default function SettingsScreen({ onBack }: Props) {
       setBizExpanded(!p.name || !p.category);
     }).catch(() => setBizExpanded(true));
 
-    // Load auth state and connected Facebook pages
-    Promise.all([getSessionToken(), getSessionEmail(), getActiveFacebookPage()]).then(
-      ([tok, email, activePage]) => {
+    Promise.all([getSessionToken(), getSessionEmail()]).then(
+      ([tok, email]) => {
         setSessionToken(tok);
         setSessionEmailState(email);
-        setActiveFbPage(activePage);
         if (tok) refreshFbPages(tok);
       }
     ).catch(() => {});
@@ -190,6 +183,7 @@ export default function SettingsScreen({ onBack }: Props) {
         setSessionToken(null);
         setSessionEmailState(null);
         setFbPages([]);
+        setSelectedPageIds([]);
       }},
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -205,7 +199,6 @@ export default function SettingsScreen({ onBack }: Props) {
 
     setFbConnecting(true);
     try {
-      // Get the OAuth URL from our server
       const res = await fetch(`${API_URL}/facebook/connect-url`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${sessionToken}` },
@@ -216,40 +209,51 @@ export default function SettingsScreen({ onBack }: Props) {
         return;
       }
 
-      // Open Facebook auth in the system browser.
-      // On development builds and production, the elmer:// deep link is intercepted
-      // automatically. On Expo Go, the browser may not return automatically, but the
-      // connection will still complete — tapping "Done" refreshes the status.
       const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
       console.log('[fb-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
         const url = result.url;
         const params = new URLSearchParams((url.split('?')[1] ?? '').split('#')[0]);
-        if (params.get('error')) {
-          const reason = params.get('error');
-          if (reason === 'no_manageable_pages') {
+        const error = params.get('error');
+
+        if (error) {
+          if (error === 'no_manageable_pages' || error === 'insufficient_permissions') {
             Alert.alert(
-              'No pages found',
-              'No Facebook Pages were found for this account. Make sure you manage at least one page and grant the requested permissions.',
-              [{ text: 'OK' }]
+              'No Facebook Pages found',
+              "Facebook didn't return any Pages you can manage. If your Page belongs to a Meta Business Portfolio, make sure you select both the Facebook Page and the business that owns or manages it when connecting.",
+              [
+                { text: 'Reconnect Facebook', onPress: () => { setFbConnecting(false); handleConnectFacebook(); } },
+                { text: 'OK', style: 'cancel' },
+              ]
             );
-          } else {
-            Alert.alert('Connection failed', `Facebook returned: ${reason}`);
+            return;
           }
+          Alert.alert('Connection failed', `Facebook returned: ${error}`);
           return;
         }
+
         if (params.get('success') === 'true') {
           const count = parseInt(params.get('page_count') ?? '1', 10);
+          if (count > 1) {
+            const warned = await getMultiPageWarningShown();
+            if (!warned) {
+              await setMultiPageWarningShown();
+              Alert.alert(
+                'Publishing to multiple Pages',
+                "You've selected multiple Facebook Pages. Elmer will publish your posts to all selected Pages. You can change this anytime under Manage Pages.",
+                [{ text: 'OK' }]
+              );
+            }
+          }
           Alert.alert(
             'Facebook connected!',
-            `${count} page${count !== 1 ? 's' : ''} connected. Select the page to publish to below.`,
+            `${count} page${count !== 1 ? 's' : ''} connected.${count > 1 ? ' Tap Manage Pages to adjust which pages receive your posts.' : ''}`,
             [{ text: 'OK' }]
           );
         }
       }
 
-      // Regardless of deep-link result, refresh pages (connection may have completed)
       await refreshFbPages(sessionToken);
     } catch (err) {
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
@@ -258,26 +262,57 @@ export default function SettingsScreen({ onBack }: Props) {
     }
   };
 
-  const handleSelectFbPage = (page: FacebookPage) => {
-    const options = fbPages.map(p => p.account_name);
-    showPicker('Select Facebook Page', options, async (name) => {
-      const selected = fbPages.find(p => p.account_name === name);
-      if (!selected) return;
-      await setActiveFacebookPage(selected.id, selected.account_name, selected.account_id);
-      setActiveFbPage({ id: selected.id, name: selected.account_name, accountId: selected.account_id });
-    });
+  const handleOpenManagePages = () => {
+    setPendingSelection([...selectedPageIds]);
+    setManagePagesOpen(true);
+  };
+
+  const handleTogglePage = (pageId: number) => {
+    setPendingSelection(prev =>
+      prev.includes(pageId) ? prev.filter(id => id !== pageId) : [...prev, pageId]
+    );
+  };
+
+  const handleSavePageSelection = async () => {
+    if (!sessionToken) return;
+    setSavingSelection(true);
+    try {
+      await fetch(`${API_URL}/facebook/pages/selection`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_ids: pendingSelection }),
+      });
+      setSelectedPageIds(pendingSelection);
+
+      if (pendingSelection.length > 1) {
+        const warned = await getMultiPageWarningShown();
+        if (!warned) {
+          await setMultiPageWarningShown();
+          Alert.alert(
+            'Publishing to multiple Pages',
+            "You've selected multiple Facebook Pages. Elmer will publish your posts to all selected Pages. You can change this anytime under Manage Pages.",
+            [{ text: 'OK' }]
+          );
+        }
+      }
+
+      setManagePagesOpen(false);
+    } catch {
+      Alert.alert('Error', 'Could not save page selections. Check your connection.');
+    } finally {
+      setSavingSelection(false);
+    }
   };
 
   const handleDisconnectFacebook = () => {
     Alert.alert(
       'Disconnect Facebook',
-      'Remove your Facebook Page connection? You can reconnect at any time.',
+      'Remove your Facebook Page connections? You can reconnect at any time.',
       [
         { text: 'Disconnect', style: 'destructive', onPress: async () => {
           if (!sessionToken) return;
           setFbDisconnecting(true);
           try {
-            // Delete all connected facebook pages for this user
             for (const page of fbPages) {
               await fetch(`${API_URL}/platforms/${page.id}`, {
                 method: 'DELETE',
@@ -285,8 +320,8 @@ export default function SettingsScreen({ onBack }: Props) {
               });
             }
             setFbPages([]);
-            await clearActiveFacebookPage();
-            setActiveFbPage(null);
+            setSelectedPageIds([]);
+            setManagePagesOpen(false);
           } catch {
             Alert.alert('Error', 'Could not disconnect. Try again.');
           } finally {
@@ -300,6 +335,7 @@ export default function SettingsScreen({ onBack }: Props) {
 
   const effectiveCategory = profile.category === 'Other' ? profile.categoryCustom : profile.category;
   const isFbConnected = fbPages.length > 0;
+  const selectedCount = selectedPageIds.length;
 
   return (
     <View style={styles.container}>
@@ -507,28 +543,68 @@ export default function SettingsScreen({ onBack }: Props) {
           {/* Facebook Pages */}
           {isFbConnected ? (
             <View>
+              {/* Header row */}
               <View style={styles.row}>
                 <View style={styles.rowContent}>
                   <Text style={styles.rowTitle}>Facebook Pages</Text>
-                  {activeFbPage
-                    ? <Text style={styles.rowSubtitle}>{activeFbPage.name}</Text>
-                    : <Text style={styles.rowSubtitle}>{fbPages.length} page{fbPages.length !== 1 ? 's' : ''} connected</Text>
-                  }
+                  <Text style={styles.rowSubtitle}>
+                    {selectedCount === 0
+                      ? 'No pages selected'
+                      : `${selectedCount} page${selectedCount !== 1 ? 's' : ''} selected`}
+                  </Text>
                 </View>
-                <View style={styles.connectedChip}>
-                  <Text style={styles.connectedChipText}>Connected</Text>
-                </View>
-              </View>
-              {fbPages.length > 1 && (
                 <TouchableOpacity
-                  style={styles.pageSelectRow}
-                  onPress={() => handleSelectFbPage(fbPages[0])}
-                  activeOpacity={0.7}
+                  style={styles.actionBtn}
+                  onPress={handleOpenManagePages}
+                  activeOpacity={0.8}
                 >
-                  <Text style={styles.pageSelectText}>Change page</Text>
-                  <Text style={styles.chevron}>›</Text>
+                  <Text style={styles.actionBtnText}>Manage Pages</Text>
                 </TouchableOpacity>
+              </View>
+
+              {/* Manage pages panel */}
+              {managePagesOpen && (
+                <View style={styles.managePagesPanel}>
+                  <View style={styles.divider} />
+                  {fbPages.map(page => {
+                    const isChecked = pendingSelection.includes(page.id);
+                    return (
+                      <TouchableOpacity
+                        key={page.id}
+                        style={styles.pageRow}
+                        onPress={() => handleTogglePage(page.id)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.pageRowName} numberOfLines={1}>{page.account_name}</Text>
+                        <View style={[styles.checkbox, isChecked && styles.checkboxChecked]}>
+                          {isChecked && <Text style={styles.checkmark}>✓</Text>}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <View style={styles.managePagesActions}>
+                    <TouchableOpacity
+                      style={[styles.savePagesBtn, savingSelection && styles.authBtnDisabled]}
+                      onPress={handleSavePageSelection}
+                      disabled={savingSelection}
+                      activeOpacity={0.8}
+                    >
+                      {savingSelection
+                        ? <ActivityIndicator color={colors.bg} size="small" />
+                        : <Text style={styles.savePagesBtnText}>Save</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.cancelPagesBtn}
+                      onPress={() => setManagePagesOpen(false)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.cancelPagesBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               )}
+
+              {/* Reconnect / Disconnect */}
               <View style={styles.fbActionsRow}>
                 <TouchableOpacity
                   style={styles.fbReconnectBtn}
@@ -546,7 +622,9 @@ export default function SettingsScreen({ onBack }: Props) {
                   disabled={fbDisconnecting}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>
+                  {fbDisconnecting
+                    ? <ActivityIndicator color={colors.textMuted} size="small" />
+                    : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -590,7 +668,7 @@ export default function SettingsScreen({ onBack }: Props) {
         </View>
         <Text style={styles.groupNote}>
           {sessionToken
-            ? 'Posts are published to your connected accounts when you tap Post Everywhere.'
+            ? 'Posts are published to your selected accounts when you tap Post Everywhere.'
             : 'Sign in to connect publishing accounts.'}
         </Text>
 
@@ -732,11 +810,25 @@ const styles = StyleSheet.create({
   actionBtnDanger: { backgroundColor: 'rgba(255,80,80,0.12)', borderWidth: 1, borderColor: 'rgba(255,80,80,0.3)' },
   actionBtnTextDanger: { color: '#FF5050' },
 
-  // Facebook connected state
-  connectedChip: { backgroundColor: 'rgba(82,214,164,0.15)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
-  connectedChipText: { fontSize: 12, fontWeight: '700', color: colors.success },
-  pageSelectRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 },
-  pageSelectText: { fontSize: 13, color: colors.cyan, fontWeight: '600' },
+  // Manage pages panel
+  managePagesPanel: { paddingBottom: 4 },
+  pageRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13 },
+  pageRowName: { flex: 1, fontSize: 14, color: colors.textPrimary, marginRight: 12 },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 5,
+    borderWidth: 1.5, borderColor: colors.border,
+    backgroundColor: colors.bg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: colors.cyan, borderColor: colors.cyan },
+  checkmark: { fontSize: 13, color: colors.bg, fontWeight: '700', lineHeight: 16 },
+  managePagesActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 14 },
+  savePagesBtn: { flex: 1, backgroundColor: colors.cyan, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
+  savePagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  cancelPagesBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
+  cancelPagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
+
+  // Facebook action buttons
   fbActionsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 14 },
   fbReconnectBtn: { flex: 1, borderWidth: 1, borderColor: colors.cyan, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
   fbReconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },

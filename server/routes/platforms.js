@@ -19,7 +19,7 @@ router.use(requireAuth);
 // ── GET /platforms ─────────────────────────────────────────────────────────
 router.get('/', wrap(async (req, res) => {
   const { rows: platforms } = await getPool().query(
-    `SELECT id, platform, account_name, account_id, token_expires_at, connected_at
+    `SELECT id, platform, account_name, account_id, selected, token_expires_at, connected_at
      FROM connected_platforms
      WHERE user_id = $1
      ORDER BY connected_at DESC`,

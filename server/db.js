@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let _pool        = null;
 let _initialized = false;
@@ -47,97 +47,120 @@ async function migrate(pool) {
       )
     `);
 
-    const { rows } = await client.query(
-      'SELECT version FROM schema_migrations WHERE version = $1',
-      [SCHEMA_VERSION]
+    // Load all applied versions so migrations are incremental.
+    const { rows: appliedRows } = await client.query(
+      'SELECT version FROM schema_migrations ORDER BY version ASC'
     );
-    if (rows.length > 0) {
+    const applied = new Set(appliedRows.map(r => r.version));
+
+    if (applied.has(SCHEMA_VERSION)) {
       await client.query('COMMIT');
       return;
     }
 
-    // V1 — initial schema
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id            BIGSERIAL PRIMARY KEY,
-        email         TEXT   NOT NULL UNIQUE,
-        password_hash TEXT   NOT NULL,
-        created_at    BIGINT NOT NULL,
-        updated_at    BIGINT NOT NULL
-      )
-    `);
+    // ── V1: initial schema ────────────────────────────────────────────────────
+    if (!applied.has(1)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id            BIGSERIAL PRIMARY KEY,
+          email         TEXT   NOT NULL UNIQUE,
+          password_hash TEXT   NOT NULL,
+          created_at    BIGINT NOT NULL,
+          updated_at    BIGINT NOT NULL
+        )
+      `);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id         BIGSERIAL PRIMARY KEY,
-        user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token      TEXT   NOT NULL UNIQUE,
-        created_at BIGINT NOT NULL,
-        expires_at BIGINT NOT NULL
-      )
-    `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id         BIGSERIAL PRIMARY KEY,
+          user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token      TEXT   NOT NULL UNIQUE,
+          created_at BIGINT NOT NULL,
+          expires_at BIGINT NOT NULL
+        )
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS business_settings (
-        id            BIGSERIAL PRIMARY KEY,
-        user_id       BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-        settings_json TEXT   NOT NULL DEFAULT '{}',
-        updated_at    BIGINT NOT NULL
-      )
-    `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS business_settings (
+          id            BIGSERIAL PRIMARY KEY,
+          user_id       BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          settings_json TEXT   NOT NULL DEFAULT '{}',
+          updated_at    BIGINT NOT NULL
+        )
+      `);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS connected_platforms (
-        id                BIGSERIAL PRIMARY KEY,
-        user_id           BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        platform          TEXT   NOT NULL
-          CHECK(platform IN ('google','facebook','wordpress')),
-        account_name      TEXT   NOT NULL,
-        account_id        TEXT   NOT NULL,
-        access_token_enc  TEXT,
-        refresh_token_enc TEXT,
-        token_expires_at  BIGINT,
-        connected_at      BIGINT NOT NULL,
-        updated_at        BIGINT NOT NULL,
-        UNIQUE(user_id, platform, account_id)
-      )
-    `);
+      // selected and tasks_json are present from the start on fresh installs.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS connected_platforms (
+          id                BIGSERIAL PRIMARY KEY,
+          user_id           BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          platform          TEXT    NOT NULL
+            CHECK(platform IN ('google','facebook','wordpress')),
+          account_name      TEXT    NOT NULL,
+          account_id        TEXT    NOT NULL,
+          access_token_enc  TEXT,
+          refresh_token_enc TEXT,
+          token_expires_at  BIGINT,
+          selected          BOOLEAN NOT NULL DEFAULT false,
+          tasks_json        TEXT,
+          connected_at      BIGINT  NOT NULL,
+          updated_at        BIGINT  NOT NULL,
+          UNIQUE(user_id, platform, account_id)
+        )
+      `);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS oauth_states (
-        id         BIGSERIAL PRIMARY KEY,
-        state      TEXT   NOT NULL UNIQUE,
-        user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        platform   TEXT   NOT NULL,
-        created_at BIGINT NOT NULL,
-        expires_at BIGINT NOT NULL,
-        used_at    BIGINT
-      )
-    `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state)`);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS oauth_states (
+          id         BIGSERIAL PRIMARY KEY,
+          state      TEXT   NOT NULL UNIQUE,
+          user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          platform   TEXT   NOT NULL,
+          created_at BIGINT NOT NULL,
+          expires_at BIGINT NOT NULL,
+          used_at    BIGINT
+        )
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_oauth_states_state ON oauth_states(state)`);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS publishing_records (
-        id               BIGSERIAL PRIMARY KEY,
-        user_id          BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        platform         TEXT   NOT NULL,
-        platform_post_id TEXT,
-        job_ref          TEXT,
-        status           TEXT   NOT NULL DEFAULT 'pending'
-          CHECK(status IN ('pending','published','failed')),
-        error_message    TEXT,
-        published_at     BIGINT,
-        created_at       BIGINT NOT NULL,
-        updated_at       BIGINT NOT NULL
-      )
-    `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS publishing_records (
+          id               BIGSERIAL PRIMARY KEY,
+          user_id          BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          platform         TEXT   NOT NULL,
+          platform_post_id TEXT,
+          job_ref          TEXT,
+          status           TEXT   NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','published','failed')),
+          error_message    TEXT,
+          published_at     BIGINT,
+          created_at       BIGINT NOT NULL,
+          updated_at       BIGINT NOT NULL
+        )
+      `);
 
-    await client.query(
-      'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
-      [SCHEMA_VERSION, Date.now()]
-    );
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [1, Date.now()]
+      );
+    }
+
+    // ── V2: add selected and tasks_json to existing connected_platforms rows ──
+    if (!applied.has(2)) {
+      await client.query(`
+        ALTER TABLE connected_platforms
+          ADD COLUMN IF NOT EXISTS selected   BOOLEAN NOT NULL DEFAULT false
+      `);
+      await client.query(`
+        ALTER TABLE connected_platforms
+          ADD COLUMN IF NOT EXISTS tasks_json TEXT
+      `);
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [2, Date.now()]
+      );
+    }
 
     await client.query('COMMIT');
   } catch (err) {

@@ -1,9 +1,9 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Clipboard from 'expo-clipboard';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Clipboard,
   Image,
   ScrollView,
   StyleSheet,
@@ -22,7 +22,6 @@ import {
   ConnectedChannel,
   SeoMetadata,
   getSessionToken,
-  getActiveFacebookPage,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -66,10 +65,19 @@ const BADGE_COLORS: Record<PhotoClassification, string> = {
   Team: '#0D2E6B',
 };
 
+type PageResult = {
+  pageId: string;
+  pageName: string;
+  ok: boolean;
+  postUrl?: string;
+  error?: string;
+  duplicate?: boolean;
+};
+
 type PublishState =
   | { status: 'idle' }
   | { status: 'publishing' }
-  | { status: 'success'; postUrl: string }
+  | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
 export default function ResultScreen({ payload, onBack, onShowSettings }: Props) {
@@ -231,28 +239,17 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
   }, []);
 
   const copyItem = (item: 'social' | 'web') => {
-    Clipboard.setString(item === 'social' ? editedSocial : editedWordpress);
+    Clipboard.setStringAsync(item === 'social' ? editedSocial : editedWordpress);
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     setCopiedItem(item);
     copiedTimerRef.current = setTimeout(() => setCopiedItem(null), 2000);
   };
 
   const publishToFacebook = async (sessionToken: string) => {
-    const activePage = await getActiveFacebookPage();
-    if (!activePage) {
-      Alert.alert(
-        'No Facebook page selected',
-        'Go to Settings → Connected Accounts and select a Facebook page.',
-        [{ text: 'Open Settings', onPress: onShowSettings }, { text: 'Cancel', style: 'cancel' }]
-      );
-      return;
-    }
-
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
 
     const formData = new FormData();
     formData.append('message', editedSocial);
-    formData.append('platform_id', String(activePage.id));
     formData.append('job_id', jobId);
 
     payload.photos.forEach((photo, i) => {
@@ -274,13 +271,20 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
 
       const data = await res.json();
 
-      if (!res.ok) {
-        const errMsg = data.error ?? `Server error ${res.status}`;
-        setPublishState({ status: 'error', message: errMsg });
+      if (res.status === 422 && data.error === 'no_pages_selected') {
+        setPublishState({
+          status: 'error',
+          message: 'No Facebook pages selected. Go to Settings → Connected Accounts to select pages.',
+        });
         return;
       }
 
-      setPublishState({ status: 'success', postUrl: data.postUrl ?? '' });
+      if (!res.ok) {
+        setPublishState({ status: 'error', message: data.error ?? `Server error ${res.status}` });
+        return;
+      }
+
+      setPublishState({ status: 'success', results: data.results ?? [] });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Publishing failed';
       setPublishState({ status: 'error', message: msg });
@@ -582,10 +586,27 @@ export default function ResultScreen({ payload, onBack, onShowSettings }: Props)
           )}
           {publishState.status === 'success' && (
             <View style={styles.publishSuccessBanner}>
-              <Text style={styles.publishSuccessText}>Posted to Facebook!</Text>
-              {publishState.postUrl ? (
-                <Text style={styles.publishSuccessUrl} numberOfLines={1}>{publishState.postUrl}</Text>
-              ) : null}
+              {publishState.results.map((r, i) => (
+                <View key={i} style={[styles.publishResultRow, i > 0 && styles.publishResultBorder]}>
+                  <Text style={[styles.publishResultIcon, !r.ok && styles.publishResultIconError]}>
+                    {r.ok ? '✓' : '✗'}
+                  </Text>
+                  <View style={styles.publishResultInfo}>
+                    <Text style={[styles.publishResultName, !r.ok && styles.publishResultNameError]}>
+                      {r.pageName}
+                    </Text>
+                    {r.duplicate && (
+                      <Text style={styles.publishResultSub}>Already posted</Text>
+                    )}
+                    {!r.ok && r.error && (
+                      <Text style={styles.publishResultSubError}>{r.error}</Text>
+                    )}
+                    {r.ok && !r.duplicate && r.postUrl && (
+                      <Text style={styles.publishResultSub} numberOfLines={1}>{r.postUrl}</Text>
+                    )}
+                  </View>
+                </View>
+              ))}
             </View>
           )}
           {publishState.status === 'error' && (
@@ -927,13 +948,28 @@ const styles = StyleSheet.create({
   publishSuccessBanner: {
     backgroundColor: 'rgba(82,214,164,0.08)',
     borderRadius: 10,
-    paddingVertical: 10,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: 'rgba(82,214,164,0.2)',
   },
-  publishSuccessText: { fontSize: 14, color: colors.success, fontWeight: '600' },
-  publishSuccessUrl: { fontSize: 11, color: colors.textMuted, marginTop: 3 },
+  publishResultRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  publishResultBorder: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(82,214,164,0.2)',
+  },
+  publishResultIcon: { fontSize: 14, fontWeight: '700', color: colors.success, lineHeight: 20 },
+  publishResultIconError: { color: colors.error },
+  publishResultInfo: { flex: 1 },
+  publishResultName: { fontSize: 14, fontWeight: '600', color: colors.success },
+  publishResultNameError: { color: colors.error },
+  publishResultSub: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  publishResultSubError: { fontSize: 11, color: colors.error, marginTop: 2, opacity: 0.8 },
 
   publishErrorBanner: {
     flexDirection: 'row',

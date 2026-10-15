@@ -137,7 +137,7 @@ CREATE TABLE settings (
 ## Server-Side Database Schema (PostgreSQL)
 
 **Connection:** `DATABASE_URL` environment variable (Railway provides this automatically)  
-**Schema version: 1** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
+**Schema version: 2** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
 
 ```sql
 CREATE TABLE users (
@@ -172,6 +172,8 @@ CREATE TABLE connected_platforms (
   access_token_enc  TEXT,   -- AES-256-GCM encrypted hex; NULL until connected
   refresh_token_enc TEXT,   -- AES-256-GCM encrypted hex; NULL if not applicable
   token_expires_at  BIGINT,
+  selected          BOOLEAN NOT NULL DEFAULT false,  -- user has enabled this page for publishing
+  tasks_json        TEXT,                            -- JSON array of page tasks from /me/accounts
   connected_at      BIGINT  NOT NULL,
   updated_at        BIGINT  NOT NULL,
   UNIQUE(user_id, platform, account_id)
@@ -330,21 +332,26 @@ Mobile                          Elmer Server                  Facebook
   │◄─── { pages } ───────────────────┤
 ```
 
-### Publishing flow (multi-photo)
+### Publishing flow (multi-page, multi-photo)
 
 ```
-1. Mobile → POST /facebook/publish (multipart: message, platform_id, job_id, photo_0…photo_N)
-2. Server checks idempotency (publishing_records WHERE job_ref = fb_{userId}_{jobId} AND status='published')
-3. Server decrypts page access token from connected_platforms
-4. Server inserts publishing_record status='pending'
-5. For each photo: POST /{pageId}/photos?published=false → collect media_fbid values
-6. POST /{pageId}/feed?message=...&attached_media=[{"media_fbid":"..."},...]
-7. Server updates publishing_record to status='published' with platform_post_id
-8. Returns { ok: true, postId, postUrl }
+1. Mobile → POST /facebook/publish (multipart: message, job_id, photo_0…photo_N)
+2. Server fetches all selected=true pages for the user
+3. If none selected → 422 no_pages_selected
+4. For each selected page:
+   a. Validate CREATE_CONTENT or MANAGE task from tasks_json
+   b. Check idempotency (job_ref = fb_{userId}_{jobId}_{accountId} AND status='published')
+   c. Decrypt page access token
+   d. Insert publishing_record status='pending'
+   e. For each photo: POST /{pageId}/photos?published=false → collect media_fbid values
+   f. POST /{pageId}/feed?message=...&attached_media=[{"media_fbid":"..."},...]
+   g. Update publishing_record to status='published' or 'failed'
+5. Returns { ok: anyOk, results: [{pageId, pageName, ok, postId?, postUrl?, duplicate?, error?}] }
 ```
 
 **Graph API version**: `v21.0`  
-**Required permissions**: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`  
+**Required permissions**: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management`  
+**`business_management` rationale**: Required for pages managed via Meta Business Portfolio. Without it, `/me/accounts` returns an empty list for Business Portfolio pages (FB error code 10/200).  
 **Token lifecycle**: Short-lived user token → long-lived user token (60 days) → page access token (non-expiring for managed pages)
 
 ### Facebook Routes
@@ -352,19 +359,23 @@ Mobile                          Elmer Server                  Facebook
 | Endpoint | Auth | Description |
 |---|---|---|
 | `POST /facebook/connect-url` | Bearer | Returns Facebook OAuth authorization URL + creates CSRF state |
-| `GET /facebook/callback` | Public (validates via state) | Facebook redirects here; exchanges code, stores page tokens, redirects to app |
-| `GET /facebook/pages` | Bearer | Lists connected pages for user (no tokens in response) |
-| `POST /facebook/publish` | Bearer, multipart | Publishes post + photos to selected page; idempotent |
+| `GET /facebook/callback` | Public (validates via state) | Facebook redirects here; exchanges code, stores page tokens (selected=true on first insert), redirects to app |
+| `GET /facebook/pages` | Bearer | Lists connected pages with `selected` flag; no tokens in response |
+| `POST /facebook/pages/selection` | Bearer | Replace the user's selected-page set; body: `{page_ids: number[]}` |
+| `POST /facebook/publish` | Bearer, multipart | Publish to all selected pages; per-page idempotency; returns `results[]` |
+
+**Page selection behavior**: New pages are auto-selected (`selected=true`) on first connect. Reconnecting (`ON CONFLICT`) updates the token but does **not** change `selected` — the user's previous choice is preserved.  
+**Error redirect codes**: `no_manageable_pages`, `insufficient_permissions` (FB error codes 10/200), `auth_failed`, `invalid_state`, `state_already_used`, `state_expired`, `missing_params`.
 
 ### Meta App Review requirements
 
 | Item | Detail |
 |---|---|
-| Required permissions | `pages_show_list`, `pages_read_engagement`, `pages_manage_posts` |
-| OAuth redirect URI | `https://your-domain.com/facebook/callback` (must be HTTPS in production) |
+| Required permissions | `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management` |
+| OAuth redirect URI | `https://api.getelmer.com/facebook/callback` (must be HTTPS in production) |
 | App type | Business |
 | Products | Facebook Login, Pages API |
-| Review screencast | Sign in → Settings → Connect Facebook → authorize → select page → create job → Post Everywhere → confirm post appears on page |
+| Review screencast | Sign in → Settings → Connect Facebook → authorize pages → Manage Pages → select pages → create job → Post Everywhere → confirm post appears on each selected page |
 
 ---
 
@@ -416,13 +427,13 @@ Mobile                          Elmer Server                  Facebook
 
 ### Implemented (Phase 2 partial — Facebook integration)
 
-- **Mobile sign-in/register**: Full sign-in form in SettingsScreen (`SettingsScreen.tsx`); session token stored in local SQLite.
-- **Facebook OAuth — server**: `POST /facebook/connect-url` returns authorization URL; `GET /facebook/callback` exchanges code, fetches pages, stores encrypted page tokens; CSRF state validation; redirect to `elmer://oauth/callback` deep link (`server/routes/facebook.js`).
-- **Facebook OAuth — mobile**: `openAuthSessionAsync` opens browser; deep link return on dev/production builds; falls back gracefully on Expo Go. (`SettingsScreen.tsx`)
-- **Facebook page management**: `GET /facebook/pages` lists connected pages; page selection stored in local settings; reconnect/disconnect UI (`SettingsScreen.tsx`, `server/routes/facebook.js`).
-- **Facebook publishing**: `POST /facebook/publish` uploads photos as multipart, stages multi-photo posts as unpublished then creates feed post, handles single-photo and text-only flows, idempotency check via `job_ref`, publishing records saved (`server/routes/facebook.js`).
-- **Post Everywhere — mobile**: Connected channels loaded from server when signed in; "Post" button calls `POST /facebook/publish`; publish status (loading/success/error) shown in result footer (`ResultScreen.tsx`).
-- **77 new automated tests** covering OAuth state/callback, page ownership, token storage/encryption, text/single-photo/multi-photo publishing, duplicate prevention, failure handling, retry (`server/test/facebook.test.js`; total: 78 tests passing).
+- **Mobile sign-in/register**: Full sign-in form in SettingsScreen (`SettingsScreen.tsx`); session token stored in SecureStore/SQLite.
+- **Facebook OAuth — server**: `POST /facebook/connect-url` returns authorization URL with `business_management` scope; `GET /facebook/callback` exchanges code, fetches pages via `/me/accounts`, stores encrypted page tokens with `selected=true`; CSRF state validation; redirect to `elmer://oauth/callback` deep link (`server/routes/facebook.js`).
+- **Facebook OAuth — mobile**: `openAuthSessionAsync` opens browser; deep link return on dev/production builds; falls back gracefully on Expo Go; handles `insufficient_permissions` and `no_manageable_pages` error codes with specific alerts and Reconnect option (`SettingsScreen.tsx`).
+- **Facebook multi-page management**: `GET /facebook/pages` lists connected pages with `selected` flag; `POST /facebook/pages/selection` replaces the selection set; Manage Pages UI with per-page checkboxes; reconnect/disconnect UI; one-time multi-page warning alert (`SettingsScreen.tsx`, `server/routes/facebook.js`).
+- **Facebook multi-page publishing**: `POST /facebook/publish` publishes to all selected pages independently; per-page idempotency key includes Facebook account ID; partial success preserved; `tasks_json` used to validate `CREATE_CONTENT`/`MANAGE` permission; photos re-read per page (`server/routes/facebook.js`).
+- **Post Everywhere — mobile**: Connected channels loaded from server (selected Facebook pages filtered server-side); "Post" button publishes to all; per-page results shown in result footer (`ResultScreen.tsx`).
+- **88 automated tests** (DB, auth, platforms, Facebook: OAuth state/callback including Business Portfolio, page selection endpoint, multi-page publish, partial success, per-page idempotency, token encryption) — all passing (`server/test/`).
 
 ### Stub — UI exists but action is a no-op or alert
 
@@ -436,14 +447,10 @@ Mobile                          Elmer Server                  Facebook
 
 ### Planned — no implementation exists
 
-- Mobile app authentication (send Bearer token on all API requests; Phase 2)
 - Google Business Profile OAuth callback and posting API
-- Facebook OAuth callback and Pages posting API
 - WordPress REST API publishing
 - Cross-device settings synchronization
 - Stripe billing and subscription management
-- Duplicate publish prevention
-- Per-platform publish status tracking
 - Push notifications
 
 ---
