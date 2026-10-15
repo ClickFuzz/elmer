@@ -8,7 +8,7 @@ const { requireAuth } = require('../auth');
 const router = Router();
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const VALID_PLATFORMS    = new Set(['google', 'facebook', 'wordpress']);
+const VALID_PLATFORMS    = new Set(['google', 'facebook', 'instagram', 'wordpress']);
 
 const wrap = fn => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);

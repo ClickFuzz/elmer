@@ -28,6 +28,9 @@ import {
   FacebookPage,
   getMultiPageWarningShown,
   setMultiPageWarningShown,
+  setInstagramConnected,
+  getInstagramExplanationShown,
+  setInstagramExplanationShown,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -95,10 +98,27 @@ export default function SettingsScreen({ onBack }: Props) {
   const [pendingSelection, setPendingSelection] = useState<number[]>([]);
   const [savingSelection, setSavingSelection] = useState(false);
 
+  // ── Instagram state ────────────────────────────────────────────────────────
+  const [igAccount, setIgAccount] = useState<{ id: number; account_name: string; account_id: string; token_expires_at: number | null } | null>(null);
+  const [igConnecting, setIgConnecting] = useState(false);
+  const [igDisconnecting, setIgDisconnecting] = useState(false);
+
   const refreshFbPages = async (token: string) => {
     const pages = await fetchFacebookPages(token, API_URL);
     setFbPages(pages);
     setSelectedPageIds(pages.filter(p => p.selected).map(p => p.id));
+  };
+
+  const refreshIgAccount = async (token: string) => {
+    try {
+      const res = await fetch(`${API_URL}/instagram/account`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setIgAccount(data.account ?? null);
+      await setInstagramConnected(!!data.account);
+    } catch { /* ignore */ }
   };
 
   useEffect(() => {
@@ -112,7 +132,10 @@ export default function SettingsScreen({ onBack }: Props) {
       ([tok, email]) => {
         setSessionToken(tok);
         setSessionEmailState(email);
-        if (tok) refreshFbPages(tok);
+        if (tok) {
+          refreshFbPages(tok);
+          refreshIgAccount(tok);
+        }
       }
     ).catch(() => {});
   }, []);
@@ -344,9 +367,104 @@ export default function SettingsScreen({ onBack }: Props) {
     );
   };
 
+  // ── Instagram OAuth handlers ──────────────────────────────────────────────
+
+  const handleConnectInstagram = async () => {
+    if (!sessionToken) {
+      Alert.alert('Sign In Required', 'Sign in to your Elmer account to connect Instagram.', [{ text: 'OK' }]);
+      return;
+    }
+
+    setIgConnecting(true);
+    try {
+      const res = await fetch(`${API_URL}/instagram/connect-url`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Connection failed', data.error ?? 'Could not start Instagram authorization.');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      console.log('[ig-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
+
+      if (result.type === 'success') {
+        const url = result.url;
+        const params = new URLSearchParams((url.split('?')[1] ?? '').split('#')[0]);
+        const error = params.get('error');
+
+        if (error) {
+          if (error === 'personal_account_not_supported') {
+            Alert.alert(
+              'Business Account Required',
+              'Instagram publishing requires a Business or Creator account. Personal Instagram accounts cannot be connected.\n\nSwitch your account to Business or Creator in the Instagram app, then try connecting again.',
+              [{ text: 'OK' }]
+            );
+            return;
+          }
+          Alert.alert('Connection failed', `Instagram returned: ${error}`);
+          return;
+        }
+
+        if (params.get('success') === 'true') {
+          await refreshIgAccount(sessionToken);
+          const shown = await getInstagramExplanationShown();
+          if (!shown) {
+            await setInstagramExplanationShown();
+            Alert.alert(
+              'Instagram photos',
+              "Your photos will be shared across all connected platforms by default. Want a photo to appear only on Instagram? Tap the photo and select Instagram Only.\n\nInstagram will receive all your photos. Other platforms will receive only photos marked All Platforms.",
+              [{ text: 'Got it' }]
+            );
+          } else {
+            Alert.alert('Instagram connected!', 'Your Instagram account has been connected.', [{ text: 'OK' }]);
+          }
+        }
+      }
+
+      await refreshIgAccount(sessionToken);
+    } catch (err) {
+      Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
+    } finally {
+      setIgConnecting(false);
+    }
+  };
+
+  const handleDisconnectInstagram = () => {
+    Alert.alert(
+      'Disconnect Instagram',
+      'Remove your Instagram account connection? You can reconnect at any time.',
+      [
+        { text: 'Disconnect', style: 'destructive', onPress: async () => {
+          if (!sessionToken || !igAccount) return;
+          setIgDisconnecting(true);
+          try {
+            await fetch(`${API_URL}/platforms/${igAccount.id}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${sessionToken}` },
+            });
+            setIgAccount(null);
+            await setInstagramConnected(false);
+          } catch {
+            Alert.alert('Error', 'Could not disconnect. Try again.');
+          } finally {
+            setIgDisconnecting(false);
+          }
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
   const effectiveCategory = profile.category === 'Other' ? profile.categoryCustom : profile.category;
   const isFbConnected = fbPages.length > 0;
   const selectedCount = selectedPageIds.length;
+  const isIgConnected = igAccount !== null;
+  const IG_EXPIRY_WARN_MS = 7 * 24 * 60 * 60 * 1000;
+  const igTokenExpiringSoon = igAccount?.token_expires_at != null
+    && igAccount.token_expires_at < (new Date().getTime() + IG_EXPIRY_WARN_MS);
 
   return (
     <View style={styles.container}>
@@ -688,6 +806,67 @@ export default function SettingsScreen({ onBack }: Props) {
 
           <View style={styles.rowDivider} />
 
+          {/* Instagram */}
+          {isIgConnected ? (
+            <View>
+              <View style={styles.row}>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowTitle}>Instagram</Text>
+                  <Text style={styles.rowSubtitle}>{igAccount!.account_name}</Text>
+                  {igTokenExpiringSoon && (
+                    <Text style={[styles.rowSubtitle, { color: '#C8A040', marginTop: 2 }]}>Token expiring soon — reconnect</Text>
+                  )}
+                </View>
+                <View style={styles.connectedChipInline}>
+                  <Text style={styles.connectedChipInlineText}>Connected</Text>
+                </View>
+              </View>
+              <View style={styles.fbActionsRow}>
+                <TouchableOpacity
+                  style={styles.fbReconnectBtn}
+                  onPress={handleConnectInstagram}
+                  disabled={igConnecting}
+                  activeOpacity={0.8}
+                >
+                  {igConnecting
+                    ? <ActivityIndicator color={colors.cyan} size="small" />
+                    : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.fbDisconnectBtn}
+                  onPress={handleDisconnectInstagram}
+                  disabled={igDisconnecting}
+                  activeOpacity={0.8}
+                >
+                  {igDisconnecting
+                    ? <ActivityIndicator color={colors.textMuted} size="small" />
+                    : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.row}>
+              <View style={styles.rowContent}>
+                <Text style={styles.rowTitle}>Instagram</Text>
+                <Text style={styles.rowSubtitle}>
+                  {sessionToken ? 'Not connected' : 'Sign in to connect'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || igConnecting) && styles.actionBtnDisabled]}
+                onPress={handleConnectInstagram}
+                disabled={!sessionToken || igConnecting}
+                activeOpacity={0.7}
+              >
+                {igConnecting
+                  ? <ActivityIndicator color={colors.bg} size="small" />
+                  : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.rowDivider} />
+
           {/* WordPress */}
           <View style={styles.row}>
             <View style={styles.rowContent}>
@@ -871,6 +1050,14 @@ const styles = StyleSheet.create({
   fbReconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
   fbDisconnectBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 8, alignItems: 'center' },
   fbDisconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
+
+  connectedChipInline: {
+    backgroundColor: 'rgba(82,214,164,0.15)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: '#52D6A4' },
 
   storageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
   storageKey: { fontSize: 15, color: colors.textPrimary },

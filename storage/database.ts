@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export type SeoMetadata = {
   seoTitle: string;
@@ -51,6 +51,7 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         job_id INTEGER NOT NULL,
         local_uri TEXT NOT NULL,
         classification TEXT NOT NULL DEFAULT 'General',
+        destination TEXT NOT NULL DEFAULT 'all',
         sort_order INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
       );
@@ -77,6 +78,9 @@ async function migrate(db: SQLite.SQLiteDatabase) {
       await db.execAsync('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     } catch { /* already exists */ }
   }
+  if (version < 6) {
+    try { await db.execAsync("ALTER TABLE job_photos ADD COLUMN destination TEXT NOT NULL DEFAULT 'all'"); } catch { /* already exists */ }
+  }
 
   if (version < SCHEMA_VERSION) {
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -92,7 +96,7 @@ export async function saveJob(params: {
   location: string;
   seoMetadata: SeoMetadata | null;
   isMock: boolean;
-  photos: { uri: string; classification: string }[];
+  photos: { uri: string; classification: string; destination?: string }[];
 }): Promise<number> {
   const db = await getDb();
   const now = Date.now();
@@ -128,8 +132,8 @@ export async function saveJob(params: {
 
   for (let i = 0; i < params.photos.length; i++) {
     await db.runAsync(
-      `INSERT INTO job_photos (job_id, local_uri, classification, sort_order) VALUES (?, ?, ?, ?)`,
-      [jobId, params.photos[i].uri, params.photos[i].classification, i]
+      `INSERT INTO job_photos (job_id, local_uri, classification, destination, sort_order) VALUES (?, ?, ?, ?, ?)`,
+      [jobId, params.photos[i].uri, params.photos[i].classification, params.photos[i].destination ?? 'all', i]
     );
   }
 
@@ -255,6 +259,7 @@ export async function saveBusinessProfile(profile: BusinessProfile): Promise<voi
 export type PendingPhoto = {
   uri: string;
   classification: string;
+  destination?: string;
   gps?: { lat: number; lng: number };
 };
 
@@ -348,6 +353,29 @@ export async function setMultiPageWarningShown(): Promise<void> {
   await setSetting('fb_multi_page_warned', '1');
 }
 
+export async function getInstagramConnected(): Promise<boolean> {
+  const val = await getSetting('instagram_connected');
+  return val === '1';
+}
+
+export async function setInstagramConnected(connected: boolean): Promise<void> {
+  if (connected) {
+    await setSetting('instagram_connected', '1');
+  } else {
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM settings WHERE key = 'instagram_connected'`);
+  }
+}
+
+export async function getInstagramExplanationShown(): Promise<boolean> {
+  const val = await getSetting('ig_explanation_shown');
+  return val === '1';
+}
+
+export async function setInstagramExplanationShown(): Promise<void> {
+  await setSetting('ig_explanation_shown', '1');
+}
+
 export type Job = {
   id: number;
   createdAt: number;
@@ -368,6 +396,7 @@ export async function deleteJob(id: number): Promise<void> {
 export type JobPhoto = {
   localUri: string;
   classification: string;
+  destination: string;
   sortOrder: number;
 };
 
@@ -376,14 +405,16 @@ export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
   const rows = await db.getAllAsync<{
     local_uri: string;
     classification: string;
+    destination: string;
     sort_order: number;
   }>(
-    'SELECT local_uri, classification, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
+    'SELECT local_uri, classification, destination, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
     [jobId]
   );
   return rows.map(r => ({
     localUri: r.local_uri,
     classification: r.classification,
+    destination: r.destination ?? 'all',
     sortOrder: r.sort_order,
   }));
 }

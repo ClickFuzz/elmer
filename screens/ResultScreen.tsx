@@ -74,6 +74,7 @@ type PageResult = {
   pageName: string;
   platform: string;
   ok: boolean;
+  postId?: string;
   postUrl?: string;
   error?: string;
   duplicate?: boolean;
@@ -225,7 +226,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           location: loc,
           seoMetadata: data.seoMetadata ?? null,
           isMock: data.mock === true,
-          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification })),
+          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification, destination: p.destination ?? 'all' })),
         }).then(jobId => setSavedJobId(jobId)).catch(err => console.warn('DB save failed:', err));
 
         break; // success — exit retry loop
@@ -289,13 +290,58 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     copiedTimerRef.current = setTimeout(() => setCopiedItem(null), 2000);
   };
 
-  const publishToFacebook = async (sessionToken: string) => {
+  const runFacebookPublish = async (sessionToken: string): Promise<PageResult[]> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
 
     const formData = new FormData();
     formData.append('message', editedSocial);
     formData.append('job_id', jobId);
 
+    // Filter out instagram_only photos — Facebook receives only 'all' photos
+    const fbPhotos = payload.photos.filter(p => (p.destination ?? 'all') !== 'instagram_only');
+    fbPhotos.forEach((photo, i) => {
+      formData.append(`photo_${i}`, {
+        uri: photo.uri,
+        type: 'image/jpeg',
+        name: `photo_${i}.jpg`,
+      } as unknown as Blob);
+    });
+
+    // Use XMLHttpRequest — RN's fetch throws "Unsupported FormData part implementation"
+    // when FormData contains native file objects ({uri, type, name}), but XHR handles them.
+    const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}/facebook/publish`);
+      xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+      xhr.send(formData);
+    });
+
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(body); } catch { data = {}; }
+
+    if (status === 422 && data.error === 'no_pages_selected') {
+      return [{ pageId: 'fb', pageName: 'Facebook', platform: 'facebook', ok: false, error: 'No Facebook pages selected. Go to Settings → Connected Accounts to select pages.' }];
+    }
+    if (status < 200 || status >= 300) {
+      return [{ pageId: 'fb', pageName: 'Facebook', platform: 'facebook', ok: false, error: (data.error as string) ?? `Server error ${status}` }];
+    }
+
+    const rawResults = (data.results as Omit<PageResult, 'platform'>[]) ?? [];
+    return rawResults.map(r => ({ ...r, platform: 'facebook' }));
+  };
+
+  const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
+    const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+
+    const formData = new FormData();
+    formData.append('caption', editedSocial);
+    formData.append('job_id', jobId);
+
+    // Send ALL photos to Instagram (no destination filtering)
     payload.photos.forEach((photo, i) => {
       formData.append(`photo_${i}`, {
         uri: photo.uri,
@@ -304,47 +350,36 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
       } as unknown as Blob);
     });
 
-    setPublishState({ status: 'publishing' });
+    const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}/instagram/publish`);
+      xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+      xhr.send(formData);
+    });
 
-    // Use XMLHttpRequest — RN's fetch throws "Unsupported FormData part implementation"
-    // when FormData contains native file objects ({uri, type, name}), but XHR handles them.
-    try {
-      const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${API_URL}/facebook/publish`);
-        xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
-        xhr.timeout = TIMEOUT_MS;
-        xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-        xhr.onerror = () => reject(new Error('Network error'));
-        xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
-        xhr.send(formData);
-      });
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(body); } catch { data = {}; }
 
-      let data: Record<string, unknown>;
-      try { data = JSON.parse(body); } catch { data = {}; }
-
-      if (status === 422 && data.error === 'no_pages_selected') {
-        setPublishState({
-          status: 'error',
-          message: 'No Facebook pages selected. Go to Settings → Connected Accounts to select pages.',
-        });
-        return;
-      }
-
-      if (status < 200 || status >= 300) {
-        setPublishState({ status: 'error', message: (data.error as string) ?? `Server error ${status}` });
-        return;
-      }
-
-      const rawResults = (data.results as Omit<PageResult, 'platform'>[]) ?? [];
-      setPublishState({
-        status: 'success',
-        results: rawResults.map(r => ({ ...r, platform: 'facebook' })),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Publishing failed';
-      setPublishState({ status: 'error', message: msg });
+    if (status === 422 && data.error === 'no_instagram_account') {
+      return { pageId: 'ig', pageName: 'Instagram', platform: 'instagram', ok: false, error: 'No Instagram account connected. Go to Settings → Connected Accounts.' };
     }
+    if (status === 422 && data.error === 'token_expired') {
+      return { pageId: 'ig', pageName: 'Instagram', platform: 'instagram', ok: false, error: 'Instagram token expired. Reconnect in Settings.' };
+    }
+    if (status < 200 || status >= 300) {
+      return { pageId: 'ig', pageName: 'Instagram', platform: 'instagram', ok: false, error: (data.error as string) ?? `Server error ${status}` };
+    }
+
+    const result = data as { ok: boolean; accountName?: string; postId?: string; postUrl?: string; duplicate?: boolean; error?: string };
+    const pageName = result.accountName ?? 'Instagram';
+    if (result.ok) {
+      return { pageId: 'ig', pageName, platform: 'instagram', ok: true, postId: result.postId, postUrl: result.postUrl, duplicate: result.duplicate };
+    }
+    return { pageId: 'ig', pageName, platform: 'instagram', ok: false, error: result.error };
   };
 
   const handlePostEverywhere = async () => {
@@ -373,15 +408,36 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
       return;
     }
 
-    const hasFacebook = connectedChannels.some(ch => ch.platform === 'facebook');
-    const channelList = connectedChannels.map(ch => ch.accountName).join(', ');
+    const hasFacebook  = connectedChannels.some(ch => ch.platform === 'facebook');
+    const hasInstagram = connectedChannels.some(ch => ch.platform === 'instagram');
+    const channelList  = connectedChannels.map(ch => ch.accountName).join(', ');
 
     Alert.alert(
       'Publish?',
       `Post to: ${channelList}`,
       [
-        { text: 'Post', onPress: () => {
-          if (hasFacebook) publishToFacebook(token);
+        { text: 'Post', onPress: async () => {
+          setPublishState({ status: 'publishing' });
+          try {
+            const tasks: Promise<PageResult[]>[] = [];
+            if (hasFacebook)  tasks.push(runFacebookPublish(token).then(results => results));
+            if (hasInstagram) tasks.push(runInstagramPublish(token).then(r => [r]));
+
+            const settled = await Promise.allSettled(tasks);
+            const allResults: PageResult[] = [];
+            for (const s of settled) {
+              if (s.status === 'fulfilled') {
+                allResults.push(...s.value);
+              } else {
+                // Network-level error
+                allResults.push({ pageId: 'unknown', pageName: 'Unknown', platform: 'unknown', ok: false, error: s.reason?.message ?? 'Publishing failed' });
+              }
+            }
+            setPublishState({ status: 'success', results: allResults });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Publishing failed';
+            setPublishState({ status: 'error', message: msg });
+          }
         }},
         { text: 'Cancel', style: 'cancel' },
       ]
@@ -697,7 +753,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           {publishState.status === 'publishing' && (
             <View style={styles.publishingBanner}>
               <ActivityIndicator color={colors.cyan} size="small" />
-              <Text style={styles.publishingText}>Publishing to Facebook…</Text>
+              <Text style={styles.publishingText}>Publishing…</Text>
             </View>
           )}
           {publishState.status === 'error' && (

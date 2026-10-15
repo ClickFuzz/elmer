@@ -24,7 +24,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
-import { savePendingHomeState } from '../storage/database';
+import { savePendingHomeState, getInstagramConnected } from '../storage/database';
 import type { GeneratePayload, HomeState, PhotoClassification, PhotoItem } from '../App';
 
 const MAX_PHOTOS = 5;
@@ -62,6 +62,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   // useState initializer runs on each mount — restores state after back navigation
   const [photos, setPhotos] = useState<PhotoItem[]>(initialState?.photos ?? []);
   const [audioUri, setAudioUri] = useState<string | null>(initialState?.audioUri ?? null);
+  const [igConnected, setIgConnected] = useState(false);
   const [isPlayingBack, setIsPlayingBack] = useState(false);
   const playerRef = useRef<AudioPlayer | null>(null);
 
@@ -74,6 +75,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   const lastProcessedRecorderUri = useRef<string | null>(null);
 
   useEffect(() => {
+    getInstagramConnected().then(setIgConnected).catch(() => {});
     return () => {
       playerRef.current?.remove();
     };
@@ -102,6 +104,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   }, [photos, audioUri]);
 
   const clearAll = () => {
+    setPhotos(prev => prev.map(p => ({ ...p, destination: 'all' as const })));
     setPhotos([]);
     setAudioUri(null);
     if (playerRef.current) {
@@ -176,8 +179,45 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
 
   const changeClassification = (index: number) => {
     const current = photos[index].classification;
-    const apply = (c: PhotoClassification) => {
+    const currentDest = photos[index].destination ?? 'all';
+
+    const showDestinationPicker = () => {
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            title: 'Photo Destination',
+            options: ['All Platforms', 'Instagram Only', 'Cancel'],
+            cancelButtonIndex: 2,
+          },
+          (buttonIndex) => {
+            if (buttonIndex === 0) {
+              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'all' as const } : p));
+            } else if (buttonIndex === 1) {
+              setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'instagram_only' as const } : p));
+            }
+          }
+        );
+      } else {
+        Alert.alert('Photo Destination', undefined, [
+          {
+            text: currentDest === 'all' ? 'All Platforms ✓' : 'All Platforms',
+            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'all' as const } : p)),
+          },
+          {
+            text: currentDest === 'instagram_only' ? 'Instagram Only ✓' : 'Instagram Only',
+            onPress: () => setPhotos(prev => prev.map((p, i) => i === index ? { ...p, destination: 'instagram_only' as const } : p)),
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]);
+      }
+    };
+
+    const applyClassification = (c: PhotoClassification) => {
       setPhotos(prev => prev.map((p, i) => (i === index ? { ...p, classification: c } : p)));
+      if (igConnected) {
+        // Small delay lets the first sheet close before showing the second on iOS
+        setTimeout(showDestinationPicker, Platform.OS === 'ios' ? 400 : 0);
+      }
     };
 
     if (Platform.OS === 'ios') {
@@ -191,7 +231,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
         },
         (buttonIndex) => {
           if (buttonIndex < CLASSIFICATIONS.length) {
-            apply(CLASSIFICATIONS[buttonIndex]);
+            applyClassification(CLASSIFICATIONS[buttonIndex]);
           }
         }
       );
@@ -201,7 +241,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
         'How should this photo be labelled?',
         CLASSIFICATIONS.map(c => ({
           text: c === current ? `${c} ✓` : c,
-          onPress: () => apply(c),
+          onPress: () => applyClassification(c),
         })).concat([{ text: 'Cancel', onPress: () => {} }])
       );
     }
@@ -383,7 +423,9 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
                   <Image source={{ uri: photo.uri }} style={styles.photoImage} />
                   {/* Classification badge */}
                   <View style={[styles.classBadge, { backgroundColor: CLASSIFICATION_COLORS[photo.classification] }]}>
-                    <Text style={styles.classBadgeText}>{photo.classification}</Text>
+                    <Text style={styles.classBadgeText}>
+                      {photo.classification}{photo.destination === 'instagram_only' ? ' · IG' : ''}
+                    </Text>
                   </View>
                   {/* Remove button */}
                   <TouchableOpacity

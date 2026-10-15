@@ -12,6 +12,7 @@ const { requireAuth, optionalAuth }   = require('./auth');
 const authRoutes                      = require('./routes/auth');
 const platformRoutes                  = require('./routes/platforms');
 const { createFacebookRouter }        = require('./routes/facebook');
+const { createInstagramRouter }       = require('./routes/instagram');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -153,7 +154,7 @@ function safeParseJSON(raw) {
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
-function createApp({ facebookRouter } = {}) {
+function createApp({ facebookRouter, instagramRouter } = {}) {
   const app = express();
 
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
@@ -171,7 +172,8 @@ function createApp({ facebookRouter } = {}) {
 
   app.use('/auth',      authRateLimit, authRoutes);
   app.use('/platforms', platformRoutes);
-  app.use('/facebook',  facebookRouter ?? createFacebookRouter());
+  app.use('/facebook',  facebookRouter  ?? createFacebookRouter());
+  app.use('/instagram', instagramRouter ?? createInstagramRouter());
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });
