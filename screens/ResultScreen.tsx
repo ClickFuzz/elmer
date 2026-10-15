@@ -303,16 +303,24 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
 
     setPublishState({ status: 'publishing' });
 
+    // Use XMLHttpRequest — RN's fetch throws "Unsupported FormData part implementation"
+    // when FormData contains native file objects ({uri, type, name}), but XHR handles them.
     try {
-      const res = await raceTimeout(fetch(`${API_URL}/facebook/publish`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
-        body: formData,
-      }));
+      const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_URL}/facebook/publish`);
+        xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+        xhr.timeout = TIMEOUT_MS;
+        xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+        xhr.send(formData);
+      });
 
-      const data = await res.json();
+      let data: Record<string, unknown>;
+      try { data = JSON.parse(body); } catch { data = {}; }
 
-      if (res.status === 422 && data.error === 'no_pages_selected') {
+      if (status === 422 && data.error === 'no_pages_selected') {
         setPublishState({
           status: 'error',
           message: 'No Facebook pages selected. Go to Settings → Connected Accounts to select pages.',
@@ -320,12 +328,12 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
         return;
       }
 
-      if (!res.ok) {
-        setPublishState({ status: 'error', message: data.error ?? `Server error ${res.status}` });
+      if (status < 200 || status >= 300) {
+        setPublishState({ status: 'error', message: (data.error as string) ?? `Server error ${status}` });
         return;
       }
 
-      setPublishState({ status: 'success', results: data.results ?? [] });
+      setPublishState({ status: 'success', results: (data.results as PageResult[]) ?? [] });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Publishing failed';
       setPublishState({ status: 'error', message: msg });
