@@ -221,10 +221,11 @@ export default function SettingsScreen({ onBack }: Props) {
       // automatically. On Expo Go, the browser may not return automatically, but the
       // connection will still complete — tapping "Done" refreshes the status.
       const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      console.log('[fb-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
         const url = result.url;
-        const params = new URLSearchParams(url.split('?')[1] ?? '');
+        const params = new URLSearchParams((url.split('?')[1] ?? '').split('#')[0]);
         if (params.get('error')) {
           const reason = params.get('error');
           if (reason === 'no_manageable_pages') {

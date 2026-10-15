@@ -64,6 +64,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
     const returnBase   = `${returnScheme}://oauth/callback`;
 
     const { code, state, error: fbError, error_description } = req.query;
+    console.log('[facebook] callback hit — code:', !!code, '| state:', !!state, '| fbError:', fbError ?? 'none');
 
     if (fbError) {
       const reason = (typeof error_description === 'string' ? error_description : fbError);
