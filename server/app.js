@@ -152,6 +152,55 @@ function safeParseJSON(raw) {
   }
 }
 
+// Builds the CTA guidance block injected into every generation prompt.
+// Keeps the publisher's URL separate from any client/subject URLs found in
+// the transcript, preventing "ClickFuzz website used as Amped Electric CTA" bugs.
+function buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, businessName }) {
+  const publisherUrl = businessInquiryUrl || businessWebsite;
+  const contentUrls  = Array.isArray(extracted.explicitUrls) ? extracted.explicitUrls : [];
+
+  const subjectName = extracted.primarySubject || '';
+  const hasDistinctSubject =
+    subjectName &&
+    businessName &&
+    subjectName.toLowerCase() !== businessName.toLowerCase();
+
+  const lines = ['CALL TO ACTION:'];
+
+  if (publisherUrl) {
+    lines.push(`Publisher contact URL: ${publisherUrl}`);
+  }
+  if (contentUrls.length > 0) {
+    lines.push(`URLs mentioned in the recording: ${contentUrls.join(', ')}`);
+  }
+  if (hasDistinctSubject) {
+    lines.push(`Note: this post is about "${subjectName}", which is distinct from the publisher "${businessName}"`);
+  }
+
+  lines.push('');
+  lines.push('Rules:');
+
+  if (hasDistinctSubject) {
+    lines.push(`- Write from ${businessName}'s perspective about ${subjectName}`);
+    lines.push(`- The primary CTA should send audiences to ${businessName}'s contact URL${publisherUrl ? ` (${publisherUrl})` : ''}`);
+    if (contentUrls.length > 0) {
+      lines.push(`- Content-specific URLs (${contentUrls.join(', ')}) may be referenced separately if contextually appropriate, but do not present them as the publisher's URL`);
+    }
+  } else if (publisherUrl) {
+    lines.push(`- Include a relevant call to action pointing to: ${publisherUrl}`);
+  }
+
+  if (!publisherUrl && contentUrls.length === 0) {
+    lines.push('- No URL is available — use a natural non-link CTA if appropriate, or omit entirely');
+  }
+
+  lines.push('- Never invent or hallucinate URLs');
+  lines.push('- Do not force a CTA into appreciation posts, personal announcements, or purely informational content');
+  lines.push('- Do not create duplicate CTAs');
+
+  return lines.join('\n');
+}
+
 // ── App factory ──────────────────────────────────────────────────────────────
 
 function createApp({ facebookRouter, instagramRouter } = {}) {
@@ -254,35 +303,47 @@ function createApp({ facebookRouter, instagramRouter } = {}) {
       return res.status(500).json({ error: 'Transcription failed', detail: String(err) });
     }
 
-    // Step 2 — Extract job info
-    let extracted = { location: null, mainService: '', specificWork: '', keyTerms: [] };
+    // Step 2 — Extract content context
+    let extracted = { location: null, mainService: '', specificWork: '', keyTerms: [], contentIntent: '', primarySubject: '', people: [], organizations: [], meaningfulFacts: [], explicitUrls: [], ctaHint: null };
     try {
       const extractResult = await openai.chat.completions.create({
         model:           'gpt-4o-mini',
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'You extract structured job information from contractor descriptions. Return only valid JSON.' },
+          { role: 'system', content: 'You analyze recordings to extract structured context for social media content generation. Return only valid JSON.' },
           {
             role: 'user',
-            content: `Extract information from this contractor job description.
+            content: `Analyze this recording and extract structured context.
 
-Description: "${transcription || 'No audio provided.'}"
+Transcript: "${transcription || 'No audio provided.'}"
 Photos: ${photoCount > 0 ? `${photoCount} photos (${classificationSummary(classifications)})` : 'none'}
+Publishing business: ${businessName || 'not specified'}
+Business category: ${businessCategory || 'not specified'}
 
 Return JSON with exactly these fields:
 {
   "location": { "city": "...", "state": "..." } or null,
-  "mainService": "service category (e.g. Electrical, Roofing, Plumbing)",
-  "specificWork": "one sentence describing exactly what was done",
-  "keyTerms": ["3-5 specific search terms a local customer would use"]
+  "contentIntent": "project update | product announcement | employee recognition | client showcase | personal update | event | educational | other",
+  "primarySubject": "who or what this content is mainly about — may be a client, product, or project distinct from the publishing business",
+  "mainService": "primary service, product, or topic category",
+  "specificWork": "one sentence describing the primary activity or update",
+  "people": ["named individuals and their role or contribution, e.g. 'Jose — installed roof tiles, recognized for work ethic'"],
+  "organizations": ["companies, clients, brands, or named entities distinct from the publishing business"],
+  "meaningfulFacts": ["important details, personal observations, anecdotes — include seasonal notes, compliments, humor, specific products, materials"],
+  "explicitUrls": ["URLs explicitly mentioned in the transcript — only include if actually stated"],
+  "ctaHint": "desired audience action from the transcript, or null",
+  "keyTerms": ["4-6 relevant search terms based on actual topic, industry, and confirmed location"]
 }
 
 Rules:
 - location: Only extract if explicitly stated. Never guess or invent a location.
-- keyTerms: Be specific and local (include city/region if location is known).`,
+- primarySubject: If the recording describes work for a client, the client is the subject; the publishing business is the speaker.
+- meaningfulFacts: Preserve human details — personal observations, employee recognition, humor, anecdotes, seasonal notes. Do not discard non-commercial observations.
+- explicitUrls: Only include URLs actually stated in the transcript.
+- Do not add information absent from the transcript or business profile.`,
           },
         ],
-        max_tokens:  300,
+        max_tokens:  450,
         temperature: 0.1,
       });
       extracted = safeParseJSON(extractResult.choices[0]?.message?.content ?? '{}') ?? extracted;
@@ -292,17 +353,15 @@ Rules:
 
     let { location, mainService, specificWork, keyTerms } = extracted;
 
-    // GPS fallback
+    // GPS fallback — preserved unchanged
     if (!location && gpsCoords.length > 0 && !hasConflictingLocations(gpsCoords)) {
       location = await reverseGeocode(gpsCoords[0].lat, gpsCoords[0].lng);
     }
 
-    const locationStr  = location ? `${location.city}, ${location.state}` : 'location not specified';
-    const photosCtx    = photoCount > 0 ? `Photos: ${photoCount} (${classificationSummary(classifications)}).` : '';
-    const keyTermsStr  = Array.isArray(keyTerms) ? keyTerms.join(', ') : '';
-    const jobDesc      = specificWork || transcription || 'Job description not provided.';
-    const tone         = writingToneFor(writingStyle);
-    const neverInvent  = 'Never invent services, job details, or claim this job occurred in a service area not confirmed by the description.';
+    const locationStr = location ? `${location.city}, ${location.state}` : 'location not specified';
+    const photosCtx   = photoCount > 0 ? `Photos: ${photoCount} (${classificationSummary(classifications)}).` : '';
+    const keyTermsStr = Array.isArray(keyTerms) ? keyTerms.join(', ') : '';
+    const tone        = writingToneFor(writingStyle);
 
     const hasBeforePhoto  = classifications.includes('Before');
     const hasAfterPhoto   = classifications.includes('After');
@@ -316,105 +375,158 @@ Rules:
       : '';
 
     const bizLines = [
-      businessName        && `Business: ${businessName}`,
-      businessCategory    && `Industry: ${businessCategory}`,
+      businessName           && `Business: ${businessName}`,
+      businessCategory       && `Industry: ${businessCategory}`,
       businessServices.length && `Services offered: ${businessServices.join(', ')}`,
-      businessDescription && `About: ${businessDescription}`,
+      businessDescription    && `About: ${businessDescription}`,
     ].filter(Boolean).join('\n');
     const serviceAreaCtx = serviceAreasList.length ? `Service areas: ${serviceAreasList.join(', ')}` : '';
 
-    // Link destination: customer inquiry URL > website > no link
-    const contactUrl = businessInquiryUrl || businessWebsite;
+    // ── Content brief: rich extracted context for generation prompts ───────────
+    const subjectName = extracted.primarySubject || '';
+    const hasDistinctSubject =
+      subjectName &&
+      businessName &&
+      subjectName.toLowerCase() !== businessName.toLowerCase();
 
-    const googlePrompt = `Write a Google Business Profile post for a contractor.
+    const contentBriefLines = [
+      extracted.contentIntent                && `Content type: ${extracted.contentIntent}`,
+      hasDistinctSubject                     && `Subject of this post: ${subjectName} (distinct from publisher ${businessName})`,
+      extracted.mainService                  && `Primary topic/service: ${extracted.mainService}`,
+      extracted.people?.length               && `People mentioned: ${extracted.people.join('; ')}`,
+      extracted.organizations?.length        && `Organizations/entities mentioned: ${extracted.organizations.join(', ')}`,
+      extracted.meaningfulFacts?.length      && `Key details to preserve: ${extracted.meaningfulFacts.join(' | ')}`,
+      extracted.ctaHint                      && `Desired audience action: ${extracted.ctaHint}`,
+      locationStr !== 'location not specified' && `Location: ${locationStr}`,
+      keyTermsStr                            && `Relevant terms: ${keyTermsStr}`,
+    ].filter(Boolean);
+    const contentBrief = contentBriefLines.join('\n');
 
-Job: ${jobDesc}
+    // Always pass the full transcript as the primary source.
+    // Structured extraction supplements but never replaces it.
+    const transcriptCtx = transcription
+      ? `RECORDING TRANSCRIPT (primary source — preserve the speaker's intended message and all meaningful details):\n"${transcription}"`
+      : `CONTENT DESCRIPTION:\n"${specificWork || 'No description provided.'}"`;
+
+    const ctaBlock = buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, businessName });
+
+    // ── Prompts ────────────────────────────────────────────────────────────────
+
+    const speakerCtx = businessName ? `${businessName}'s` : "the publisher's";
+
+    const socialPrompt = [
+      'Write a social media post.',
+      '',
+      transcriptCtx,
+      '',
+      contentBrief ? `CONTENT BRIEF:\n${contentBrief}` : '',
+      photosCtx    ? `\n${photosCtx}` : '',
+      bizLines     ? `\nPUBLISHING BUSINESS:\n${bizLines}` : '',
+      serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
+      '',
+      'WRITING REQUIREMENTS:',
+      `- Writing tone: ${tone}${customStyleCtx}`,
+      `- Write from ${speakerCtx} perspective`,
+      `- ${beforeAfterRule}`,
+      '- Preserve all meaningful ideas from the transcript: named people and their contributions, personal observations, anecdotes, seasonal details, humor',
+      '- Improve grammar, flow, and clarity while keeping the speaker\'s voice',
+      '- Match post length to the content — concise for brief updates, fuller for detailed recordings; do not pad to a word count',
+      '- Use hashtags only where they feel natural — a small number or none at all',
+      '- Plain text only — no markdown, no asterisks, no brackets',
+      '- Do not assume every post is from a contractor or describes a completed job',
+      '- Do not invent facts, quotes, testimonials, or results not in the recording',
+      '- Never fabricate locations, certifications, or commercial claims',
+      '',
+      ctaBlock,
+      '',
+      'Return only the post text.',
+    ].filter(s => s !== undefined).join('\n');
+
+    const googlePrompt = [
+      'Write a Google Business Profile post.',
+      '',
+      transcriptCtx,
+      '',
+      contentBrief ? `CONTENT BRIEF:\n${contentBrief}` : '',
+      photosCtx    ? `\n${photosCtx}` : '',
+      bizLines     ? `\nBUSINESS PROFILE:\n${bizLines}` : '',
+      serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
+      '',
+      'WRITING REQUIREMENTS:',
+      `- Writing tone: ${tone}${customStyleCtx}`,
+      `- ${beforeAfterRule}`,
+      '- Naturally include the location when verified',
+      '- Describe what happened and its value to customers',
+      '- Length appropriate to the content — typically 150–300 words for substantial updates, shorter for brief announcements',
+      '- Plain text only — no markdown, no brackets, no asterisks',
+      '- Include 2–4 hashtags only if they add value; omit otherwise',
+      '- No keyword stuffing — write for people, not search engines',
+      '- Do not assume every post is from a contractor',
+      '- Do not invent facts, services, or locations',
+      '',
+      ctaBlock,
+      '',
+      'Return only the post text.',
+    ].filter(s => s !== undefined).join('\n');
+
+    const wordpressPrompt = [
+      'Write a blog post for WordPress.',
+      '',
+      transcriptCtx,
+      '',
+      contentBrief ? `CONTENT BRIEF:\n${contentBrief}` : '',
+      photosCtx    ? `\n${photosCtx}` : '',
+      bizLines     ? `\nBUSINESS PROFILE:\n${bizLines}` : '',
+      serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
+      '',
+      'WRITING REQUIREMENTS:',
+      `- Writing tone: ${tone}${customStyleCtx}`,
+      `- ${beforeAfterRule}`,
+      '- Choose a structure appropriate to the content: project showcase, case study, product announcement, event recap, educational article, client spotlight, or other relevant format',
+      '- Target at least 400 words when the content supports it — do not pad with generic filler to reach a count',
+      '- Use ## and ### headings when they improve readability; do not force a fixed heading count',
+      '- Preserve meaningful transcript details: named people, client work, personal observations, anecdotes',
+      '- Develop explanations only where supported by the recording',
+      '- Natural keyword usage — no stuffing',
+      `- End with a relevant contact or CTA paragraph${businessName ? ` mentioning ${businessName}` : ''} — do not include a website URL in the article body`,
+      '- No hashtags',
+      '- Do not fabricate case study metrics, customer quotes, or project details not in the recording',
+      '- Do not assume every post is about contractor work',
+      '',
+      'Return only the article with markdown headings.',
+    ].filter(s => s !== undefined).join('\n');
+
+    const seoPrompt = `Generate WordPress SEO metadata for a blog post.
+
+Content topic: ${extracted.mainService || businessCategory || extracted.contentIntent || 'General'}
+Primary subject: ${subjectName || businessName || 'not specified'}
 Location: ${locationStr}
-${photosCtx}Key terms: ${keyTermsStr}
-${bizLines ? bizLines + '\n' : ''}${serviceAreaCtx ? serviceAreaCtx + '\n' : ''}
-Requirements:
-- 150–300 words
-- Writing tone: ${tone}${customStyleCtx}
-- Naturally mention the city/area
-- Describe what was done and the customer benefit
-- ${beforeAfterRule}
-- Clear call to action${businessName ? ` — invite readers to contact ${businessName}` : ''}${contactUrl ? ` and visit ${contactUrl} (bare URL, plain text, no markdown)` : ''}
-- Plain text only — no markdown, no brackets, no asterisks
-- 2–4 hashtags at the end
-- No keyword stuffing — write for people, not search engines
-- ${neverInvent}
-Return only the post text.`;
-
-    const contactCtx = contactUrl
-      ? ` — include a call to action with the URL ${contactUrl} (plain text, no markdown); do not add it if the generated text already naturally includes it`
-      : '';
-
-    const socialPrompt = `Write a social media post for Facebook, Instagram, X (Twitter), and LinkedIn.
-
-Job: ${jobDesc}
-Location: ${locationStr}
-${photosCtx}Key terms: ${keyTermsStr}
-${businessName ? `Business: ${businessName}\n` : ''}
-Requirements:
-- 100–200 words
-- Writing tone: ${tone}${customStyleCtx}
-- ${beforeAfterRule}
-- Emotionally engaging — what did this mean for the customer?
-- Call to action${contactCtx}
-- 3–5 hashtags at the end
-- Plain text only — no markdown, no brackets, no asterisks
-- ${neverInvent}
-Return only the post text.`;
-
-    const wordpressPrompt = `Write a contractor blog post for WordPress.
-
-Job: ${jobDesc}
-Location: ${locationStr}
-${photosCtx}Main service: ${mainService || businessCategory || 'Contracting'}
 Key terms: ${keyTermsStr}
-${bizLines ? bizLines + '\n' : ''}${serviceAreaCtx ? serviceAreaCtx + '\n' : ''}
-Requirements:
-- 600–900 words minimum
-- Title (## heading) + 3–4 subheadings (### headings)
-- Writing tone: ${tone}${customStyleCtx}
-- ${beforeAfterRule}
-- Educate readers about why this type of work matters
-- Natural keyword usage — never keyword-stuff
-- Ends with a contact/CTA paragraph${businessName ? ` mentioning ${businessName}` : ''} — do not include any website URL in the article
-- No hashtags
-- ${neverInvent}
-Return only the article with markdown headings.`;
-
-    const seoPrompt = `Generate WordPress SEO metadata for a contractor blog post.
-
-Job: ${jobDesc}
-Location: ${locationStr}
-Main service: ${mainService || businessCategory || 'Contracting'}
-Key terms: ${keyTermsStr}
-${businessName ? `Business name: ${businessName}\n` : ''}Photos: ${photoCount} (${classificationSummary(classifications)})
+${businessName ? `Publishing business: ${businessName}\n` : ''}Photos: ${photoCount} (${classificationSummary(classifications)})
+Summary: ${specificWork || transcription?.slice(0, 200) || 'No summary.'}
 
 Return JSON with exactly these fields:
 {
-  "seoTitle": "50–60 chars, includes main keyword + location",
+  "seoTitle": "50–60 chars, includes primary topic keyword + location if relevant",
   "urlSlug": "3–6 lowercase hyphenated words, no stop words",
   "metaDescription": "150–160 chars, keyword + location + compelling",
-  "mainKeyword": "primary local search term",
-  "secondaryKeywords": ["3–5 related terms"],
+  "mainKeyword": "primary search term matching actual content",
+  "secondaryKeywords": ["3–5 related terms based on actual content"],
   "imageFilenames": ["one per photo, descriptive, lowercase-hyphenated, .jpg"],
   "imageAltTexts": ["descriptive alt text for each photo"]
 }
 
-Never invent job details or locations not mentioned in the description.`;
+Base all fields on actual content. Never invent locations, services, or facts not in the transcript.`;
 
     // Step 3 — Generate all content in parallel
     try {
       const tasks    = [];
       const taskKeys = [];
 
-      if (needsGoogle)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: googlePrompt }], max_tokens: 450, temperature: 0.75 })); taskKeys.push('google'); }
-      if (needsSocial)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: socialPrompt }], max_tokens: 400, temperature: 0.80 })); taskKeys.push('social'); }
+      if (needsGoogle)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: googlePrompt }], max_tokens: 600, temperature: 0.75 })); taskKeys.push('google'); }
+      if (needsSocial)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: socialPrompt }], max_tokens: 600, temperature: 0.80 })); taskKeys.push('social'); }
       if (needsWordpress) {
-        tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: wordpressPrompt }], max_tokens: 1400, temperature: 0.72 })); taskKeys.push('wordpress');
+        tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: wordpressPrompt }], max_tokens: 1800, temperature: 0.72 })); taskKeys.push('wordpress');
         tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', response_format: { type: 'json_object' }, messages: [{ role: 'system', content: 'You generate SEO metadata as JSON.' }, { role: 'user', content: seoPrompt }], max_tokens: 600, temperature: 0.3 })); taskKeys.push('seo');
       }
 
@@ -448,4 +560,4 @@ Never invent job details or locations not mentioned in the description.`;
   return app;
 }
 
-module.exports = { createApp };
+module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor };

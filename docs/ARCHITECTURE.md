@@ -295,10 +295,13 @@ Request (multipart/form-data or JSON):
   platforms          — JSON array: ['social', 'google', 'wordpress']
 
 Step 1 — Transcribe audio (Whisper, if audio present)
-Step 2 — Extract job info (gpt-4o-mini, JSON mode):
-           location, mainService, specificWork, keyTerms
+Step 2 — Extract content context (gpt-4o-mini, JSON mode):
+           location, contentIntent, primarySubject, mainService,
+           specificWork, people, organizations, meaningfulFacts,
+           explicitUrls, ctaHint, keyTerms
 Step 3 — GPS reverse geocode fallback (Nominatim, if no transcription location)
-Step 4 — Generate content in parallel (gpt-4o-mini):
+Step 4 — Build content brief + CTA block from extracted context
+Step 5 — Generate content in parallel (gpt-4o-mini):
            googlePost    (if 'google' in platforms)
            socialPost    (if 'social' in platforms — always included)
            webContent    (if 'wordpress' in platforms)
@@ -309,11 +312,27 @@ Response:
   googlePost, socialPost, webContent, seoMetadata
 ```
 
+### Content generation philosophy
+
+Elmer serves all types of publishing businesses — contractors, agencies, ecommerce brands, creators, wellness providers, real estate, and more. Prompts are universal; no contractor assumptions.
+
+**Core principle**: preserve what the user wants to say, improve how they say it, optimize for the destination.
+
+**Full transcript guarantee**: The complete Whisper transcript always reaches every generation prompt as the primary source. Structured extraction supplements but never replaces it.
+
+**Content brief**: Each generation prompt receives a rich content brief alongside the transcript, including named people and their contributions, organizations/clients distinct from the publisher, human details (observations, humor, anecdotes, seasonal notes), and explicit URLs from the transcript.
+
+### CTA selection (`buildCtaBlock`)
+
+The CTA block is injected into every generation prompt. It keeps the publisher's URL separate from any client/subject URLs extracted from the transcript, preventing publisher website being presented as a client's URL.
+
+Priority: `businessInquiryUrl` > `businessWebsite` > natural non-link CTA > none.
+
+When `primarySubject` differs from the publishing business name, the prompt explicitly names both and directs the primary CTA to the publisher's contact URL.
+
 **Mock mode**: When `OPENAI_API_KEY` is absent, the server returns a hardcoded electrical-panel mock response, clearly labeled `mock: true`. The mobile app shows a banner when displaying mock content.
 
 **Audio handling on the server**: multer writes uploads to `server/tmp/`. The file is renamed to `.m4a`, passed to OpenAI, then deleted. Cleanup happens within the request handler; a crash could leave orphan files in `server/tmp/`.
-
-**Contact URL fallback**: `contactUrl = businessInquiryUrl || businessWebsite`. Used as the call-to-action link in Google Business posts and social posts. If neither is set, no link is appended.
 
 **Server URL**: `EXPO_PUBLIC_API_URL` environment variable; defaults to `http://localhost:3001`. Must be set to the local machine's LAN IP for physical device testing.
 
@@ -534,7 +553,7 @@ Mobile                          Elmer Server                  Instagram (Meta)
 - **Featured image**: Star toggle in photo modal replaces Destination field; star indicator on thumbnail; first photo auto-featured; promoted to next on deletion; `is_featured` persisted in `job_photos` (schema v8); `featured_index` sent with publish requests (`HomeScreen.tsx`, `storage/database.ts`).
 - **Inquiry URL**: `BusinessProfile.inquiryUrl` field; `contactUrl = inquiryUrl || website` fallback used as CTA link in Google Business and social posts; SettingsScreen field (`SettingsScreen.tsx`, `server/app.js`).
 - **Post Everywhere — mobile**: Connected channels loaded from server; publishes to Facebook pages and Instagram independently; per-page results shown in result footer (`ResultScreen.tsx`).
-- **148 automated tests** (DB, auth, platforms, Facebook, Instagram, media-utils) — all passing (`server/test/`).
+- **172 automated tests** (DB, auth, platforms, Facebook, Instagram, media-utils, generation) — all passing (`server/test/`).
 
 ### Stub — UI exists but action is a no-op or alert
 
