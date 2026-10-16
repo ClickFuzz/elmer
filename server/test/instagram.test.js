@@ -542,8 +542,9 @@ describe('POST /instagram/publish', () => {
     await setupFreshTestDb();
 
     const mockIgFetch = makeIgMock([
-      { data: { id: 'container-1' } },   // create media container
-      { data: { id: 'ig-post-abc123' } }, // media_publish
+      { data: { id: 'container-1' } },           // create media container
+      { data: { status_code: 'FINISHED' } },      // waitForContainer poll
+      { data: { id: 'ig-post-abc123' } },         // media_publish
     ]);
 
     const { createInstagramRouter } = require('../routes/instagram');
@@ -587,7 +588,10 @@ describe('POST /instagram/publish', () => {
       if (url.includes('/media_publish')) {
         return { ok: true, json: async () => ({ id: 'ig-carousel-post' }) };
       }
-      // carousel container calls
+      if (url.includes('fields=status_code')) {
+        return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
+      }
+      // carousel container creation calls
       const callIndex = callLog.length;
       return { ok: true, json: async () => ({ id: `child-${callIndex}` }) };
     };
@@ -612,8 +616,8 @@ describe('POST /instagram/publish', () => {
       assert.ok(res.body.ok, 'carousel publish should be ok');
       assert.strictEqual(res.body.postId, 'ig-carousel-post');
 
-      // Two child containers + one carousel container + one media_publish = 4 calls
-      assert.strictEqual(callLog.length, 4, 'should make 4 API calls for a 2-photo carousel');
+      // 2 child containers + 2 polls + 1 carousel container + 1 poll + 1 media_publish = 7 calls
+      assert.strictEqual(callLog.length, 7, 'should make 7 API calls for a 2-photo carousel');
     } finally {
       fs.unlinkSync(tmp1);
       fs.unlinkSync(tmp2);
@@ -624,8 +628,11 @@ describe('POST /instagram/publish', () => {
     await setupFreshTestDb();
 
     let callCount = 0;
-    const mockIgFetch = async () => {
+    const mockIgFetch = async (url) => {
       callCount++;
+      if (url.includes('fields=status_code')) {
+        return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
+      }
       return { ok: true, json: async () => ({ id: 'ig-post-dup' }) };
     };
 
@@ -656,7 +663,7 @@ describe('POST /instagram/publish', () => {
       assert.strictEqual(second.status, 200);
       assert.ok(second.body.duplicate, 'second attempt should be a duplicate');
       // API should only be called for the first publish
-      assert.strictEqual(callCount, 2, 'API calls should be: 1 container + 1 publish = 2, only on first attempt');
+      assert.strictEqual(callCount, 3, 'API calls should be: 1 container + 1 poll + 1 publish = 3, only on first attempt');
     } finally {
       fs.unlinkSync(tmp);
     }
@@ -704,9 +711,12 @@ describe('POST /instagram/publish', () => {
     await setupFreshTestDb();
 
     let attempt = 0;
-    const mockIgFetch = async () => {
+    const mockIgFetch = async (url) => {
       attempt++;
       if (attempt === 1) throw new Error('Network error on first attempt');
+      if (url.includes('fields=status_code')) {
+        return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
+      }
       return { ok: true, json: async () => ({ id: 'ig-retry-post' }) };
     };
 
@@ -727,7 +737,7 @@ describe('POST /instagram/publish', () => {
       assert.strictEqual(first.status, 200);
       assert.strictEqual(first.body.ok, false, 'first attempt should fail');
 
-      // attempt goes 1 (fail) + 2 (container) + 3 (publish)
+      // attempt goes 1 (fail) + 2 (container) + 3 (poll) + 4 (publish)
       const second = await request(app)
         .post('/instagram/publish')
         .set('Authorization', `Bearer ${token}`)

@@ -395,8 +395,9 @@ describe('POST /threads/publish (single image)', () => {
 
   it('publishes a single-image post', async () => {
     const mockFetch = makeThreadsMock([
-      { data: { id: 'container-img-1' } },    // create IMAGE container
-      { data: { id: 'post-img-abc' } },        // threads_publish
+      { data: { id: 'container-img-1' } },      // create IMAGE container
+      { data: { status: 'FINISHED' } },          // waitForThreadsContainer poll
+      { data: { id: 'post-img-abc' } },          // threads_publish
     ]);
     app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({ threadsFetch: mockFetch }) });
 
@@ -431,10 +432,12 @@ describe('POST /threads/publish (carousel)', () => {
 
   it('publishes a carousel post', async () => {
     const mockFetch = makeThreadsMock([
-      { data: { id: 'child-1' } },      // carousel item 1
-      { data: { id: 'child-2' } },      // carousel item 2
-      { data: { id: 'carousel-1' } },   // CAROUSEL container
-      { data: { id: 'post-car-abc' } }, // threads_publish
+      { data: { id: 'child-1' } },        // carousel item 1
+      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-1
+      { data: { id: 'child-2' } },        // carousel item 2
+      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-2
+      { data: { id: 'carousel-1' } },     // CAROUSEL container
+      { data: { id: 'post-car-abc' } },   // threads_publish
     ]);
     app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({ threadsFetch: mockFetch }) });
 
