@@ -22,5 +22,8 @@
   "devDependencies": {
     "pg-mem": "^2.9.0",
     "supertest": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=20.9.0"
   }
 }
