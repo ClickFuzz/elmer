@@ -23,6 +23,31 @@ const IG_GRAPH_BASE      = 'https://graph.instagram.com';
 const IG_API_VERSION     = 'v21.0';
 const IG_PERMISSIONS     = 'instagram_business_basic,instagram_business_content_publish';
 const MAX_CAROUSEL       = 10;
+const CONTAINER_POLL_INTERVAL_MS = 3000; // 3 s between status checks
+const CONTAINER_POLL_MAX_ATTEMPTS = 15;  // up to ~45 s total
+
+// Polls a media container until status_code is FINISHED (or ERROR/EXPIRED).
+// Throws if the container errors, expires, or the timeout is reached.
+async function waitForContainer(containerId, token, igFetch) {
+  for (let attempt = 0; attempt < CONTAINER_POLL_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, CONTAINER_POLL_INTERVAL_MS));
+    }
+    const data = await igFetch(
+      `${IG_GRAPH_BASE}/${IG_API_VERSION}/${containerId}?fields=status_code&access_token=${token}`
+    ).then(r => r.json());
+
+    if (data.error) {
+      throw Object.assign(new Error(data.error.message), { isIgError: true, igCode: data.error.code });
+    }
+    const status = data.status_code;
+    if (status === 'FINISHED') return;
+    if (status === 'ERROR')    throw new Error('Instagram media container processing failed.');
+    if (status === 'EXPIRED')  throw new Error('Instagram media container expired before publishing.');
+    // IN_PROGRESS or unknown — keep polling
+  }
+  throw new Error('Instagram media container timed out waiting for FINISHED status.');
+}
 
 function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
   const TMP_DIR   = path.join(__dirname, '..', 'tmp');
@@ -461,6 +486,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         }
         fs.unlink(mediaItems[0].stagedPath, () => {});
 
+        await waitForContainer(cData.id, igToken, igFetch);
+
         const pData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}/media_publish`, {
           method: 'POST',
           body: new URLSearchParams({ creation_id: cData.id, access_token: igToken }),
@@ -472,7 +499,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         postId = pData.id;
 
       } else {
-        // Carousel
+        // Carousel — create and wait for each child container, then the album container
         const childIds = [];
         for (const item of mediaItems) {
           const cData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}/media`, {
@@ -489,6 +516,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
             throw Object.assign(new Error(cData.error.message), { isIgError: true, igCode: cData.error.code });
           }
           fs.unlink(item.stagedPath, () => {});
+          await waitForContainer(cData.id, igToken, igFetch);
           childIds.push(cData.id);
         }
 
@@ -505,6 +533,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         if (carData.error) {
           throw Object.assign(new Error(carData.error.message), { isIgError: true, igCode: carData.error.code });
         }
+
+        await waitForContainer(carData.id, igToken, igFetch);
 
         const pData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}/media_publish`, {
           method: 'POST',
