@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -105,9 +106,21 @@ export default function HistoryScreen({ onBack, onPublishDraft }: Props) {
                   <View style={styles.cardMeta}>
                     <View style={styles.cardMetaRow}>
                       <Text style={styles.cardDate}>{formatDate(job.createdAt)}</Text>
-                      <View style={[styles.badge, job.status === 'published' && styles.badgePublished]}>
-                        <Text style={[styles.badgeText, job.status === 'published' && styles.badgeTextPublished]}>
-                          {job.status === 'published' ? 'Published' : 'Draft'}
+                      <View style={[
+                        styles.badge,
+                        job.status === 'published' && styles.badgePublished,
+                        job.status === 'partial' && styles.badgePartial,
+                        job.status === 'failed' && styles.badgeFailed,
+                      ]}>
+                        <Text style={[
+                          styles.badgeText,
+                          job.status === 'published' && styles.badgeTextPublished,
+                          job.status === 'partial' && styles.badgeTextPartial,
+                          job.status === 'failed' && styles.badgeTextFailed,
+                        ]}>
+                          {job.status === 'published' ? 'Published' :
+                           job.status === 'partial' ? 'Partial' :
+                           job.status === 'failed' ? 'Failed' : 'Draft'}
                         </Text>
                       </View>
                     </View>
@@ -168,21 +181,47 @@ export default function HistoryScreen({ onBack, onPublishDraft }: Props) {
                       </View>
                     ) : null}
 
-                    {job.status === 'draft' && (
+                    {job.publishStatus?.results && job.publishStatus.results.length > 0 && (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionLabel}>Publishing history</Text>
+                        {job.publishStatus.results.map((r, idx) => (
+                          <View key={idx} style={styles.publishHistoryRow}>
+                            <View style={[styles.publishHistoryDot, r.ok ? styles.publishHistoryDotOk : styles.publishHistoryDotFail]} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.publishHistoryName, !r.ok && styles.publishHistoryNameFail]}>
+                                {r.pageName}
+                              </Text>
+                              {!r.ok && r.error && (
+                                <Text style={styles.publishHistoryError} numberOfLines={1}>{r.error}</Text>
+                              )}
+                            </View>
+                            {r.ok && r.postUrl && (
+                              <TouchableOpacity onPress={() => Linking.openURL(r.postUrl!)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                <Text style={styles.copyBtn}>View</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    {job.status !== 'published' && (
                       <View style={styles.draftActions}>
                         <TouchableOpacity
                           style={styles.publishBtn}
                           onPress={() => onPublishDraft(job)}
                           activeOpacity={0.8}
                         >
-                          <Text style={styles.publishBtnText}>Publish</Text>
+                          <Text style={styles.publishBtnText}>
+                            {job.status === 'failed' ? 'Retry' : job.status === 'partial' ? 'Complete' : 'Publish'}
+                          </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.deleteBtn}
                           onPress={() => handleDeleteDraft(job)}
                           activeOpacity={0.8}
                         >
-                          <Text style={styles.deleteBtnText}>Delete Draft</Text>
+                          <Text style={styles.deleteBtnText}>Delete</Text>
                         </TouchableOpacity>
                       </View>
                     )}
@@ -277,8 +316,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   badgePublished: { backgroundColor: 'rgba(82,214,164,0.15)' },
+  badgePartial: { backgroundColor: 'rgba(200,122,32,0.15)' },
+  badgeFailed: { backgroundColor: 'rgba(255,80,80,0.15)' },
   badgeText: { fontSize: 11, fontWeight: '700', color: colors.textMuted },
   badgeTextPublished: { color: colors.success },
+  badgeTextPartial: { color: '#C87A20' },
+  badgeTextFailed: { color: colors.error },
 
   toggleRow: {
     borderTopWidth: 1,
@@ -341,4 +384,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   deleteBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
+
+  publishHistoryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 5 },
+  publishHistoryDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
+  publishHistoryDotOk: { backgroundColor: colors.success },
+  publishHistoryDotFail: { backgroundColor: colors.error },
+  publishHistoryName: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  publishHistoryNameFail: { color: colors.error },
+  publishHistoryError: { fontSize: 11, color: colors.error, marginTop: 2, opacity: 0.8 },
 });

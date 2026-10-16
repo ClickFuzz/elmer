@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 export type SeoMetadata = {
   seoTitle: string;
@@ -44,7 +44,8 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         web_content TEXT,
         job_location TEXT,
         seo_metadata TEXT,
-        is_mock INTEGER NOT NULL DEFAULT 0
+        is_mock INTEGER NOT NULL DEFAULT 0,
+        publish_status TEXT
       );
       CREATE TABLE IF NOT EXISTS job_photos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +96,9 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         )
       `);
     } catch { /* ignore */ }
+  }
+  if (version < 9) {
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN publish_status TEXT'); } catch { /* already exists */ }
   }
 
   if (version < SCHEMA_VERSION) {
@@ -393,6 +397,20 @@ export async function setInstagramExplanationShown(): Promise<void> {
   await setSetting('ig_explanation_shown', '1');
 }
 
+export type JobPlatformResult = 'success' | 'failed' | 'excluded';
+
+export type JobPublishStatus = {
+  platforms: Record<string, JobPlatformResult>;
+  results: {
+    platform: string;
+    pageName: string;
+    ok: boolean;
+    postUrl?: string;
+    error?: string;
+    duplicate?: boolean;
+  }[];
+};
+
 export type Job = {
   id: number;
   createdAt: number;
@@ -403,6 +421,7 @@ export type Job = {
   jobLocation: string | null;
   isMock: boolean;
   firstPhotoUri: string | null;
+  publishStatus: JobPublishStatus | null;
 };
 
 export async function deleteJob(id: number): Promise<void> {
@@ -448,21 +467,41 @@ export async function getAllJobs(): Promise<Job[]> {
     job_location: string | null;
     is_mock: number;
     first_photo_uri: string | null;
+    publish_status: string | null;
   }>(`SELECT j.id, j.created_at, j.status, j.social_content, j.web_content,
-             j.post_content, j.job_location, j.is_mock,
+             j.post_content, j.job_location, j.is_mock, j.publish_status,
              (SELECT local_uri FROM job_photos WHERE job_id = j.id ORDER BY sort_order ASC LIMIT 1) AS first_photo_uri
       FROM jobs j ORDER BY j.created_at DESC`);
-  return rows.map(r => ({
-    id: r.id,
-    createdAt: r.created_at,
-    status: r.status,
-    socialContent: r.social_content,
-    webContent: r.web_content,
-    googlePost: r.post_content,
-    jobLocation: r.job_location,
-    isMock: r.is_mock === 1,
-    firstPhotoUri: r.first_photo_uri,
-  }));
+  return rows.map(r => {
+    let publishStatus: JobPublishStatus | null = null;
+    if (r.publish_status) {
+      try { publishStatus = JSON.parse(r.publish_status); } catch { /* ignore */ }
+    }
+    return {
+      id: r.id,
+      createdAt: r.created_at,
+      status: r.status,
+      socialContent: r.social_content,
+      webContent: r.web_content,
+      googlePost: r.post_content,
+      jobLocation: r.job_location,
+      isMock: r.is_mock === 1,
+      firstPhotoUri: r.first_photo_uri,
+      publishStatus,
+    };
+  });
+}
+
+export async function updateJobPublishStatus(
+  jobId: number,
+  status: string,
+  publishStatus: JobPublishStatus,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE jobs SET status = ?, publish_status = ?, updated_at = ? WHERE id = ?`,
+    [status, JSON.stringify(publishStatus), Date.now(), jobId],
+  );
 }
 
 export async function deleteOldPublishedMedia(): Promise<void> {

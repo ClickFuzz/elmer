@@ -25,6 +25,8 @@ import {
   SeoMetadata,
   getSessionToken,
   Job,
+  updateJobPublishStatus,
+  JobPlatformResult,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -91,9 +93,11 @@ type PublishState =
 export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
+  const [editedThreads, setEditedThreads] = useState('');
   const [editedWordpress, setEditedWordpress] = useState('');
   const [editedLocation, setEditedLocation] = useState('');
-  const [showWebArticle, setShowWebArticle] = useState(false);
+  const [excludedPlatforms, setExcludedPlatforms] = useState<Set<string>>(new Set());
+  const [showVariations, setShowVariations] = useState(false);
   const [showSeo, setShowSeo] = useState(false);
   const [connectedChannels, setConnectedChannels] = useState<ConnectedChannel[]>([]);
   const [copiedItem, setCopiedItem] = useState<'social' | 'web' | null>(null);
@@ -218,6 +222,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         });
         googlePostRef.current = data.googlePost ?? '';
         setEditedSocial(data.socialPost ?? '');
+        setEditedThreads(truncateForThreads(data.socialPost ?? ''));
         setEditedWordpress(data.webContent ?? '');
         setEditedLocation(loc);
 
@@ -267,6 +272,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       });
       googlePostRef.current = draftJob.googlePost ?? '';
       setEditedSocial(social);
+      setEditedThreads(truncateForThreads(social));
       setEditedWordpress(web);
       setEditedLocation(loc);
       // Still need to load channels for publishing
@@ -277,6 +283,14 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           if (token) channels = await fetchServerConnectedChannels(token, API_URL);
           if (channels.length === 0) channels = await getConnectedChannels();
           setConnectedChannels(channels);
+          if (draftJob?.publishStatus) {
+            const newExcluded = new Set<string>();
+            for (const ch of channels) {
+              const key = `${ch.platform}_${ch.accountId ?? ch.id}`;
+              if (draftJob.publishStatus.platforms[key] === 'excluded') newExcluded.add(ch.id);
+            }
+            setExcludedPlatforms(newExcluded);
+          }
         } catch { /* ignore */ }
       })();
     } else {
@@ -286,6 +300,14 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     };
   }, []);
+
+  const togglePlatform = (chId: string) => {
+    setExcludedPlatforms(prev => {
+      const next = new Set(prev);
+      if (next.has(chId)) next.delete(chId); else next.add(chId);
+      return next;
+    });
+  };
 
   const copyItem = (item: 'social' | 'web') => {
     Clipboard.setStringAsync(item === 'social' ? editedSocial : editedWordpress);
@@ -407,7 +429,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
 
     const formData = new FormData();
-    formData.append('text', editedSocial);
+    if (editedThreads.length > 500) {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'Post exceeds 500 character limit. Please shorten the Threads post.' };
+    }
+    formData.append('text', editedThreads);
     formData.append('job_id', jobId);
     formData.append('featured_index', String(Math.max(0, featuredIndex)));
     formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
@@ -488,10 +513,15 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       return;
     }
 
-    const hasFacebook  = connectedChannels.some(ch => ch.platform === 'facebook');
-    const hasInstagram = connectedChannels.some(ch => ch.platform === 'instagram');
-    const hasThreads   = connectedChannels.some(ch => ch.platform === 'threads');
-    const channelList  = connectedChannels.map(ch => ch.accountName).join(', ');
+    const activeChannels = connectedChannels.filter(ch => !excludedPlatforms.has(ch.id));
+    if (activeChannels.length === 0) {
+      Alert.alert('No platforms selected', 'Check at least one platform in "Where Elmer will post" to publish.');
+      return;
+    }
+    const hasFacebook  = activeChannels.some(ch => ch.platform === 'facebook');
+    const hasInstagram = activeChannels.some(ch => ch.platform === 'instagram');
+    const hasThreads   = activeChannels.some(ch => ch.platform === 'threads');
+    const channelList  = activeChannels.map(ch => ch.accountName).join(', ');
 
     Alert.alert(
       'Publish?',
@@ -515,6 +545,24 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               }
             }
             setPublishState({ status: 'success', results: allResults });
+
+            if (savedJobId != null) {
+              const platformsRecord: Record<string, JobPlatformResult> = {};
+              for (const chId of excludedPlatforms) {
+                const ch = connectedChannels.find(c => c.id === chId);
+                if (ch) platformsRecord[`${ch.platform}_${ch.accountId ?? ch.id}`] = 'excluded';
+              }
+              for (const r of allResults) {
+                platformsRecord[getResultKey(r, connectedChannels)] = r.ok ? 'success' : 'failed';
+              }
+              const successes = allResults.filter(r => r.ok).length;
+              const failures  = allResults.filter(r => !r.ok).length;
+              const newStatus = successes > 0 && failures === 0 ? 'published' : successes > 0 ? 'partial' : 'failed';
+              updateJobPublishStatus(savedJobId, newStatus, {
+                platforms: platformsRecord,
+                results: allResults.map(r => ({ platform: r.platform, pageName: r.pageName, ok: r.ok, postUrl: r.postUrl, error: r.error, duplicate: r.duplicate })),
+              }).catch(() => {});
+            }
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Publishing failed';
             setPublishState({ status: 'error', message: msg });
@@ -530,6 +578,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
   const hasConnections = connectedChannels.length > 0;
   const hasWordpress = connectedChannels.some(ch => ch.platform === 'wordpress');
+  const threadsChannel = connectedChannels.find(ch => ch.platform === 'threads');
 
   // Full-screen confirmation after a successful publish
   if (publishState.status === 'success') {
@@ -570,9 +619,12 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                   <View style={styles.viewOnBtnText}>
                     <Text style={[styles.viewOnLabel, !r.ok && styles.viewOnLabelDim]}>
                       {r.ok
-                        ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
-                        : `Failed · ${r.pageName}`}
+                        ? (r.duplicate ? `Already posted · ${platformDisplayName(r.platform)}` : `View on ${platformDisplayName(r.platform)}`)
+                        : `Failed · ${platformDisplayName(r.platform)}`}
                     </Text>
+                    {platformDisplayName(r.platform) !== r.pageName && (
+                      <Text style={styles.viewOnPageName}>{r.pageName}</Text>
+                    )}
                     {!r.ok && r.error && (
                       <Text style={styles.viewOnError} numberOfLines={1}>{r.error}</Text>
                     )}
@@ -715,20 +767,32 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               <Text style={styles.destinationsTitle}>Where Elmer will post</Text>
 
               {hasConnections ? (
-                connectedChannels.map((ch, i) => (
-                  <View key={ch.id}>
-                    {i > 0 && <View style={styles.divider} />}
-                    <View style={styles.destinationRow}>
-                      <View>
-                        <Text style={styles.destinationName}>{ch.accountName}</Text>
-                        <Text style={styles.destinationSub}>{platformLabel(ch.platform)}</Text>
-                      </View>
-                      <View style={styles.connectedChip}>
-                        <Text style={styles.connectedChipText}>Connected</Text>
-                      </View>
+                connectedChannels.map((ch, i) => {
+                  const isExcluded = excludedPlatforms.has(ch.id);
+                  return (
+                    <View key={ch.id}>
+                      {i > 0 && <View style={styles.divider} />}
+                      <TouchableOpacity
+                        style={styles.destinationRow}
+                        onPress={() => togglePlatform(ch.id)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.destinationLeft}>
+                          <View style={[styles.destinationDot, isExcluded && styles.destinationDotDim]} />
+                          <View>
+                            <Text style={[styles.destinationName, isExcluded && styles.destinationNameDim]}>
+                              {ch.accountName}
+                            </Text>
+                            <Text style={styles.destinationSub}>{platformLabel(ch.platform)}</Text>
+                          </View>
+                        </View>
+                        <View style={[styles.destinationCheckbox, !isExcluded && styles.destinationCheckboxChecked]}>
+                          {!isExcluded && <Ionicons name="checkmark" size={13} color={colors.bg} />}
+                        </View>
+                      </TouchableOpacity>
                     </View>
-                  </View>
-                ))
+                  );
+                })
               ) : (
                 <View style={styles.noChannels}>
                   <Text style={styles.noChannelsText}>No channels connected yet.</Text>
@@ -743,92 +807,124 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               )}
             </View>
 
-            {/* Website article — only shown when WordPress is connected */}
-            {hasWordpress && <View style={styles.articleCard}>
-              <View style={styles.articleHeader}>
-                <View>
-                  <Text style={styles.cardLabel}>Website article</Text>
-                  <Text style={styles.articleMeta}>{wordCount(editedWordpress)} words · WordPress</Text>
-                </View>
+            {/* Platform variations — Threads (500 chars) and/or WordPress, collapsed by default */}
+            {(threadsChannel || hasWordpress) && (
+              <View style={styles.articleCard}>
                 <TouchableOpacity
-                  onPress={() => setShowWebArticle(v => !v)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={styles.articleHeader}
+                  onPress={() => setShowVariations(v => !v)}
+                  activeOpacity={0.8}
                 >
+                  <View>
+                    <Text style={styles.cardLabel}>Platform variations</Text>
+                    <Text style={styles.articleMeta}>
+                      {[threadsChannel && 'Threads', hasWordpress && 'WordPress'].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
                   <Text style={styles.previewToggle}>
-                    {showWebArticle ? 'Hide ▲' : 'Preview ▼'}
+                    {showVariations ? 'Hide ▲' : 'Edit ▼'}
                   </Text>
                 </TouchableOpacity>
-              </View>
 
-              {showWebArticle && (
-                <View style={styles.articleBody}>
-                  <TextInput
-                    style={styles.webInput}
-                    value={editedWordpress}
-                    onChangeText={setEditedWordpress}
-                    multiline
-                    textAlignVertical="top"
-                    autoCorrect
-                    scrollEnabled={false}
-                  />
-                  <View style={styles.postCardFooter}>
-                    <Text style={styles.metaCount}>{wordCount(editedWordpress)} words</Text>
-                    <TouchableOpacity
-                      onPress={() => copyItem('web')}
-                      hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}
-                    >
-                      <Text style={styles.copyInline}>
-                        {copiedItem === 'web' ? '✓ Copied!' : 'Copy Article'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {state.seoMetadata && (
-                    <View style={styles.seoCard}>
-                      <TouchableOpacity
-                        style={styles.seoHeader}
-                        onPress={() => setShowSeo(v => !v)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.seoHeaderTitle}>SEO Details</Text>
-                        <Text style={styles.seoHeaderChevron}>{showSeo ? '▲' : '▼'}</Text>
-                      </TouchableOpacity>
-                      {showSeo && (
-                        <View style={styles.seoBody}>
-                          <SeoRow label="SEO Title" value={state.seoMetadata.seoTitle} />
-                          <SeoRow label="URL Slug" value={`/${state.seoMetadata.urlSlug}`} mono />
-                          <SeoRow label="Meta Description" value={state.seoMetadata.metaDescription} />
-                          <SeoRow label="Main Keyword" value={state.seoMetadata.mainKeyword} />
-                          <Text style={styles.seoFieldLabel}>Secondary Keywords</Text>
-                          <View style={styles.tagRow}>
-                            {state.seoMetadata.secondaryKeywords.map((kw, i) => (
-                              <View key={i} style={styles.tag}>
-                                <Text style={styles.tagText}>{kw}</Text>
-                              </View>
-                            ))}
-                          </View>
-                          {state.seoMetadata.imageFilenames.length > 0 && (
-                            <>
-                              <Text style={[styles.seoFieldLabel, { marginTop: 12 }]}>Image Filenames</Text>
-                              {state.seoMetadata.imageFilenames.map((fn, i) => (
-                                <View key={i} style={styles.imageRow}>
-                                  <Text style={styles.imageFilename}>{fn}</Text>
-                                  {state.seoMetadata!.imageAltTexts[i] && (
-                                    <Text style={styles.imageAlt}>
-                                      Alt: {state.seoMetadata!.imageAltTexts[i]}
-                                    </Text>
-                                  )}
-                                </View>
-                              ))}
-                            </>
-                          )}
+                {showVariations && (
+                  <View style={styles.articleBody}>
+                    {threadsChannel && (
+                      <>
+                        <Text style={styles.variationLabel}>Threads · 500 char limit</Text>
+                        <TextInput
+                          style={styles.webInput}
+                          value={editedThreads}
+                          onChangeText={text => setEditedThreads(text.slice(0, 500))}
+                          multiline
+                          textAlignVertical="top"
+                          autoCorrect
+                          scrollEnabled={false}
+                        />
+                        <View style={styles.postCardFooter}>
+                          <Text style={[styles.metaCount, editedThreads.length > 450 && styles.threadsCountWarn]}>
+                            {editedThreads.length}/500
+                          </Text>
                         </View>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-            </View>}
+                      </>
+                    )}
+
+                    {threadsChannel && hasWordpress && (
+                      <View style={[styles.divider, { marginHorizontal: 0, marginVertical: 16 }]} />
+                    )}
+
+                    {hasWordpress && (
+                      <>
+                        <Text style={styles.variationLabel}>WordPress article</Text>
+                        <TextInput
+                          style={styles.webInput}
+                          value={editedWordpress}
+                          onChangeText={setEditedWordpress}
+                          multiline
+                          textAlignVertical="top"
+                          autoCorrect
+                          scrollEnabled={false}
+                        />
+                        <View style={styles.postCardFooter}>
+                          <Text style={styles.metaCount}>{wordCount(editedWordpress)} words</Text>
+                          <TouchableOpacity
+                            onPress={() => copyItem('web')}
+                            hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}
+                          >
+                            <Text style={styles.copyInline}>
+                              {copiedItem === 'web' ? '✓ Copied!' : 'Copy Article'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {state.seoMetadata && (
+                          <View style={styles.seoCard}>
+                            <TouchableOpacity
+                              style={styles.seoHeader}
+                              onPress={() => setShowSeo(v => !v)}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={styles.seoHeaderTitle}>SEO Details</Text>
+                              <Text style={styles.seoHeaderChevron}>{showSeo ? '▲' : '▼'}</Text>
+                            </TouchableOpacity>
+                            {showSeo && (
+                              <View style={styles.seoBody}>
+                                <SeoRow label="SEO Title" value={state.seoMetadata.seoTitle} />
+                                <SeoRow label="URL Slug" value={`/${state.seoMetadata.urlSlug}`} mono />
+                                <SeoRow label="Meta Description" value={state.seoMetadata.metaDescription} />
+                                <SeoRow label="Main Keyword" value={state.seoMetadata.mainKeyword} />
+                                <Text style={styles.seoFieldLabel}>Secondary Keywords</Text>
+                                <View style={styles.tagRow}>
+                                  {state.seoMetadata.secondaryKeywords.map((kw, i) => (
+                                    <View key={i} style={styles.tag}>
+                                      <Text style={styles.tagText}>{kw}</Text>
+                                    </View>
+                                  ))}
+                                </View>
+                                {state.seoMetadata.imageFilenames.length > 0 && (
+                                  <>
+                                    <Text style={[styles.seoFieldLabel, { marginTop: 12 }]}>Image Filenames</Text>
+                                    {state.seoMetadata.imageFilenames.map((fn, i) => (
+                                      <View key={i} style={styles.imageRow}>
+                                        <Text style={styles.imageFilename}>{fn}</Text>
+                                        {state.seoMetadata!.imageAltTexts[i] && (
+                                          <Text style={styles.imageAlt}>
+                                            Alt: {state.seoMetadata!.imageAltTexts[i]}
+                                          </Text>
+                                        )}
+                                      </View>
+                                    ))}
+                                  </>
+                                )}
+                              </View>
+                            )}
+                          </View>
+                        )}
+                      </>
+                    )}
+                  </View>
+                )}
+              </View>
+            )}
           </>
         )}
       </ScrollView>
@@ -884,6 +980,31 @@ const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string
   twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
   default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
 };
+
+function truncateForThreads(text: string): string {
+  if (text.length <= 500) return text;
+  const cut = text.slice(0, 497);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 400 ? cut.slice(0, lastSpace) : cut) + '...';
+}
+
+function platformDisplayName(platform: string): string {
+  const names: Record<string, string> = {
+    facebook: 'Facebook',
+    instagram: 'Instagram',
+    threads: 'Threads',
+    google: 'Google Business',
+    wordpress: 'WordPress',
+    twitter: 'X',
+  };
+  return names[platform] ?? platform;
+}
+
+function getResultKey(r: PageResult, channels: ConnectedChannel[]): string {
+  if (r.platform === 'facebook') return `facebook_${r.pageId}`;
+  const ch = channels.find(c => c.platform === r.platform);
+  return ch ? `${ch.platform}_${ch.accountId ?? ch.id}` : `${r.platform}_${r.pageId}`;
+}
 
 function platformLabel(platform: ConnectedChannel['platform']): string {
   const labels: Record<ConnectedChannel['platform'], string> = {
@@ -1077,6 +1198,38 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   connectedChipText: { fontSize: 11, fontWeight: '700', color: colors.success },
+  destinationLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  destinationDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
+  destinationDotDim: { backgroundColor: colors.textMuted },
+  destinationNameDim: { color: colors.textMuted },
+  destinationCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destinationCheckboxChecked: { backgroundColor: colors.success, borderColor: colors.success },
+  threadsCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  threadsCountWarn: { color: '#C87A20' },
+  variationLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 10,
+  },
+  viewOnPageName: { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 1 },
   noChannels: {
     alignItems: 'center',
     paddingHorizontal: 16,
