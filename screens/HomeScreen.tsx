@@ -65,7 +65,7 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   const [photoModal, setPhotoModal] = useState<{
     index: number;
     classification: PhotoClassification;
-    instagramOnly: boolean;
+    isFeatured: boolean;
   } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
 
@@ -136,12 +136,14 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
           }
           const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
           if (!result.canceled && result.assets.length > 0) {
-            setPhotos(prev =>
-              [...prev, {
+            setPhotos(prev => {
+              const isFirst = prev.length === 0;
+              return [...prev, {
                 uri: result.assets[0].uri,
                 classification: 'General' as const,
-              }].slice(0, MAX_PHOTOS)
-            );
+                isFeatured: isFirst,
+              }].slice(0, MAX_PHOTOS);
+            });
           }
         },
       },
@@ -161,12 +163,16 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
             exif: true,
           });
           if (!result.canceled) {
-            const newPhotos: PhotoItem[] = result.assets.map(a => ({
-              uri: a.uri,
-              classification: 'General' as const,
-              gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
-            }));
-            setPhotos(prev => [...prev, ...newPhotos].slice(0, MAX_PHOTOS));
+            setPhotos(prev => {
+              const existingCount = prev.length;
+              const newPhotos: PhotoItem[] = result.assets.map((a, idx) => ({
+                uri: a.uri,
+                classification: 'General' as const,
+                isFeatured: existingCount === 0 && idx === 0,
+                gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
+              }));
+              return [...prev, ...newPhotos].slice(0, MAX_PHOTOS);
+            });
           }
         },
       },
@@ -175,7 +181,14 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
   };
 
   const removePhoto = (index: number) => {
-    setPhotos(prev => prev.filter((_, i) => i !== index));
+    setPhotos(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      // If the removed photo was featured, promote first remaining
+      if (prev[index]?.isFeatured && next.length > 0) {
+        return next.map((p, i) => ({ ...p, isFeatured: i === 0 }));
+      }
+      return next;
+    });
   };
 
   const openPhotoModal = (index: number) => {
@@ -183,21 +196,22 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
     setPhotoModal({
       index,
       classification: photo.classification,
-      instagramOnly: (photo.destination ?? 'other_platforms') === 'instagram_only',
+      isFeatured: photo.isFeatured ?? index === 0,
     });
   };
 
   const applyPhotoModal = () => {
     if (!photoModal) return;
-    setPhotos(prev => prev.map((p, i) =>
-      i === photoModal.index
-        ? {
-            ...p,
-            classification: photoModal.classification,
-            destination: photoModal.instagramOnly ? 'instagram_only' as const : 'other_platforms' as const,
-          }
-        : p
-    ));
+    setPhotos(prev => prev.map((p, i) => {
+      if (i === photoModal.index) {
+        return { ...p, classification: photoModal.classification, isFeatured: photoModal.isFeatured };
+      }
+      // Unset featured on all other photos when this one becomes featured
+      if (photoModal.isFeatured) {
+        return { ...p, isFeatured: false };
+      }
+      return p;
+    }));
     setPhotoModal(null);
   };
 
@@ -377,10 +391,14 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
                   <Image source={{ uri: photo.uri }} style={styles.photoImage} />
                   {/* Classification badge */}
                   <View style={[styles.classBadge, { backgroundColor: CLASSIFICATION_COLORS[photo.classification] }]}>
-                    <Text style={styles.classBadgeText}>
-                      {photo.classification}{photo.destination === 'instagram_only' ? ' · IG' : ''}
-                    </Text>
+                    <Text style={styles.classBadgeText}>{photo.classification}</Text>
                   </View>
+                  {/* Featured star */}
+                  {photo.isFeatured && (
+                    <View style={styles.featuredStar}>
+                      <Ionicons name="star" size={14} color="#FFD700" />
+                    </View>
+                  )}
                   {/* Remove button */}
                   <TouchableOpacity
                     style={styles.photoRemove}
@@ -478,23 +496,26 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
 
             <View style={styles.modalDivider} />
 
-            <Text style={styles.modalSectionTitle}>Destination</Text>
+            <Text style={styles.modalSectionTitle}>Featured Image</Text>
             <TouchableOpacity
               style={styles.modalRow}
-              onPress={() => setPhotoModal(prev => prev ? { ...prev, instagramOnly: !prev.instagramOnly } : prev)}
+              onPress={() => setPhotoModal(prev => prev ? { ...prev, isFeatured: !prev.isFeatured } : prev)}
               activeOpacity={0.7}
             >
-              <View style={[styles.radio, photoModal?.instagramOnly && styles.radioSelected]}>
-                {photoModal?.instagramOnly && <View style={styles.radioDot} />}
+              <View style={[styles.radio, photoModal?.isFeatured && styles.radioSelected]}>
+                {photoModal?.isFeatured && <View style={styles.radioDot} />}
               </View>
-              <Text style={[styles.modalRowLabel, photoModal?.instagramOnly && styles.modalRowLabelSelected]}>
-                Instagram Only
-              </Text>
+              <View style={styles.modalFeaturedLabelRow}>
+                <Ionicons name="star" size={14} color={photoModal?.isFeatured ? '#FFD700' : '#6B7A99'} style={{ marginRight: 6 }} />
+                <Text style={[styles.modalRowLabel, photoModal?.isFeatured && styles.modalRowLabelSelected]}>
+                  Featured
+                </Text>
+              </View>
             </TouchableOpacity>
             <Text style={styles.modalDestHint}>
-              {photoModal?.instagramOnly
-                ? 'This photo will only be posted to Instagram.'
-                : 'This photo will be posted everywhere except Instagram.'}
+              {photoModal?.isFeatured
+                ? 'This photo leads all posts and carousels.'
+                : 'Tap to make this the featured photo.'}
             </Text>
 
             <TouchableOpacity style={styles.modalDoneBtn} onPress={applyPhotoModal} activeOpacity={0.8}>
@@ -578,6 +599,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   classBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
+  featuredStar: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 8,
+    padding: 2,
+  },
   photoRemove: {
     position: 'absolute',
     top: 4,
@@ -705,6 +734,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_500Medium',
     color: colors.textSecondary,
+  },
+  modalFeaturedLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   modalRowLabelSelected: {
     color: colors.textPrimary,

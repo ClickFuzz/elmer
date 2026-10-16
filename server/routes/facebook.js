@@ -8,6 +8,7 @@ const multer          = require('multer');
 const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
+const { orderWithFeaturedFirst } = require('./media-utils');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -265,6 +266,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
     };
 
     const { message, job_id } = req.body ?? {};
+    const featuredIndex = parseInt(req.body.featured_index ?? '0', 10) || 0;
 
     if (!message || typeof message !== 'string' || !message.trim()) {
       cleanup();
@@ -303,15 +305,17 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       });
     }
 
-    // Sort photo files by field name (photo_0, photo_1, …)
-    const photoFiles = uploadedFiles
-      .filter(f => /^photo_\d+$/.test(f.fieldname))
-      .sort((a, b) => {
-        const ai = parseInt(a.fieldname.replace('photo_', ''), 10);
-        const bi = parseInt(b.fieldname.replace('photo_', ''), 10);
-        return ai - bi;
-      })
-      .slice(0, 5);
+    // Sort photo files by field name (photo_0, photo_1, …), then move featured first
+    const photoFiles = orderWithFeaturedFirst(
+      uploadedFiles
+        .filter(f => /^photo_\d+$/.test(f.fieldname))
+        .sort((a, b) => {
+          const ai = parseInt(a.fieldname.replace('photo_', ''), 10);
+          const bi = parseInt(b.fieldname.replace('photo_', ''), 10);
+          return ai - bi;
+        }),
+      featuredIndex
+    ).slice(0, 5);
 
     const results = [];
 
@@ -472,13 +476,17 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       } catch (err) {
         console.error('[facebook] publish error for page', pageRow.account_name, ':', err.message);
         await markFailed(err.message);
+        // Meta error code 190 = invalid/expired/revoked access token.
+        // Subcodes 460 (password changed) and 467 (security reset) are common.
+        const isReconnectRequired = err.isFbError && err.fbCode === 190;
         results.push({
-          pageId:   pageRow.account_id,
-          pageName: pageRow.account_name,
-          ok:       false,
-          error:    err.message,
-          fbError:  err.isFbError ?? false,
-          fbCode:   err.fbCode    ?? null,
+          pageId:             pageRow.account_id,
+          pageName:           pageRow.account_name,
+          ok:                 false,
+          error:              err.message,
+          fbError:            err.isFbError ?? false,
+          fbCode:             err.fbCode    ?? null,
+          reconnect_required: isReconnectRequired,
         });
       }
     }

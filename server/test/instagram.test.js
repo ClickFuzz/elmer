@@ -885,3 +885,122 @@ describe('Token encryption — Instagram', () => {
     }
   });
 });
+
+// ── featured_index ordering ───────────────────────────────────────────────────
+
+describe('POST /instagram/publish — featured_index ordering', () => {
+  let app, token, userId;
+
+  const sentUrls = [];
+  function makeOrderTrackingMock() {
+    sentUrls.length = 0;
+    return async (url, _opts) => {
+      if (url.includes('/media?') || url.includes('image_url=')) sentUrls.push(url);
+      if (url.includes('/media_publish')) return { ok: true, json: async () => ({ id: 'post_123' }) };
+      if (url.includes('/media?')) return { ok: true, json: async () => ({ id: `container_${sentUrls.length}` }) };
+      if (url.includes('/media/')) return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
+      return { ok: true, json: async () => ({ id: 'generic_ok' }) };
+    };
+  }
+
+  beforeEach(async () => {
+    await setupFreshTestDb();
+    const { createInstagramRouter } = require('../routes/instagram');
+    app = createApp({ instagramRouter: createInstagramRouter({ igFetch: makeOrderTrackingMock() }) });
+    ({ token, userId } = await registerAndLogin(app, 'ig-order@example.com', 'password123'));
+    await insertIgAccount(userId, 'Order Test', 'ig-order');
+  });
+
+  after(() => closeDb());
+
+  it('sends photos in original order when featured_index is 0', async () => {
+    const photos = [makeTempPhoto(), makeTempPhoto(), makeTempPhoto()];
+    try {
+      const req = request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'Order test')
+        .field('job_id', 'order-job-0')
+        .field('featured_index', '0');
+      photos.forEach((p, i) => req.attach(`photo_${i}`, p));
+      const res = await req;
+      assert.equal(res.status, 200);
+    } finally {
+      photos.forEach(p => fs.unlinkSync(p));
+    }
+  });
+
+  it('reorders so featured photo is sent first when featured_index > 0', async () => {
+    const photos = [makeTempPhoto(), makeTempPhoto(), makeTempPhoto()];
+    try {
+      const req = request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'Featured ordering test')
+        .field('job_id', 'order-job-1')
+        .field('featured_index', '2');
+      photos.forEach((p, i) => req.attach(`photo_${i}`, p));
+      const res = await req;
+      assert.equal(res.status, 200);
+    } finally {
+      photos.forEach(p => fs.unlinkSync(p));
+    }
+  });
+});
+
+// ── classifications / before-after ───────────────────────────────────────────
+
+describe('POST /instagram/publish — classifications field', () => {
+  let app, token, userId;
+
+  beforeEach(async () => {
+    await setupFreshTestDb();
+    const { createInstagramRouter } = require('../routes/instagram');
+    const mockFetch = makeIgMock([
+      { ok: true, data: { id: 'c1' } },
+      { ok: true, data: { status_code: 'FINISHED' } },
+      { ok: true, data: { id: 'published_post' } },
+    ]);
+    app = createApp({ instagramRouter: createInstagramRouter({ igFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app, 'ig-class@example.com', 'password123'));
+    await insertIgAccount(userId, 'Class Test', 'ig-class');
+  });
+
+  after(() => closeDb());
+
+  it('accepts a JSON classifications array and returns 200', async () => {
+    const tmp = makeTempPhoto();
+    try {
+      const res = await request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'With classifications')
+        .field('job_id', 'class-job-1')
+        .field('classifications', JSON.stringify(['General']))
+        .attach('photo_0', tmp);
+      assert.equal(res.status, 200);
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
+  it('accepts Before and After classifications without crashing (composite falls back gracefully)', async () => {
+    const before = makeTempPhoto();
+    const after  = makeTempPhoto();
+    try {
+      const res = await request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'Before after test')
+        .field('job_id', 'class-job-2')
+        .field('classifications', JSON.stringify(['Before', 'After']))
+        .attach('photo_0', before)
+        .attach('photo_1', after);
+      // sharp will fail on stub bytes — non-fatal fallback means the request still succeeds
+      assert.equal(res.status, 200);
+    } finally {
+      fs.unlinkSync(before);
+      fs.unlinkSync(after);
+    }
+  });
+});

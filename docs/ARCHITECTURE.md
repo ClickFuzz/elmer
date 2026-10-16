@@ -59,8 +59,8 @@ Do not add Redis, Supabase, or Firebase without a specific demonstrated requirem
 App.tsx                   — root component; font loading, SafeAreaProvider, AppShell
   AppShell                — screen switcher, bottom nav bar, state passed to screens
     HomeScreen            — photo capture, audio recording, generate trigger
-    ResultScreen          — content generation, review UI, publish trigger (stub)
-    SettingsScreen        — business profile, connected accounts (stub), local stats
+    ResultScreen          — content generation, review UI, publish trigger
+    SettingsScreen        — business profile, connected accounts, local stats
     HistoryScreen         — browse past jobs, copy content
 
 constants/colors.ts       — design token colors (dark navy palette)
@@ -69,11 +69,14 @@ storage/database.ts       — all SQLite access; schema, migrations, read/write 
 
 server/index.js           — entry point; loads .env, calls createApp(), starts listener
 server/app.js             — Express app factory (createApp); all middleware + routes
-server/db.js              — better-sqlite3 singleton; WAL mode, migrations, getDb/closeDb
+server/db.js              — PostgreSQL pool, migrations, getPool/closeDb
 server/auth.js            — requireAuth / optionalAuth middleware
 server/crypto.js          — AES-256-GCM encrypt/decrypt for credential storage
 server/routes/auth.js     — /auth/* endpoints
 server/routes/platforms.js — /platforms/* endpoints
+server/routes/facebook.js — /facebook/* endpoints (OAuth, pages, publish)
+server/routes/instagram.js — /instagram/* endpoints (OAuth, publish)
+server/routes/media-utils.js — shared image processing (sharp): EXIF, IG prep, composites
 server/test/              — node:test + supertest test suite
 ```
 
@@ -87,7 +90,7 @@ Home state (`photos`, `audioUri`) is preserved in `savedHomeState` on the `AppSh
 
 ## Local Database Schema (expo-sqlite, WAL mode)
 
-**Schema version: 5** — applied in `storage/database.ts → migrate()`
+**Schema version: 8** — applied in `storage/database.ts → migrate()`
 
 ```sql
 CREATE TABLE jobs (
@@ -110,6 +113,7 @@ CREATE TABLE job_photos (
   job_id         INTEGER NOT NULL,
   local_uri      TEXT NOT NULL,     -- device path from camera or photo library
   classification TEXT NOT NULL DEFAULT 'General',  -- General | Before | After | Team
+  is_featured    INTEGER NOT NULL DEFAULT 0,       -- 1 if this is the featured/cover photo
   sort_order     INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
@@ -121,7 +125,7 @@ CREATE TABLE settings (
 ```
 
 **Settings keys in use:**
-- `business_profile` — JSON-encoded `BusinessProfile` object
+- `business_profile` — JSON-encoded `BusinessProfile` object (fields: `name`, `website`, `inquiryUrl`, `category`, `description`, `writingStyle`, `services`, `serviceAreas`)
 - `connected_channels` — JSON-encoded `ConnectedChannel[]` (currently always `[]`; no write path exists yet)
 - `business_location` — legacy key, migrated into `business_profile` on read
 
@@ -267,6 +271,10 @@ All platform endpoints require a valid Bearer token.
 | `FACEBOOK_APP_SECRET` | _(required for OAuth)_ | Meta App Secret — keep server-side only, never in mobile code |
 | `FACEBOOK_REDIRECT_URI` | _(required for OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/facebook/callback` |
 | `FACEBOOK_OAUTH_RETURN_SCHEME` | `elmer` | Custom URI scheme Elmer uses to return from the OAuth browser; must match `scheme` in `app.json` |
+| `INSTAGRAM_APP_ID` | _(required for OAuth)_ | Same Meta App ID (Instagram uses the same Meta Developer App) |
+| `INSTAGRAM_APP_SECRET` | _(required for OAuth)_ | Same Meta App Secret |
+| `INSTAGRAM_REDIRECT_URI` | _(required for OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/instagram/callback` |
+| `SERVER_URL` | _(required for Instagram publish)_ | Base URL the IG API uses to fetch prepared images; must be publicly reachable; production: `https://api.getelmer.com` |
 
 ---
 
@@ -277,14 +285,14 @@ All platform endpoints require a valid Bearer token.
 
 ```
 Request (multipart/form-data or JSON):
-  audio          — m4a file (optional)
-  photoCount     — integer
-  classifications — JSON array of classification strings
-  gpsCoords      — JSON array of {lat, lng}
-  businessName, businessWebsite, businessCategory,
-  businessDescription, writingStyle,
+  audio              — m4a file (optional)
+  photoCount         — integer
+  classifications    — JSON array of classification strings
+  gpsCoords          — JSON array of {lat, lng}
+  businessName, businessWebsite, businessInquiryUrl,
+  businessCategory, businessDescription, writingStyle,
   businessServices, serviceAreas — business profile fields
-  platforms      — JSON array: ['social', 'google', 'wordpress']
+  platforms          — JSON array: ['social', 'google', 'wordpress']
 
 Step 1 — Transcribe audio (Whisper, if audio present)
 Step 2 — Extract job info (gpt-4o-mini, JSON mode):
@@ -305,7 +313,39 @@ Response:
 
 **Audio handling on the server**: multer writes uploads to `server/tmp/`. The file is renamed to `.m4a`, passed to OpenAI, then deleted. Cleanup happens within the request handler; a crash could leave orphan files in `server/tmp/`.
 
+**Contact URL fallback**: `contactUrl = businessInquiryUrl || businessWebsite`. Used as the call-to-action link in Google Business posts and social posts. If neither is set, no link is appended.
+
 **Server URL**: `EXPO_PUBLIC_API_URL` environment variable; defaults to `http://localhost:3001`. Must be set to the local machine's LAN IP for physical device testing.
+
+---
+
+## Image Processing (server-side)
+
+All image manipulation uses `sharp` (^0.35.5). Processing is non-fatal: if sharp fails (e.g., corrupt file), the server falls back to the original file rather than returning 500.
+
+### Instagram aspect ratio requirements
+
+Instagram Feed requires images with aspect ratio in **[0.8, 1.91]** (4:5 portrait to 1.91:1 landscape).
+
+`prepareForInstagram(inputPath)` in `server/routes/media-utils.js`:
+1. Reads EXIF orientation to get effective width/height (EXIF-rotated dimensions)
+2. If AR is valid: rotate + cap at 1440×1440 + JPEG 92%
+3. If too tall (AR < 0.8, e.g. 9:16): pad left/right to 4:5 on dark background
+4. If too wide (AR > 1.91, e.g. panoramic): pad top/bottom to 1.91:1 on dark background
+
+`prepareCarouselForInstagram(inputPaths)`: normalises all carousel images to the same AR (derived from the first image, clamped to [0.8, 1.91]) so Instagram accepts the carousel.
+
+### Before/After composite
+
+When a job has both a **Before** and an **After** photo, `generateBeforeAfterComposite` produces a single 1080×1080 square image:
+- Two 537px-wide halves with a 6px dark gap
+- Each photo scaled to `contain` within its half (dark background fills gaps)
+- SVG "BEFORE" / "AFTER" label overlays at bottom of each half
+- Composite leads the media array; remaining General/Team photos follow
+
+### Featured image ordering
+
+`orderWithFeaturedFirst(files, featuredIndex)` moves the starred photo to index 0 of any array before publishing. Mobile sends `featured_index` as a multipart field; server applies ordering before image preparation and API calls.
 
 ---
 
@@ -335,10 +375,12 @@ Mobile                          Elmer Server                  Facebook
 ### Publishing flow (multi-page, multi-photo)
 
 ```
-1. Mobile → POST /facebook/publish (multipart: message, job_id, photo_0…photo_N)
-2. Server fetches all selected=true pages for the user
-3. If none selected → 422 no_pages_selected
-4. For each selected page:
+1. Mobile → POST /facebook/publish (multipart: message, job_id, photo_0…photo_N,
+                                     featured_index, classifications)
+2. Server applies orderWithFeaturedFirst(photoFiles, featured_index)
+3. Server fetches all selected=true pages for the user
+4. If none selected → 422 no_pages_selected
+5. For each selected page:
    a. Validate CREATE_CONTENT or MANAGE task from tasks_json
    b. Check idempotency (job_ref = fb_{userId}_{jobId}_{accountId} AND status='published')
    c. Decrypt page access token
@@ -346,8 +388,11 @@ Mobile                          Elmer Server                  Facebook
    e. For each photo: POST /{pageId}/photos?published=false → collect media_fbid values
    f. POST /{pageId}/feed?message=...&attached_media=[{"media_fbid":"..."},...]
    g. Update publishing_record to status='published' or 'failed'
-5. Returns { ok: anyOk, results: [{pageId, pageName, ok, postId?, postUrl?, duplicate?, error?}] }
+6. Returns { ok: anyOk, results: [{pageId, pageName, ok, postId?, postUrl?, duplicate?,
+                                    reconnect_required?, error?}] }
 ```
+
+**Token invalidation**: Facebook error code 190 (revoked/expired token) sets `reconnect_required: true` in the per-page result. The mobile app shows an actionable "Reconnect Facebook" alert.
 
 **Graph API version**: `v21.0`  
 **Required permissions**: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management`  
@@ -376,6 +421,57 @@ Mobile                          Elmer Server                  Facebook
 | App type | Business |
 | Products | Facebook Login, Pages API |
 | Review screencast | Sign in → Settings → Connect Facebook → authorize pages → Manage Pages → select pages → create job → Post Everywhere → confirm post appears on each selected page |
+
+---
+
+## Instagram Integration
+
+### OAuth flow
+
+```
+Mobile                          Elmer Server                  Instagram (Meta)
+  │                                  │                              │
+  ├─POST /instagram/connect-url ─────►│ creates oauth_state, returns authUrl
+  │◄─── { authUrl } ─────────────────┤                              │
+  ├─openAuthSessionAsync(authUrl) ───►│                              │
+  │                            browser opens IG OAuth dialog ───────►
+  │                                  │◄── GET /instagram/callback?code&state ─┤
+  │                                  │  validates state                       │
+  │                                  │  exchanges code → short-lived token    │
+  │                                  │  exchanges → long-lived token (60d)    │
+  │                                  │  GET /me → account name/id             │
+  │                                  │  stores encrypted token in DB          │
+  │◄── redirect to elmer://oauth/callback?success=true ──────────────────────┤
+```
+
+### Publishing flow
+
+```
+1. Mobile → POST /instagram/publish (multipart: caption, job_id, photo_0…photo_N,
+                                      featured_index, classifications)
+2. Server applies orderWithFeaturedFirst(photoFiles, featured_index)
+3. If Before + After classifications present → generateBeforeAfterComposite → prepend composite
+4. Run prepareCarouselForInstagram on all photos (EXIF-correct, AR normalise, JPEG)
+5. Upload each image to tmpdir; serve via GET /instagram/media/:filename
+6. Single photo: POST /media (IMAGE type) → wait for FINISHED status → POST /media_publish
+7. Multiple photos: POST /media for each (IMAGE) → POST /media (CAROUSEL_ALBUM) → /media_publish
+8. Delete temp files; return { ok, postId?, postUrl? }
+```
+
+**Graph API version**: `v21.0`  
+**Required permissions**: `instagram_basic`, `instagram_content_publish`  
+**Token lifecycle**: Short-lived user token → long-lived user token (60 days); renewed on reconnect  
+**Image URL delivery**: Server temporarily serves prepared images via `GET /instagram/media/:filename`; deleted after publish attempt
+
+### Instagram Routes
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /instagram/connect-url` | Bearer | Returns Instagram OAuth authorization URL + creates CSRF state |
+| `GET /instagram/callback` | Public (validates via state) | Instagram redirects here; exchanges code, stores token, redirects to app |
+| `GET /instagram/profile` | Bearer | Returns connected IG account info |
+| `GET /instagram/media/:filename` | Public (short-lived) | Serves temp-prepared images for IG API upload; deleted post-publish |
+| `POST /instagram/publish` | Bearer, multipart | Publishes single photo or carousel; returns `{ ok, postId?, postUrl? }` |
 
 ---
 
@@ -425,15 +521,20 @@ Mobile                          Elmer Server                  Facebook
 - Auth + rate limiting on all externally accessible endpoints (`server/app.js`)
 - 52 automated tests: db init (12), auth endpoints (18), platform endpoints (22) (`server/test/`)
 
-### Implemented (Phase 2 partial — Facebook integration)
+### Implemented (Phase 2 — Facebook + Instagram integration)
 
 - **Mobile sign-in/register**: Full sign-in form in SettingsScreen (`SettingsScreen.tsx`); session token stored in SecureStore/SQLite.
 - **Facebook OAuth — server**: `POST /facebook/connect-url` returns authorization URL with `business_management` scope; `GET /facebook/callback` exchanges code, fetches pages via `/me/accounts`, stores encrypted page tokens with `selected=true`; CSRF state validation; redirect to `elmer://oauth/callback` deep link (`server/routes/facebook.js`).
 - **Facebook OAuth — mobile**: `openAuthSessionAsync` opens browser; deep link return on dev/production builds; falls back gracefully on Expo Go; handles `insufficient_permissions` and `no_manageable_pages` error codes with specific alerts and Reconnect option (`SettingsScreen.tsx`).
 - **Facebook multi-page management**: `GET /facebook/pages` lists connected pages with `selected` flag; `POST /facebook/pages/selection` replaces the selection set; Manage Pages UI with per-page checkboxes; reconnect/disconnect UI; one-time multi-page warning alert (`SettingsScreen.tsx`, `server/routes/facebook.js`).
-- **Facebook multi-page publishing**: `POST /facebook/publish` publishes to all selected pages independently; per-page idempotency key includes Facebook account ID; partial success preserved; `tasks_json` used to validate `CREATE_CONTENT`/`MANAGE` permission; photos re-read per page (`server/routes/facebook.js`).
-- **Post Everywhere — mobile**: Connected channels loaded from server (selected Facebook pages filtered server-side); "Post" button publishes to all; per-page results shown in result footer (`ResultScreen.tsx`).
-- **88 automated tests** (DB, auth, platforms, Facebook: OAuth state/callback including Business Portfolio, page selection endpoint, multi-page publish, partial success, per-page idempotency, token encryption) — all passing (`server/test/`).
+- **Facebook multi-page publishing**: `POST /facebook/publish` publishes to all selected pages independently; per-page idempotency key includes Facebook account ID; partial success preserved; `tasks_json` used to validate `CREATE_CONTENT`/`MANAGE` permission; featured-image ordering applied; photos re-read per page (`server/routes/facebook.js`).
+- **Facebook token invalidation**: Error code 190 → `reconnect_required: true` in per-page result → mobile shows "Reconnect Facebook" alert (`server/routes/facebook.js`, `ResultScreen.tsx`).
+- **Instagram OAuth — server + mobile**: Full OAuth flow using `instagram_basic` + `instagram_content_publish` scopes; encrypted token stored in DB; same deep-link return pattern as Facebook (`server/routes/instagram.js`, `SettingsScreen.tsx`).
+- **Instagram publishing**: Single photo and carousel (up to 10); automatic EXIF correction and AR fitting to [0.8, 1.91]; Before/After composite generation when both labels present; featured-image ordering; images served temporarily from server for IG API upload (`server/routes/instagram.js`).
+- **Featured image**: Star toggle in photo modal replaces Destination field; star indicator on thumbnail; first photo auto-featured; promoted to next on deletion; `is_featured` persisted in `job_photos` (schema v8); `featured_index` sent with publish requests (`HomeScreen.tsx`, `storage/database.ts`).
+- **Inquiry URL**: `BusinessProfile.inquiryUrl` field; `contactUrl = inquiryUrl || website` fallback used as CTA link in Google Business and social posts; SettingsScreen field (`SettingsScreen.tsx`, `server/app.js`).
+- **Post Everywhere — mobile**: Connected channels loaded from server; publishes to Facebook pages and Instagram independently; per-page results shown in result footer (`ResultScreen.tsx`).
+- **148 automated tests** (DB, auth, platforms, Facebook, Instagram, media-utils) — all passing (`server/test/`).
 
 ### Stub — UI exists but action is a no-op or alert
 
@@ -460,7 +561,7 @@ Mobile                          Elmer Server                  Facebook
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/media-utils.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
@@ -562,15 +663,15 @@ These are bugs confirmed by audit. They should be fixed before user testing or p
 
 | Issue | Location | Impact |
 |---|---|---|
-| "Post Everywhere" is a no-op | `ResultScreen.tsx:234` | Core user action does nothing |
-| Google post generated but not shown in UI | `ResultScreen.tsx:71` | Users cannot review Google content |
-| `connected_channels` never written | `SettingsScreen.tsx:93` | Platform-specific content never generated for real users |
-| Orphaned `elmer_recording_*.m4a` files | `HomeScreen.tsx:273` | Audio files accumulate; never deleted |
+| Google post generated but not shown in UI | `ResultScreen.tsx` | Users cannot review Google content before publishing |
+| `connected_channels` never written | `SettingsScreen.tsx` | Platform-specific content never generated for real users |
+| Orphaned `elmer_recording_*.m4a` files | `HomeScreen.tsx` | Audio files accumulate; never deleted |
 | Job status never changes from `draft` | `storage/database.ts` | `deleteOldPublishedMedia` is dead code; history always shows "Draft" |
 | `expo-file-system/legacy` import | `HomeScreen.tsx:1`, `ResultScreen.tsx:1` | Deprecation warning; will break in a future SDK |
-| `Clipboard` imported from `react-native` (deprecated) | `ResultScreen.tsx:13`, `HistoryScreen.tsx:7` | Replace with `expo-clipboard` |
-| `deleteOldPublishedMedia` never called | `storage/database.ts:257` | Published media is never cleaned up |
-| Server `tmp/` not cleaned on crash | `server/index.js:17` | Orphan audio files possible on server |
+| `Clipboard` imported from `react-native` (deprecated) | `ResultScreen.tsx`, `HistoryScreen.tsx` | Replace with `expo-clipboard` |
+| `deleteOldPublishedMedia` never called | `storage/database.ts` | Published media is never cleaned up |
+| Server `tmp/` not cleaned on crash | `server/index.js` | Orphan audio files possible on server |
+| Instagram temp media files not cleaned on crash | `server/routes/instagram.js` | Temp `_ig.jpg` / `_carousel.jpg` files may persist if process exits mid-publish |
 
 ---
 

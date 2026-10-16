@@ -819,3 +819,84 @@ describe('Token storage and encryption', () => {
     assert.ok(sentToken.some(t => t === known), 'decrypted token should be used in Graph API call');
   });
 });
+
+// ── Reconnect required ────────────────────────────────────────────────────────
+
+describe('POST /facebook/publish — reconnect_required', () => {
+  let app, token, userId;
+
+  beforeEach(async () => {
+    await setupFreshTestDb();
+  });
+
+  after(async () => closeDb());
+
+  it('sets reconnect_required=true when Meta returns error code 190', async () => {
+    const mockFetch = async (_url, opts) => {
+      const body = opts?.body;
+      if (body && typeof body.get === 'function' && body.get('access_token')) {
+        return { ok: true, json: async () => ({ error: { message: 'Invalid OAuth access token.', code: 190, error_subcode: 460 } }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app));
+
+    const now = Date.now();
+    await getPool().query(
+      `INSERT INTO connected_platforms
+         (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
+          selected, connected_at, updated_at)
+       VALUES ($1, 'facebook', 'Revoked Page', 'pg-190', $2, '["CREATE_CONTENT"]', true, $3, $4)`,
+      [userId, encrypt('old_token'), now, now]
+    );
+
+    const res = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Reconnect test')
+      .field('job_id', 'reconnect-job-1');
+
+    assert.strictEqual(res.status, 200);
+    const result = res.body.results[0];
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reconnect_required, true);
+    assert.strictEqual(result.fbCode, 190);
+  });
+
+  it('does not set reconnect_required for non-auth errors (code 368)', async () => {
+    const mockFetch = async (_url, opts) => {
+      const body = opts?.body;
+      if (body && typeof body.get === 'function' && body.get('access_token')) {
+        return { ok: true, json: async () => ({ error: { message: 'Rate limit exceeded.', code: 368 } }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockFetch }) });
+    ({ token, userId } = await registerAndLogin(app));
+
+    const now = Date.now();
+    await getPool().query(
+      `INSERT INTO connected_platforms
+         (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
+          selected, connected_at, updated_at)
+       VALUES ($1, 'facebook', 'Rate Limited Page', 'pg-368', $2, '["CREATE_CONTENT"]', true, $3, $4)`,
+      [userId, encrypt('ok_token'), now, now]
+    );
+
+    const res = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('message', 'Rate limit test')
+      .field('job_id', 'ratelimit-job-1');
+
+    assert.strictEqual(res.status, 200);
+    const result = res.body.results[0];
+    assert.strictEqual(result.ok, false);
+    assert.ok(!result.reconnect_required, 'should not be set for non-auth error');
+  });
+});

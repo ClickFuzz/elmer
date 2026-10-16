@@ -8,6 +8,13 @@ const multer          = require('multer');
 const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
+const {
+  prepareForInstagram,
+  prepareCarouselForInstagram,
+  generateBeforeAfterComposite,
+  orderWithFeaturedFirst,
+  parseIntArray,
+} = require('./media-utils');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const IG_AUTHORIZE_URL   = 'https://api.instagram.com/oauth/authorize';
@@ -167,8 +174,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       const longToken  = longData.access_token;
       const expiresMs  = (longData.expires_in ?? 5184000) * 1000;
 
-      // Step 3 — Fetch profile via /me (Instagram Login for Business requires /me,
-      // not /{user_id} — the numeric ID from the token exchange is not a valid node path)
+      // Step 3 — Fetch profile via /me
       const profileParams = new URLSearchParams({
         fields:       'id,name,username,account_type',
         access_token: longToken,
@@ -233,13 +239,17 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
   });
 
   // ── POST /instagram/publish ──────────────────────────────────────────────────
-  // Accepts multipart: caption (text), job_id (text), photo_0..N (files)
+  // Accepts multipart: caption (text), job_id (text), photo_0..N (files),
+  // featured_index (optional integer), classifications (optional JSON array).
   router.post('/publish', requireAuth, upload.any(), async (req, res) => {
     const uploadedFiles = req.files ?? [];
-    const stagedFiles   = [];
+    const processedFiles = []; // IG-prepared files to delete after use
+    let compositePath = null;  // composite file to delete after use
+
     const cleanup = () => {
-      for (const f of uploadedFiles) fs.unlink(f.path, () => {});
-      for (const fp of stagedFiles)  fs.unlink(fp,     () => {});
+      for (const f of uploadedFiles)   fs.unlink(f.path,   () => {});
+      for (const fp of processedFiles) fs.unlink(fp,       () => {});
+      if (compositePath)               fs.unlink(compositePath, () => {});
     };
 
     const { caption, job_id } = req.body ?? {};
@@ -252,6 +262,9 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       cleanup();
       return res.status(400).json({ error: 'job_id is required' });
     }
+
+    const featuredIndex   = parseInt(req.body.featured_index ?? '0', 10) || 0;
+    const classifications = parseIntArray(req.body.classifications) ?? [];
 
     const pool      = getPool();
     const now       = Date.now();
@@ -293,20 +306,57 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
     const igUserId = igAccount.account_id;
 
-    // Sort photo files by field name (photo_0, photo_1, …)
-    const photoFiles = uploadedFiles
+    // Sort incoming photo files by field name (photo_0, photo_1, …)
+    let photoFiles = uploadedFiles
       .filter(f => /^photo_\d+$/.test(f.fieldname))
       .sort((a, b) => {
         const ai = parseInt(a.fieldname.replace('photo_', ''), 10);
         const bi = parseInt(b.fieldname.replace('photo_', ''), 10);
         return ai - bi;
-      })
-      .slice(0, MAX_CAROUSEL);
+      });
 
     if (photoFiles.length === 0) {
       cleanup();
       return res.status(400).json({ error: 'At least one photo is required for Instagram.' });
     }
+
+    // Move featured photo to front
+    photoFiles = orderWithFeaturedFirst(photoFiles, featuredIndex);
+
+    // Check for a complete before/after pair to generate a composite
+    const classMap = {};
+    photoFiles.forEach((f, i) => {
+      const cls = (classifications[i] ?? 'General');
+      classMap[cls] = classMap[cls] ?? [];
+      classMap[cls].push(f);
+    });
+
+    const beforeFiles = classMap['Before'] ?? [];
+    const afterFiles  = classMap['After']  ?? [];
+    const hasCompletePair = beforeFiles.length > 0 && afterFiles.length > 0;
+
+    if (hasCompletePair) {
+      try {
+        compositePath = await generateBeforeAfterComposite(
+          beforeFiles[0].path,
+          afterFiles[0].path,
+          MEDIA_DIR
+        );
+        // Replace before/after files in the array with the composite first
+        // then keep remaining non-before/non-after photos
+        const otherFiles = photoFiles.filter((_, i) => {
+          const cls = classifications[i] ?? 'General';
+          return cls !== 'Before' && cls !== 'After';
+        });
+        photoFiles = [{ path: compositePath, mimetype: 'image/jpeg' }, ...otherFiles];
+      } catch (err) {
+        console.warn('[instagram] composite generation failed, using original photos:', err.message);
+        compositePath = null;
+      }
+    }
+
+    // Limit to MAX_CAROUSEL
+    photoFiles = photoFiles.slice(0, MAX_CAROUSEL);
 
     // Idempotency check
     const jobRef = `ig_${req.userId}_${job_id}`;
@@ -335,16 +385,38 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       return res.status(500).json({ error: 'Database error', detail: err.message });
     }
 
+    // Prepare images for Instagram (aspect ratio, JPEG, orientation).
+    // Falls back to original files if processing fails (e.g., stub files in tests).
+    let preparedPaths;
+    if (photoFiles.length === 1) {
+      try {
+        const prepared = await prepareForInstagram(photoFiles[0].path);
+        if (prepared !== photoFiles[0].path) processedFiles.push(prepared);
+        preparedPaths = [prepared];
+      } catch (err) {
+        console.warn('[instagram] image preparation failed, using original:', err.message);
+        preparedPaths = [photoFiles[0].path];
+      }
+    } else {
+      try {
+        const prepared = await prepareCarouselForInstagram(photoFiles.map(f => f.path));
+        // Only track paths that differ from originals (i.e., newly created files)
+        prepared.forEach((p, i) => { if (p !== photoFiles[i].path) processedFiles.push(p); });
+        preparedPaths = prepared;
+      } catch (err) {
+        console.warn('[instagram] carousel preparation failed, using originals:', err.message);
+        preparedPaths = photoFiles.map(f => f.path);
+      }
+    }
+
     // Stage photos in the public MEDIA_DIR so Instagram can fetch them
     const mediaItems = [];
-    for (const f of photoFiles) {
-      const ext      = (f.mimetype === 'image/png') ? 'png' : 'jpg';
+    for (const preparedPath of preparedPaths) {
       const uuid     = randomBytes(16).toString('hex');
-      const filename = `${uuid}.${ext}`;
+      const filename = `${uuid}.jpg`;
       const destPath = path.join(MEDIA_DIR, filename);
       try {
-        fs.copyFileSync(f.path, destPath);
-        stagedFiles.push(destPath);
+        fs.copyFileSync(preparedPath, destPath);
       } catch {
         cleanup();
         return res.status(500).json({ error: 'Failed to stage media file.' });

@@ -78,7 +78,7 @@ type PageResult = {
   postUrl?: string;
   error?: string;
   duplicate?: boolean;
-  skipped?: boolean;
+  reconnect_required?: boolean;
 };
 
 type PublishState =
@@ -159,6 +159,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
                 gpsCoords: JSON.stringify(gpsCoords),
                 businessName: profile.name,
                 businessWebsite: profile.website,
+                businessInquiryUrl: profile.inquiryUrl ?? '',
                 businessCategory: effectiveCategory,
                 businessDescription: profile.description,
                 writingStyle: profile.writingStyle,
@@ -183,6 +184,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
               gpsCoords,
               businessName: profile.name,
               businessWebsite: profile.website,
+              businessInquiryUrl: profile.inquiryUrl ?? '',
               businessCategory: effectiveCategory,
               businessDescription: profile.description,
               writingStyle: profile.writingStyle,
@@ -227,7 +229,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           location: loc,
           seoMetadata: data.seoMetadata ?? null,
           isMock: data.mock === true,
-          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification, destination: p.destination ?? 'other_platforms' })),
+          photos: payload.photos.map(p => ({ uri: p.uri, classification: p.classification, isFeatured: p.isFeatured ?? false })),
         }).then(jobId => setSavedJobId(jobId)).catch(err => console.warn('DB save failed:', err));
 
         break; // success — exit retry loop
@@ -291,19 +293,17 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     copiedTimerRef.current = setTimeout(() => setCopiedItem(null), 2000);
   };
 
-  const runFacebookPublish = async (sessionToken: string, igConnected: boolean): Promise<PageResult[]> => {
+  const runFacebookPublish = async (sessionToken: string): Promise<PageResult[]> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+    const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
 
     const formData = new FormData();
     formData.append('message', editedSocial);
     formData.append('job_id', jobId);
+    formData.append('featured_index', String(Math.max(0, featuredIndex)));
+    formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
 
-    // When Instagram is connected, exclude instagram_only photos from other platforms.
-    // When Instagram is disconnected, include all photos so none are accidentally withheld.
-    const fbPhotos = igConnected
-      ? payload.photos.filter(p => (p.destination ?? 'other_platforms') !== 'instagram_only')
-      : payload.photos;
-    fbPhotos.forEach((photo, i) => {
+    payload.photos.forEach((photo, i) => {
       formData.append(`photo_${i}`, {
         uri: photo.uri,
         type: 'image/jpeg',
@@ -335,20 +335,33 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     }
 
     const rawResults = (data.results as Omit<PageResult, 'platform'>[]) ?? [];
-    return rawResults.map(r => ({ ...r, platform: 'facebook' }));
+    const mapped = rawResults.map(r => ({ ...r, platform: 'facebook' as const }));
+    // Surface a reconnect alert if any page reports an invalidated token
+    const needsReconnect = mapped.some(r => (r as any).reconnect_required);
+    if (needsReconnect) {
+      Alert.alert(
+        'Facebook needs to reconnect',
+        'Your connection has expired or been revoked. Reconnect Facebook in Settings to continue publishing.',
+        [
+          { text: 'Open Settings', onPress: onShowSettings },
+          { text: 'Dismiss', style: 'cancel' },
+        ]
+      );
+    }
+    return mapped;
   };
 
-  const runInstagramPublish = async (
-    sessionToken: string,
-    igPhotos: Array<{ uri: string; type?: string }>,
-  ): Promise<PageResult> => {
+  const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+    const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
 
     const formData = new FormData();
     formData.append('caption', editedSocial);
     formData.append('job_id', jobId);
+    formData.append('featured_index', String(Math.max(0, featuredIndex)));
+    formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
 
-    igPhotos.forEach((photo, i) => {
+    payload.photos.forEach((photo, i) => {
       formData.append(`photo_${i}`, {
         uri: photo.uri,
         type: 'image/jpeg',
@@ -418,9 +431,6 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
     const hasInstagram = connectedChannels.some(ch => ch.platform === 'instagram');
     const channelList  = connectedChannels.map(ch => ch.accountName).join(', ');
 
-    // Photos destined only for Instagram
-    const igPhotos = payload.photos.filter(p => (p.destination ?? 'other_platforms') === 'instagram_only');
-
     Alert.alert(
       'Publish?',
       `Post to: ${channelList}`,
@@ -429,21 +439,8 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           setPublishState({ status: 'publishing' });
           try {
             const tasks: Promise<PageResult[]>[] = [];
-            if (hasFacebook) tasks.push(runFacebookPublish(token, hasInstagram));
-            if (hasInstagram) {
-              if (igPhotos.length > 0) {
-                tasks.push(runInstagramPublish(token, igPhotos).then(r => [r]));
-              } else {
-                // No Instagram-tagged photos — skip silently, record for confirmation screen
-                tasks.push(Promise.resolve([{
-                  pageId: 'ig',
-                  pageName: 'Instagram',
-                  platform: 'instagram',
-                  ok: true,
-                  skipped: true,
-                }]));
-              }
-            }
+            if (hasFacebook)  tasks.push(runFacebookPublish(token));
+            if (hasInstagram) tasks.push(runInstagramPublish(token).then(r => [r]));
 
             const settled = await Promise.allSettled(tasks);
             const allResults: PageResult[] = [];
@@ -473,7 +470,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
 
   // Full-screen confirmation after a successful publish
   if (publishState.status === 'success') {
-    const anyOk = publishState.results.some(r => !r.skipped && r.ok);
+    const anyOk = publishState.results.some(r => r.ok);
     return (
       <View style={styles.container}>
         <ScrollView
@@ -492,34 +489,28 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
           <View style={styles.confirmedButtons}>
             {publishState.results.map((r, i) => {
               const cfg = PLATFORM_CFG[r.platform] ?? PLATFORM_CFG.default;
-              const canOpen = !r.skipped && r.ok && !!r.postUrl;
-              const btnBg = r.skipped ? colors.surface : r.ok ? cfg.bg : '#2A3347';
-              const iconColor = r.skipped ? colors.textMuted : r.ok ? cfg.iconColor : colors.textMuted;
+              const canOpen = r.ok && !!r.postUrl;
+              const btnBg = r.ok ? cfg.bg : '#2A3347';
+              const iconColor = r.ok ? cfg.iconColor : colors.textMuted;
               return (
                 <TouchableOpacity
                   key={i}
                   style={[
                     styles.viewOnBtn,
                     { backgroundColor: btnBg },
-                    r.skipped && styles.viewOnBtnSkipped,
-                    !canOpen && !r.skipped && styles.viewOnBtnDim,
+                    !canOpen && styles.viewOnBtnDim,
                   ]}
                   onPress={() => canOpen && Linking.openURL(r.postUrl!)}
                   activeOpacity={canOpen ? 0.8 : 1}
                 >
                   <Ionicons name={cfg.icon as any} size={20} color={iconColor} />
                   <View style={styles.viewOnBtnText}>
-                    <Text style={[styles.viewOnLabel, (r.skipped || !r.ok) && styles.viewOnLabelDim]}>
-                      {r.skipped
-                        ? `Skipped · ${r.pageName}`
-                        : r.ok
-                          ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
-                          : `Failed · ${r.pageName}`}
+                    <Text style={[styles.viewOnLabel, !r.ok && styles.viewOnLabelDim]}>
+                      {r.ok
+                        ? (r.duplicate ? `Already posted · ${r.pageName}` : `View on ${r.pageName}`)
+                        : `Failed · ${r.pageName}`}
                     </Text>
-                    {r.skipped && (
-                      <Text style={styles.viewOnError}>No Instagram photos selected</Text>
-                    )}
-                    {!r.skipped && !r.ok && r.error && (
+                    {!r.ok && r.error && (
                       <Text style={styles.viewOnError} numberOfLines={1}>{r.error}</Text>
                     )}
                   </View>

@@ -521,6 +521,14 @@ export default function SettingsScreen({ onBack }: Props) {
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Inquiry URL</Text>
+                <Text style={styles.fieldSubLabel}>Quote form, booking page, or contact page</Text>
+              </View>
+              <TextInput style={[styles.fieldInput, { flex: 0.55 }]} value={profile.inquiryUrl ?? ''} onChangeText={inquiryUrl => update({ inquiryUrl })} placeholder="optional" placeholderTextColor={colors.textMuted} autoCorrect={false} autoCapitalize="none" keyboardType="url" returnKeyType="next" />
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Location</Text>
               <TextInput style={styles.fieldInput} value={profile.location} onChangeText={location => update({ location })} placeholder="City, State" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" />
             </View>
@@ -1001,6 +1009,7 @@ const styles = StyleSheet.create({
   fieldRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 13, gap: 12 },
   fieldBlock: { paddingHorizontal: 16, paddingVertical: 13 },
   fieldLabel: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, flexShrink: 0 },
+  fieldSubLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   fieldLabelAbove: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
   fieldInput: { flex: 1, fontSize: 14, color: colors.textSecondary, textAlign: 'right' },
   placeholder: { color: colors.textMuted },

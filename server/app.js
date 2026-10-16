@@ -198,6 +198,7 @@ function createApp({ facebookRouter, instagramRouter } = {}) {
 
     const businessName               = req.body.businessName               || '';
     const businessWebsite            = req.body.businessWebsite            || '';
+    const businessInquiryUrl         = req.body.businessInquiryUrl         || '';
     const businessCategory           = req.body.businessCategory           || '';
     const businessDescription        = req.body.businessDescription        || '';
     const writingStyle               = req.body.writingStyle               || 'Casual / Professional';
@@ -322,6 +323,9 @@ Rules:
     ].filter(Boolean).join('\n');
     const serviceAreaCtx = serviceAreasList.length ? `Service areas: ${serviceAreasList.join(', ')}` : '';
 
+    // Link destination: customer inquiry URL > website > no link
+    const contactUrl = businessInquiryUrl || businessWebsite;
+
     const googlePrompt = `Write a Google Business Profile post for a contractor.
 
 Job: ${jobDesc}
@@ -334,12 +338,16 @@ Requirements:
 - Naturally mention the city/area
 - Describe what was done and the customer benefit
 - ${beforeAfterRule}
-- Clear call to action${businessName ? ` — invite readers to contact ${businessName}` : ''}${businessWebsite ? ` and visit ${businessWebsite} (bare URL, plain text, no markdown)` : ''}
+- Clear call to action${businessName ? ` — invite readers to contact ${businessName}` : ''}${contactUrl ? ` and visit ${contactUrl} (bare URL, plain text, no markdown)` : ''}
 - Plain text only — no markdown, no brackets, no asterisks
 - 2–4 hashtags at the end
 - No keyword stuffing — write for people, not search engines
 - ${neverInvent}
 Return only the post text.`;
+
+    const contactCtx = contactUrl
+      ? ` — include a call to action with the URL ${contactUrl} (plain text, no markdown); do not add it if the generated text already naturally includes it`
+      : '';
 
     const socialPrompt = `Write a social media post for Facebook, Instagram, X (Twitter), and LinkedIn.
 
@@ -352,7 +360,7 @@ Requirements:
 - Writing tone: ${tone}${customStyleCtx}
 - ${beforeAfterRule}
 - Emotionally engaging — what did this mean for the customer?
-- Call to action${businessWebsite ? ` — include the bare URL ${businessWebsite} (plain text, no markdown)` : ''}
+- Call to action${contactCtx}
 - 3–5 hashtags at the end
 - Plain text only — no markdown, no brackets, no asterisks
 - ${neverInvent}

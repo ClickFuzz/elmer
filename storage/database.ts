@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 export type SeoMetadata = {
   seoTitle: string;
@@ -51,8 +51,8 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         job_id INTEGER NOT NULL,
         local_uri TEXT NOT NULL,
         classification TEXT NOT NULL DEFAULT 'General',
-        destination TEXT NOT NULL DEFAULT 'other_platforms',
         sort_order INTEGER NOT NULL DEFAULT 0,
+        is_featured INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS settings (
@@ -84,6 +84,18 @@ async function migrate(db: SQLite.SQLiteDatabase) {
   if (version < 7) {
     try { await db.execAsync("UPDATE job_photos SET destination = 'other_platforms' WHERE destination = 'all'"); } catch { /* ignore */ }
   }
+  if (version < 8) {
+    try { await db.execAsync('ALTER TABLE job_photos ADD COLUMN is_featured INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+    // Feature the first photo (lowest sort_order) for each existing job
+    try {
+      await db.execAsync(`
+        UPDATE job_photos SET is_featured = 1
+        WHERE sort_order = (
+          SELECT MIN(sort_order) FROM job_photos jp2 WHERE jp2.job_id = job_photos.job_id
+        )
+      `);
+    } catch { /* ignore */ }
+  }
 
   if (version < SCHEMA_VERSION) {
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -99,7 +111,7 @@ export async function saveJob(params: {
   location: string;
   seoMetadata: SeoMetadata | null;
   isMock: boolean;
-  photos: { uri: string; classification: string; destination?: string }[];
+  photos: { uri: string; classification: string; isFeatured?: boolean }[];
 }): Promise<number> {
   const db = await getDb();
   const now = Date.now();
@@ -135,8 +147,8 @@ export async function saveJob(params: {
 
   for (let i = 0; i < params.photos.length; i++) {
     await db.runAsync(
-      `INSERT INTO job_photos (job_id, local_uri, classification, destination, sort_order) VALUES (?, ?, ?, ?, ?)`,
-      [jobId, params.photos[i].uri, params.photos[i].classification, params.photos[i].destination ?? 'other_platforms', i]
+      `INSERT INTO job_photos (job_id, local_uri, classification, is_featured, sort_order) VALUES (?, ?, ?, ?, ?)`,
+      [jobId, params.photos[i].uri, params.photos[i].classification, params.photos[i].isFeatured ? 1 : 0, i]
     );
   }
 
@@ -220,6 +232,7 @@ export type ConnectedChannel = {
 export type BusinessProfile = {
   name: string;
   website: string;
+  inquiryUrl: string;
   location: string;
   category: string;
   categoryCustom: string;
@@ -233,6 +246,7 @@ export type BusinessProfile = {
 export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
   name: '',
   website: '',
+  inquiryUrl: '',
   location: '',
   category: '',
   categoryCustom: '',
@@ -262,7 +276,7 @@ export async function saveBusinessProfile(profile: BusinessProfile): Promise<voi
 export type PendingPhoto = {
   uri: string;
   classification: string;
-  destination?: string;
+  isFeatured?: boolean;
   gps?: { lat: number; lng: number };
 };
 
@@ -399,7 +413,7 @@ export async function deleteJob(id: number): Promise<void> {
 export type JobPhoto = {
   localUri: string;
   classification: string;
-  destination: string;
+  isFeatured: boolean;
   sortOrder: number;
 };
 
@@ -408,16 +422,16 @@ export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
   const rows = await db.getAllAsync<{
     local_uri: string;
     classification: string;
-    destination: string;
+    is_featured: number;
     sort_order: number;
   }>(
-    'SELECT local_uri, classification, destination, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
+    'SELECT local_uri, classification, is_featured, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
     [jobId]
   );
   return rows.map(r => ({
     localUri: r.local_uri,
     classification: r.classification,
-    destination: r.destination ?? 'all',
+    isFeatured: r.is_featured === 1,
     sortOrder: r.sort_order,
   }));
 }
