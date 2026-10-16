@@ -16,13 +16,31 @@ const {
   generateBeforeAfterComposite,
 } = require('./media-utils');
 
-const THREADS_AUTHORIZE_URL = 'https://threads.net/oauth/authorize';
-const THREADS_TOKEN_URL     = 'https://graph.threads.net/oauth/access_token';
-const THREADS_GRAPH_BASE    = 'https://graph.threads.net';
-const THREADS_API_VERSION   = 'v1.0';
-const THREADS_PERMISSIONS   = 'threads_basic,threads_content_publish';
-const OAUTH_STATE_TTL_MS    = 10 * 60 * 1000;
-const MAX_CAROUSEL          = 20;
+const THREADS_AUTHORIZE_URL      = 'https://threads.net/oauth/authorize';
+const THREADS_TOKEN_URL          = 'https://graph.threads.net/oauth/access_token';
+const THREADS_GRAPH_BASE         = 'https://graph.threads.net';
+const THREADS_API_VERSION        = 'v1.0';
+const THREADS_PERMISSIONS        = 'threads_basic,threads_content_publish';
+const OAUTH_STATE_TTL_MS         = 10 * 60 * 1000;
+const MAX_CAROUSEL               = 20;
+const CONTAINER_POLL_INTERVAL_MS = 3000;
+const CONTAINER_POLL_MAX_ATTEMPTS = 15;
+
+// Polls a Threads media container until status is FINISHED (or ERROR/EXPIRED).
+// Threads uses the field name 'status', Instagram uses 'status_code'.
+async function waitForThreadsContainer(containerId, token, threadsFetch) {
+  for (let attempt = 0; attempt < CONTAINER_POLL_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, CONTAINER_POLL_INTERVAL_MS));
+    const data = await threadsFetch(
+      `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${containerId}?fields=status&access_token=${token}`
+    ).then(r => r.json());
+    if (data.error) throw Object.assign(new Error(data.error.message), { isRevoked: data.error.code === 190 });
+    if (data.status === 'FINISHED') return;
+    if (data.status === 'ERROR')    throw new Error('Threads media container processing failed.');
+    if (data.status === 'EXPIRED')  throw new Error('Threads media container expired before publishing.');
+  }
+  throw new Error('Threads media container timed out waiting for FINISHED status.');
+}
 
 function parseIntArray(v) {
   if (!v) return null;
@@ -528,6 +546,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           console.error('[threads] image container error:', JSON.stringify(cData.error));
           throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
         }
+        await waitForThreadsContainer(cData.id, thToken, threadsFetch);
         cleanupMedia();
 
         const pData = await threadsFetch(
@@ -565,6 +584,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
             console.error('[threads] carousel child error:', JSON.stringify(cData.error));
             throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
           }
+          await waitForThreadsContainer(cData.id, thToken, threadsFetch);
           fs.unlink(item.stagedPath, () => {});
           childIds.push(cData.id);
         }
