@@ -391,6 +391,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (cData.error) {
+          console.error('[threads] text container error:', JSON.stringify(cData.error));
           throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
         }
 
@@ -403,6 +404,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (pData.error) {
+          console.error('[threads] text publish error:', JSON.stringify(pData.error));
           throw Object.assign(new Error(pData.error.message), { isRevoked: pData.error.code === 190 });
         }
 
@@ -523,6 +525,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (cData.error) {
+          console.error('[threads] image container error:', JSON.stringify(cData.error));
           throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
         }
         cleanupMedia();
@@ -536,6 +539,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (pData.error) {
+          console.error('[threads] image publish error:', JSON.stringify(pData.error));
           throw Object.assign(new Error(pData.error.message), { isRevoked: pData.error.code === 190 });
         }
         postId = pData.id;
@@ -558,19 +562,21 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           ).then(r => r.json());
 
           if (cData.error) {
+            console.error('[threads] carousel child error:', JSON.stringify(cData.error));
             throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
           }
           fs.unlink(item.stagedPath, () => {});
           childIds.push(cData.id);
         }
 
+        // Threads API requires children as a JSON-encoded array, not a comma-separated string
         const carData = await threadsFetch(
           `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,
           {
             method: 'POST',
             body: new URLSearchParams({
               media_type:   'CAROUSEL',
-              children:     childIds.join(','),
+              children:     JSON.stringify(childIds),
               text:         text.trim(),
               access_token: thToken,
             }),
@@ -578,6 +584,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (carData.error) {
+          console.error('[threads] carousel container error:', JSON.stringify(carData.error));
           throw Object.assign(new Error(carData.error.message), { isRevoked: carData.error.code === 190 });
         }
 
@@ -590,6 +597,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         ).then(r => r.json());
 
         if (pData.error) {
+          console.error('[threads] carousel publish error:', JSON.stringify(pData.error));
           throw Object.assign(new Error(pData.error.message), { isRevoked: pData.error.code === 190 });
         }
         postId = pData.id;
