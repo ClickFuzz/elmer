@@ -78,7 +78,7 @@ function promptsContaining(calls, text) {
 
 function dummyAudioBuffer() {
   // Minimal non-empty buffer so multer saves a file and the handler proceeds
-  return Buffer.from('FAKE_AUDIO');
+  return require('buffer').Buffer.from('FAKE_AUDIO');
 }
 
 // ── App setup ─────────────────────────────────────────────────────────────────

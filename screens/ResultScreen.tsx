@@ -44,6 +44,7 @@ type Props = {
   payload: GeneratePayload;
   draftJob?: Job | null;
   onBack: () => void;
+  onPublishComplete?: () => void;
   onShowSettings: () => void;
 };
 
@@ -87,7 +88,7 @@ type PublishState =
   | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
-export default function ResultScreen({ payload, draftJob, onBack, onShowSettings }: Props) {
+export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedWordpress, setEditedWordpress] = useState('');
@@ -522,7 +523,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onShowSettings
             })}
           </View>
 
-          <TouchableOpacity style={styles.confirmedDoneBtn} onPress={onBack} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.confirmedDoneBtn}
+            onPress={() => { onPublishComplete?.(); onBack(); }}
+            activeOpacity={0.8}
+          >
             <Text style={styles.confirmedDoneBtnText}>Done</Text>
           </TouchableOpacity>
         </ScrollView>

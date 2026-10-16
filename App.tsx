@@ -66,12 +66,22 @@ function AppShell() {
   }, []);
 
   const handleGenerate = (data: GeneratePayload) => {
-    // Clear persisted draft — home starts fresh after generating
-    savePendingHomeState(null);
-    setSavedHomeState(null);
+    // Preserve photos + audio so Back from ResultScreen restores them.
+    // State is cleared only after a successful publish via handlePublishComplete.
+    const newState: HomeState = { photos: data.photos, audioUri: data.audioUri };
+    setSavedHomeState(newState);
+    savePendingHomeState(newState);
     setDraftJob(null);
     setPayload(data);
     setScreen('result');
+  };
+
+  const handlePublishComplete = () => {
+    // Don't clear home state when publishing a history draft — that flow
+    // returns to history, not home, and the user may have a new job in progress.
+    if (draftJob) return;
+    savePendingHomeState(null);
+    setSavedHomeState(null);
   };
 
   const handlePublishDraft = async (job: Job) => {
@@ -104,6 +114,7 @@ function AppShell() {
             payload={payload}
             draftJob={draftJob}
             onBack={() => { setDraftJob(null); setScreen(draftJob ? 'history' : 'home'); }}
+            onPublishComplete={handlePublishComplete}
             onShowSettings={() => setScreen('settings')}
           />
         )}
