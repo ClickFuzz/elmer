@@ -402,6 +402,66 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     return { pageId: 'ig', pageName, platform: 'instagram', ok: false, error: result.error };
   };
 
+  const runThreadsPublish = async (sessionToken: string): Promise<PageResult> => {
+    const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+    const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+
+    const formData = new FormData();
+    formData.append('text', editedSocial);
+    formData.append('job_id', jobId);
+    formData.append('featured_index', String(Math.max(0, featuredIndex)));
+    formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
+
+    payload.photos.forEach((photo, i) => {
+      formData.append(`photo_${i}`, {
+        uri: photo.uri,
+        type: 'image/jpeg',
+        name: `photo_${i}.jpg`,
+      } as unknown as Blob);
+    });
+
+    const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}/threads/publish`);
+      xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+      xhr.send(formData);
+    });
+
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(body); } catch { data = {}; }
+
+    if (status === 422 && data.error === 'no_threads_account') {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'No Threads account connected. Go to Settings → Connected Accounts.' };
+    }
+    if (status === 422 && data.error === 'token_expired') {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'Threads token expired. Reconnect in Settings.' };
+    }
+    if (status < 200 || status >= 300) {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: (data.error as string) ?? `Server error ${status}` };
+    }
+
+    const result = data as { ok: boolean; accountName?: string; postId?: string; postUrl?: string; duplicate?: boolean; error?: string; reconnect_required?: boolean };
+    const pageName = result.accountName ?? 'Threads';
+    if (result.ok) {
+      return { pageId: 'th', pageName, platform: 'threads', ok: true, postId: result.postId, postUrl: result.postUrl, duplicate: result.duplicate };
+    }
+    if (result.reconnect_required) {
+      Alert.alert(
+        'Threads needs to reconnect',
+        'Your Threads connection has expired or been revoked. Reconnect in Settings to continue publishing.',
+        [
+          { text: 'Open Settings', onPress: onShowSettings },
+          { text: 'Dismiss', style: 'cancel' },
+        ]
+      );
+    }
+    return { pageId: 'th', pageName, platform: 'threads', ok: false, error: result.error };
+  };
+
   const handlePostEverywhere = async () => {
     if (connectedChannels.length === 0) {
       Alert.alert(
@@ -430,6 +490,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
     const hasFacebook  = connectedChannels.some(ch => ch.platform === 'facebook');
     const hasInstagram = connectedChannels.some(ch => ch.platform === 'instagram');
+    const hasThreads   = connectedChannels.some(ch => ch.platform === 'threads');
     const channelList  = connectedChannels.map(ch => ch.accountName).join(', ');
 
     Alert.alert(
@@ -442,6 +503,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             const tasks: Promise<PageResult[]>[] = [];
             if (hasFacebook)  tasks.push(runFacebookPublish(token));
             if (hasInstagram) tasks.push(runInstagramPublish(token).then(r => [r]));
+            if (hasThreads)   tasks.push(runThreadsPublish(token).then(r => [r]));
 
             const settled = await Promise.allSettled(tasks);
             const allResults: PageResult[] = [];
@@ -818,6 +880,7 @@ const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string
   google:    { bg: colors.cyan, iconColor: colors.bg,     icon: 'logo-google' },
   wordpress: { bg: '#3D454E', iconColor: '#A0AEC0',       icon: 'globe-outline' },
   instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
+  threads:   { bg: '#101010', iconColor: '#fff',          icon: 'logo-instagram' },
   twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
   default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
 };
@@ -827,6 +890,7 @@ function platformLabel(platform: ConnectedChannel['platform']): string {
     google: 'Google Business Profile',
     facebook: 'Facebook Pages',
     instagram: 'Instagram',
+    threads: 'Threads',
     twitter: 'X (Twitter)',
     wordpress: 'WordPress',
   };

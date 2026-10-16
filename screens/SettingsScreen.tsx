@@ -104,6 +104,11 @@ export default function SettingsScreen({ onBack }: Props) {
   const [igConnecting, setIgConnecting] = useState(false);
   const [igDisconnecting, setIgDisconnecting] = useState(false);
 
+  // ── Threads state ──────────────────────────────────────────────────────────
+  const [thAccount, setThAccount] = useState<{ id: number; account_name: string; account_id: string; token_expires_at: number | null } | null>(null);
+  const [thConnecting, setThConnecting] = useState(false);
+  const [thDisconnecting, setThDisconnecting] = useState(false);
+
   const refreshFbPages = async (token: string) => {
     const pages = await fetchFacebookPages(token, API_URL);
     setFbPages(pages);
@@ -122,6 +127,17 @@ export default function SettingsScreen({ onBack }: Props) {
     } catch { /* ignore */ }
   };
 
+  const refreshThAccount = async (token: string) => {
+    try {
+      const res = await fetch(`${API_URL}/threads/account`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setThAccount(data.account ?? null);
+    } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     getJobStats().then(setStats).catch(() => setStats({ total: 0, drafts: 0 }));
     getBusinessProfile().then(p => {
@@ -136,6 +152,7 @@ export default function SettingsScreen({ onBack }: Props) {
         if (tok) {
           refreshFbPages(tok);
           refreshIgAccount(tok);
+          refreshThAccount(tok);
         }
       }
     ).catch(() => {});
@@ -462,6 +479,78 @@ export default function SettingsScreen({ onBack }: Props) {
             Alert.alert('Error', 'Could not disconnect. Try again.');
           } finally {
             setIgDisconnecting(false);
+          }
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  // ── Threads OAuth handlers ────────────────────────────────────────────────
+
+  const handleConnectThreads = async () => {
+    if (!sessionToken) {
+      Alert.alert('Sign In Required', 'Sign in to your Elmer account to connect Threads.', [{ text: 'OK' }]);
+      return;
+    }
+
+    setThConnecting(true);
+    try {
+      const res = await fetch(`${API_URL}/threads/connect-url`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Connection failed', data.error ?? 'Could not start Threads authorization.');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      console.log('[threads-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
+
+      if (result.type === 'success') {
+        const url = result.url;
+        const params = new URLSearchParams((url.split('?')[1] ?? '').split('#')[0]);
+        const error = params.get('error');
+
+        if (error) {
+          Alert.alert('Connection failed', `Threads returned: ${error}`);
+          return;
+        }
+
+        if (params.get('success') === 'true') {
+          await refreshThAccount(sessionToken);
+          Alert.alert('Threads connected!', 'Your Threads account has been connected.', [{ text: 'OK' }]);
+        }
+      }
+
+      await refreshThAccount(sessionToken);
+    } catch (err) {
+      Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
+    } finally {
+      setThConnecting(false);
+    }
+  };
+
+  const handleDisconnectThreads = () => {
+    Alert.alert(
+      'Disconnect Threads',
+      'Remove your Threads account connection? You can reconnect at any time.',
+      [
+        { text: 'Disconnect', style: 'destructive', onPress: async () => {
+          if (!sessionToken || !thAccount) return;
+          setThDisconnecting(true);
+          try {
+            await fetch(`${API_URL}/platforms/${thAccount.id}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${sessionToken}` },
+            });
+            setThAccount(null);
+          } catch {
+            Alert.alert('Error', 'Could not disconnect. Try again.');
+          } finally {
+            setThDisconnecting(false);
           }
         }},
         { text: 'Cancel', style: 'cancel' },
@@ -878,6 +967,68 @@ export default function SettingsScreen({ onBack }: Props) {
                 activeOpacity={0.7}
               >
                 {igConnecting
+                  ? <ActivityIndicator color={colors.bg} size="small" />
+                  : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.rowDivider} />
+
+          {/* Threads */}
+          {thAccount !== null ? (
+            <View>
+              <View style={styles.row}>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowTitle}>Threads</Text>
+                  <Text style={styles.rowSubtitle}>{thAccount.account_name}</Text>
+                  {thAccount.token_expires_at != null &&
+                   thAccount.token_expires_at < (new Date().getTime() + 7 * 24 * 60 * 60 * 1000) && (
+                    <Text style={[styles.rowSubtitle, { color: '#C8A040', marginTop: 2 }]}>Token expiring soon — reconnect</Text>
+                  )}
+                </View>
+                <View style={styles.connectedChipInline}>
+                  <Text style={styles.connectedChipInlineText}>Connected</Text>
+                </View>
+              </View>
+              <View style={styles.fbActionsRow}>
+                <TouchableOpacity
+                  style={styles.fbReconnectBtn}
+                  onPress={handleConnectThreads}
+                  disabled={thConnecting}
+                  activeOpacity={0.8}
+                >
+                  {thConnecting
+                    ? <ActivityIndicator color={colors.cyan} size="small" />
+                    : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.fbDisconnectBtn}
+                  onPress={handleDisconnectThreads}
+                  disabled={thDisconnecting}
+                  activeOpacity={0.8}
+                >
+                  {thDisconnecting
+                    ? <ActivityIndicator color={colors.textMuted} size="small" />
+                    : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.row}>
+              <View style={styles.rowContent}>
+                <Text style={styles.rowTitle}>Threads</Text>
+                <Text style={styles.rowSubtitle}>
+                  {sessionToken ? 'Not connected' : 'Sign in to connect'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || thConnecting) && styles.actionBtnDisabled]}
+                onPress={handleConnectThreads}
+                disabled={!sessionToken || thConnecting}
+                activeOpacity={0.7}
+              >
+                {thConnecting
                   ? <ActivityIndicator color={colors.bg} size="small" />
                   : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
               </TouchableOpacity>

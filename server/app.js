@@ -13,6 +13,7 @@ const authRoutes                      = require('./routes/auth');
 const platformRoutes                  = require('./routes/platforms');
 const { createFacebookRouter }        = require('./routes/facebook');
 const { createInstagramRouter }       = require('./routes/instagram');
+const { createThreadsRouter }         = require('./routes/threads');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -203,7 +204,7 @@ function buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, busines
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
-function createApp({ facebookRouter, instagramRouter } = {}) {
+function createApp({ facebookRouter, instagramRouter, threadsRouter } = {}) {
   const app = express();
 
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
@@ -223,6 +224,7 @@ function createApp({ facebookRouter, instagramRouter } = {}) {
   app.use('/platforms', platformRoutes);
   app.use('/facebook',  facebookRouter  ?? createFacebookRouter());
   app.use('/instagram', instagramRouter ?? createInstagramRouter());
+  app.use('/threads',   threadsRouter   ?? createThreadsRouter());
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });

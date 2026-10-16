@@ -222,7 +222,7 @@ export async function clearSession(): Promise<void> {
 
 export type ConnectedChannel = {
   id: string;
-  platform: 'google' | 'facebook' | 'instagram' | 'twitter' | 'wordpress';
+  platform: 'google' | 'facebook' | 'instagram' | 'twitter' | 'wordpress' | 'threads';
   accountName: string;
   accountId?: string;
 };

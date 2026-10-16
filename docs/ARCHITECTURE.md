@@ -274,7 +274,10 @@ All platform endpoints require a valid Bearer token.
 | `INSTAGRAM_APP_ID` | _(required for OAuth)_ | Same Meta App ID (Instagram uses the same Meta Developer App) |
 | `INSTAGRAM_APP_SECRET` | _(required for OAuth)_ | Same Meta App Secret |
 | `INSTAGRAM_REDIRECT_URI` | _(required for OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/instagram/callback` |
-| `SERVER_URL` | _(required for Instagram publish)_ | Base URL the IG API uses to fetch prepared images; must be publicly reachable; production: `https://api.getelmer.com` |
+| `THREADS_APP_ID` | _(required for Threads OAuth)_ | Threads App ID from Meta Developer Dashboard (separate from Facebook/Instagram) |
+| `THREADS_APP_SECRET` | _(required for Threads OAuth)_ | Threads App Secret — keep server-side only, never in mobile code; also used to validate uninstall/delete callbacks |
+| `THREADS_REDIRECT_URI` | _(required for Threads OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/threads/callback` |
+| `SERVER_URL` | _(required for Instagram/Threads publish)_ | Base URL the IG/Threads API uses to fetch prepared images; must be publicly reachable; production: `https://api.getelmer.com` |
 
 ---
 
@@ -494,6 +497,68 @@ Mobile                          Elmer Server                  Instagram (Meta)
 
 ---
 
+## Threads Integration
+
+### OAuth flow
+
+```
+Mobile                          Elmer Server                  Threads (Meta)
+  │                                  │                              │
+  ├─POST /threads/connect-url ───────►│ creates oauth_state, returns authUrl
+  │◄─── { authUrl } ─────────────────┤                              │
+  ├─openAuthSessionAsync(authUrl) ───►│                              │
+  │                            browser opens Threads OAuth dialog ──►
+  │                                  │◄── GET /threads/callback?code&state ──┤
+  │                                  │  validates state                      │
+  │                                  │  exchanges code → short-lived token   │
+  │                                  │  exchanges → long-lived token (60d)   │
+  │                                  │  GET /me → username/id                │
+  │                                  │  stores encrypted token in DB         │
+  │◄── redirect to elmer://oauth/callback?platform=threads&success=true ─────┤
+```
+
+### Publishing flow
+
+```
+1. Mobile → POST /threads/publish (multipart: text, job_id, photo_0…photo_N [optional],
+                                    featured_index, classifications)
+2. Server applies orderWithFeaturedFirst(photoFiles, featured_index)
+3. If Before + After classifications present → generateBeforeAfterComposite → prepend composite
+4. If photos present: run prepareForInstagram / prepareCarouselForInstagram (same AR requirements)
+5. Stage images via GET /threads/media/:filename (same temporary HTTPS serving pattern)
+6. Text-only: POST /{userId}/threads (media_type=TEXT) → POST /{userId}/threads_publish
+7. Single image: POST /{userId}/threads (media_type=IMAGE) → threads_publish
+8. Carousel: POST /{userId}/threads per child (is_carousel_item=true) →
+             POST /{userId}/threads (media_type=CAROUSEL, children=...) → threads_publish
+9. Delete temp files; return { ok, postId?, postUrl? }
+```
+
+**Graph API base**: `https://graph.threads.net/v1.0/`  
+**Authorization URL**: `https://threads.net/oauth/authorize`  
+**Token exchange**: `POST https://graph.threads.net/oauth/access_token`  
+**Long-lived token**: `GET https://graph.threads.net/access_token?grant_type=th_exchange_token`  
+**Token refresh**: `GET https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token`  
+**Required permissions**: `threads_basic`, `threads_content_publish`  
+**Token lifecycle**: Short-lived user token → long-lived user token (60 days); renewed on reconnect
+
+### Threads Routes
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /threads/connect-url` | Bearer | Returns Threads OAuth authorization URL + creates CSRF state |
+| `GET /threads/callback` | Public (validates via state) | Threads redirects here; exchanges code, stores token, redirects to app |
+| `GET /threads/account` | Bearer | Returns connected Threads account info |
+| `GET /threads/media/:filename` | Public (short-lived) | Serves temp-prepared images for Threads API upload; deleted post-publish |
+| `POST /threads/publish` | Bearer, multipart | Publishes text, single image, or carousel; returns `{ ok, postId?, postUrl? }` |
+| `POST /threads/uninstall` | Public (signed_request) | Meta deauthorize callback; validates HMAC-SHA256 signed_request, removes connection |
+| `POST /threads/delete` | Public (signed_request) | Meta data deletion callback; validates signed_request, deletes Threads data, returns `{ url, confirmation_code }` |
+| `GET /threads/deletion-status` | Public | Human-readable deletion status page required by Meta |
+
+**Callback validation**: Both `/threads/uninstall` and `/threads/delete` authenticate via `signed_request` — a dot-separated `base64url(HMAC-SHA256-sig).base64url(JSON-payload)` string computed with `THREADS_APP_SECRET`. Validated using `crypto.timingSafeEqual` to prevent timing attacks.  
+**Token revocation**: API error code 190 → `reconnect_required: true` in publish response; mobile shows "Reconnect Threads" alert.
+
+---
+
 ## Content Types
 
 | Type | Field | Platform target | Generation condition |
@@ -552,8 +617,12 @@ Mobile                          Elmer Server                  Instagram (Meta)
 - **Instagram publishing**: Single photo and carousel (up to 10); automatic EXIF correction and AR fitting to [0.8, 1.91]; Before/After composite generation when both labels present; featured-image ordering; images served temporarily from server for IG API upload (`server/routes/instagram.js`).
 - **Featured image**: Star toggle in photo modal replaces Destination field; star indicator on thumbnail; first photo auto-featured; promoted to next on deletion; `is_featured` persisted in `job_photos` (schema v8); `featured_index` sent with publish requests (`HomeScreen.tsx`, `storage/database.ts`).
 - **Inquiry URL**: `BusinessProfile.inquiryUrl` field; `contactUrl = inquiryUrl || website` fallback used as CTA link in Google Business and social posts; SettingsScreen field (`SettingsScreen.tsx`, `server/app.js`).
-- **Post Everywhere — mobile**: Connected channels loaded from server; publishes to Facebook pages and Instagram independently; per-page results shown in result footer (`ResultScreen.tsx`).
-- **172 automated tests** (DB, auth, platforms, Facebook, Instagram, media-utils, generation) — all passing (`server/test/`).
+- **Post Everywhere — mobile**: Connected channels loaded from server; publishes to Facebook pages, Instagram, and Threads independently; per-page results shown in result footer (`ResultScreen.tsx`).
+- **Threads OAuth — server + mobile**: Full OAuth flow using `threads_basic` + `threads_content_publish` scopes; encrypted token stored in DB; same deep-link return pattern as Facebook/Instagram (`server/routes/threads.js`, `SettingsScreen.tsx`).
+- **Threads publishing**: Text-only posts, single-image posts, and carousels (up to 20); automatic image preparation using same EXIF/AR pipeline as Instagram; Before/After composite generation; featured-image ordering; images served temporarily from server for Threads API upload (`server/routes/threads.js`).
+- **Threads deauthorize callback**: `POST /threads/uninstall` — validates Meta's HMAC-SHA256 `signed_request`, removes the Threads platform connection (`server/routes/threads.js`).
+- **Threads data deletion callback**: `POST /threads/delete` — validates signed_request, deletes Threads-associated data, returns `{ url, confirmation_code }` as required by Meta; human-readable status page at `GET /threads/deletion-status` (`server/routes/threads.js`).
+- **205 automated tests** (DB, auth, platforms, Facebook, Instagram, Threads, media-utils, generation) — all passing (`server/test/`).
 
 ### Stub — UI exists but action is a no-op or alert
 

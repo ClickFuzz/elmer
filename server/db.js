@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let _pool        = null;
 let _initialized = false;
@@ -97,7 +97,7 @@ async function migrate(pool) {
           id                BIGSERIAL PRIMARY KEY,
           user_id           BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           platform          TEXT    NOT NULL
-            CHECK(platform IN ('google','facebook','instagram','wordpress')),
+            CHECK(platform IN ('google','facebook','instagram','wordpress','threads')),
           account_name      TEXT    NOT NULL,
           account_id        TEXT    NOT NULL,
           access_token_enc  TEXT,
@@ -173,6 +173,20 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [3, Date.now()]
+      );
+    }
+
+    // ── V4: expand platform constraint to include threads ──────────────────────
+    if (!applied.has(4)) {
+      try {
+        await client.query(`ALTER TABLE connected_platforms DROP CONSTRAINT connected_platforms_platform_check`);
+        await client.query(`ALTER TABLE connected_platforms ADD CONSTRAINT connected_platforms_platform_check CHECK(platform IN ('google','facebook','instagram','wordpress','threads'))`);
+      } catch {
+        // pg-mem / older installs may not support this; app logic enforces valid values
+      }
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [4, Date.now()]
       );
     }
 
