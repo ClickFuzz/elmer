@@ -449,6 +449,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         const cData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}/media`, {
           method: 'POST',
           body: new URLSearchParams({
+            media_type:   'IMAGE',
             image_url:    mediaItems[0].publicUrl,
             caption:      caption.trim(),
             access_token: igToken,
@@ -477,6 +478,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
           const cData = await igFetch(`${IG_GRAPH_BASE}/${IG_API_VERSION}/${igUserId}/media`, {
             method: 'POST',
             body: new URLSearchParams({
+              media_type:        'IMAGE',
               image_url:         item.publicUrl,
               is_carousel_item:  'true',
               access_token:      igToken,
