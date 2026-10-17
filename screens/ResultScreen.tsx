@@ -623,7 +623,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                         : `Failed · ${platformDisplayName(r.platform)}`}
                     </Text>
                     {platformDisplayName(r.platform) !== r.pageName && (
-                      <Text style={styles.viewOnPageName}>{r.pageName}</Text>
+                      <Text style={[styles.viewOnPageName, r.ok && { color: cfg.iconColor, opacity: 0.55 }]}>{r.pageName}</Text>
                     )}
                     {!r.ok && r.error && (
                       <Text style={styles.viewOnError} numberOfLines={1}>{r.error}</Text>
