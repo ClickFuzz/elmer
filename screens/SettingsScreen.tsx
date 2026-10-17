@@ -573,9 +573,21 @@ export default function SettingsScreen({ onBack }: Props) {
   const isFbConnected = fbPages.length > 0;
   const selectedCount = selectedPageIds.length;
   const isIgConnected = igAccount !== null;
-  const IG_EXPIRY_WARN_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const EXPIRY_WARN_MS = 7 * 24 * 60 * 60 * 1000;
   const igTokenExpiringSoon = igAccount?.token_expires_at != null
-    && igAccount.token_expires_at < (new Date().getTime() + IG_EXPIRY_WARN_MS);
+    && igAccount.token_expires_at < now + EXPIRY_WARN_MS;
+
+  // 'connected' | 'warning' (expiring ≤7d) | 'error' (expired) | 'disconnected'
+  const fbDot  = isFbConnected ? '#52D6A4' : colors.textMuted;
+  const igDot  = !isIgConnected ? colors.textMuted
+    : igAccount!.token_expires_at != null && igAccount!.token_expires_at < now ? '#FF5050'
+    : igTokenExpiringSoon ? '#C8A040'
+    : '#52D6A4';
+  const thDot  = thAccount === null ? colors.textMuted
+    : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? '#FF5050'
+    : thAccount.token_expires_at != null && thAccount.token_expires_at < now + EXPIRY_WARN_MS ? '#C8A040'
+    : '#52D6A4';
 
   return (
     <View style={styles.container}>
@@ -715,8 +727,11 @@ export default function SettingsScreen({ onBack }: Props) {
         <View style={styles.card}>
 
           {/* Google Business Profile */}
-          <View style={styles.compactRow}>
-            <Text style={styles.compactRowName}>Google Business Profile</Text>
+          <View style={styles.platformRow}>
+            <View style={[styles.statusDot, { backgroundColor: colors.textMuted }]} />
+            <View style={styles.platformInfo}>
+              <Text style={[styles.platformName, styles.platformNameDim]}>Google Business Profile</Text>
+            </View>
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnDisabled]}
               onPress={() => Alert.alert('Coming Soon', 'Google Business Profile connection is awaiting API approval.', [{ text: 'OK' }])}
@@ -729,40 +744,41 @@ export default function SettingsScreen({ onBack }: Props) {
           <View style={styles.rowDivider} />
 
           {/* Facebook Pages */}
-          <View style={styles.compactRow}>
-            <Text style={styles.compactRowName}>Facebook Pages</Text>
-            <View style={styles.compactRowRight}>
-              {isFbConnected ? (
-                <>
-                  <View style={styles.connectedChipInline}>
-                    <Text style={styles.connectedChipInlineText}>● connected</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => togglePlatformPanel('facebook')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Text style={styles.manageLink}>(manage)</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.actionBtn, (!sessionToken || fbConnecting) && styles.actionBtnDisabled]}
-                  onPress={handleConnectFacebook}
-                  disabled={!sessionToken || fbConnecting}
-                  activeOpacity={0.7}
-                >
-                  {fbConnecting
-                    ? <ActivityIndicator color={colors.bg} size="small" />
-                    : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
-                </TouchableOpacity>
+          <View style={styles.platformRow}>
+            <View style={[styles.statusDot, { backgroundColor: fbDot }]} />
+            <View style={styles.platformInfo}>
+              <Text style={[styles.platformName, !isFbConnected && styles.platformNameDim]}>Facebook Pages</Text>
+              {isFbConnected && (
+                <Text style={styles.platformSub}>
+                  {selectedCount === 0 ? 'No pages selected' : `${selectedCount} page${selectedCount !== 1 ? 's' : ''} selected`}
+                </Text>
               )}
             </View>
+            {isFbConnected ? (
+              <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('facebook')} activeOpacity={0.7}>
+                <Text style={styles.manageBtnText}>Manage</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || fbConnecting) && styles.actionBtnDisabled]}
+                onPress={handleConnectFacebook}
+                disabled={!sessionToken || fbConnecting}
+                activeOpacity={0.7}
+              >
+                {fbConnecting
+                  ? <ActivityIndicator color={colors.bg} size="small" />
+                  : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            )}
           </View>
           {expandedPlatform === 'facebook' && (
             <View style={styles.managePanelInner}>
               <View style={styles.divider} />
               <TouchableOpacity style={styles.managePanelRow} onPress={handleOpenManagePages} activeOpacity={0.7}>
-                <Text style={styles.managePanelSubText}>
-                  {selectedCount === 0 ? 'No pages selected' : `${selectedCount} page${selectedCount !== 1 ? 's' : ''} selected`}
-                </Text>
-                <Text style={styles.manageLink}>Manage Pages</Text>
+                <Text style={styles.managePanelSubText}>Pages</Text>
+                <TouchableOpacity style={styles.manageBtn} onPress={handleOpenManagePages} activeOpacity={0.7}>
+                  <Text style={styles.manageBtnText}>Select Pages</Text>
+                </TouchableOpacity>
               </TouchableOpacity>
               {managePagesOpen && (
                 <View>
@@ -801,36 +817,38 @@ export default function SettingsScreen({ onBack }: Props) {
           <View style={styles.rowDivider} />
 
           {/* Instagram */}
-          <View style={styles.compactRow}>
-            <Text style={styles.compactRowName}>Instagram</Text>
-            <View style={styles.compactRowRight}>
-              {isIgConnected ? (
-                <>
-                  <View style={styles.connectedChipInline}>
-                    <Text style={styles.connectedChipInlineText}>● connected</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => togglePlatformPanel('instagram')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Text style={styles.manageLink}>(manage)</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.actionBtn, (!sessionToken || igConnecting) && styles.actionBtnDisabled]}
-                  onPress={handleConnectInstagram}
-                  disabled={!sessionToken || igConnecting}
-                  activeOpacity={0.7}
-                >
-                  {igConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
-                </TouchableOpacity>
+          <View style={styles.platformRow}>
+            <View style={[styles.statusDot, { backgroundColor: igDot }]} />
+            <View style={styles.platformInfo}>
+              <Text style={[styles.platformName, !isIgConnected && styles.platformNameDim]}>Instagram</Text>
+              {isIgConnected && (
+                <Text style={[styles.platformSub, igDot !== '#52D6A4' && { color: igDot }]}>
+                  {igDot === '#FF5050' ? 'Token expired — reconnect'
+                    : igDot === '#C8A040' ? 'Token expiring soon'
+                    : igAccount!.account_name}
+                </Text>
               )}
             </View>
+            {isIgConnected ? (
+              <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('instagram')} activeOpacity={0.7}>
+                <Text style={styles.manageBtnText}>Manage</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || igConnecting) && styles.actionBtnDisabled]}
+                onPress={handleConnectInstagram}
+                disabled={!sessionToken || igConnecting}
+                activeOpacity={0.7}
+              >
+                {igConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            )}
           </View>
           {expandedPlatform === 'instagram' && (
             <View style={styles.managePanelInner}>
               <View style={styles.divider} />
               <View style={styles.managePanelRow}>
                 <Text style={styles.managePanelSubText}>{igAccount?.account_name}</Text>
-                {igTokenExpiringSoon && <Text style={styles.tokenWarnText}>Token expiring soon</Text>}
               </View>
               <View style={styles.fbActionsRow}>
                 <TouchableOpacity style={styles.fbReconnectBtn} onPress={handleConnectInstagram} disabled={igConnecting} activeOpacity={0.8}>
@@ -846,39 +864,38 @@ export default function SettingsScreen({ onBack }: Props) {
           <View style={styles.rowDivider} />
 
           {/* Threads */}
-          <View style={styles.compactRow}>
-            <Text style={styles.compactRowName}>Threads</Text>
-            <View style={styles.compactRowRight}>
-              {thAccount !== null ? (
-                <>
-                  <View style={styles.connectedChipInline}>
-                    <Text style={styles.connectedChipInlineText}>● connected</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => togglePlatformPanel('threads')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Text style={styles.manageLink}>(manage)</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.actionBtn, (!sessionToken || thConnecting) && styles.actionBtnDisabled]}
-                  onPress={handleConnectThreads}
-                  disabled={!sessionToken || thConnecting}
-                  activeOpacity={0.7}
-                >
-                  {thConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
-                </TouchableOpacity>
+          <View style={styles.platformRow}>
+            <View style={[styles.statusDot, { backgroundColor: thDot }]} />
+            <View style={styles.platformInfo}>
+              <Text style={[styles.platformName, thAccount === null && styles.platformNameDim]}>Threads</Text>
+              {thAccount !== null && (
+                <Text style={[styles.platformSub, thDot !== '#52D6A4' && { color: thDot }]}>
+                  {thDot === '#FF5050' ? 'Token expired — reconnect'
+                    : thDot === '#C8A040' ? 'Token expiring soon'
+                    : thAccount.account_name}
+                </Text>
               )}
             </View>
+            {thAccount !== null ? (
+              <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('threads')} activeOpacity={0.7}>
+                <Text style={styles.manageBtnText}>Manage</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || thConnecting) && styles.actionBtnDisabled]}
+                onPress={handleConnectThreads}
+                disabled={!sessionToken || thConnecting}
+                activeOpacity={0.7}
+              >
+                {thConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            )}
           </View>
           {expandedPlatform === 'threads' && (
             <View style={styles.managePanelInner}>
               <View style={styles.divider} />
               <View style={styles.managePanelRow}>
                 <Text style={styles.managePanelSubText}>{thAccount?.account_name}</Text>
-                {thAccount?.token_expires_at != null &&
-                 thAccount.token_expires_at < (new Date().getTime() + 7 * 24 * 60 * 60 * 1000) && (
-                  <Text style={styles.tokenWarnText}>Token expiring soon</Text>
-                )}
               </View>
               <View style={styles.fbActionsRow}>
                 <TouchableOpacity style={styles.fbReconnectBtn} onPress={handleConnectThreads} disabled={thConnecting} activeOpacity={0.8}>
@@ -894,8 +911,11 @@ export default function SettingsScreen({ onBack }: Props) {
           <View style={styles.rowDivider} />
 
           {/* WordPress */}
-          <View style={styles.compactRow}>
-            <Text style={styles.compactRowName}>WordPress</Text>
+          <View style={styles.platformRow}>
+            <View style={[styles.statusDot, { backgroundColor: colors.textMuted }]} />
+            <View style={styles.platformInfo}>
+              <Text style={[styles.platformName, styles.platformNameDim]}>WordPress</Text>
+            </View>
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnDisabled]}
               onPress={() => Alert.alert('Coming Soon', 'WordPress connection will be available in a future update.', [{ text: 'OK' }])}
@@ -1169,11 +1189,15 @@ const styles = StyleSheet.create({
   },
   connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: '#52D6A4' },
 
-  // Compact platform rows
-  compactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
-  compactRowName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
-  compactRowRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  manageLink: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
+  // Platform rows
+  platformRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginTop: 1, flexShrink: 0 },
+  platformInfo: { flex: 1 },
+  platformName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+  platformNameDim: { color: colors.textMuted },
+  platformSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  manageBtn: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  manageBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
 
   // Expand panel
   managePanelInner: { backgroundColor: 'rgba(0,0,0,0.15)', paddingBottom: 2 },
