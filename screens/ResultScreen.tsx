@@ -781,9 +781,9 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                           <View style={[styles.destinationDot, isExcluded && styles.destinationDotDim]} />
                           <View>
                             <Text style={[styles.destinationName, isExcluded && styles.destinationNameDim]}>
-                              {ch.accountName}
+                              {platformLabel(ch.platform)}
                             </Text>
-                            <Text style={styles.destinationSub}>{platformLabel(ch.platform)}</Text>
+                            <Text style={styles.destinationSub}>{ch.accountName}</Text>
                           </View>
                         </View>
                         <View style={[styles.destinationCheckbox, !isExcluded && styles.destinationCheckboxChecked]}>
