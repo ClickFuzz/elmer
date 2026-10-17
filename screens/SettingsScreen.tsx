@@ -385,6 +385,7 @@ export default function SettingsScreen({ onBack }: Props) {
             setFbPages([]);
             setSelectedPageIds([]);
             setManagePagesOpen(false);
+            setExpandedPlatform(null);
           } catch {
             Alert.alert('Error', 'Could not disconnect. Try again.');
           } finally {
@@ -485,6 +486,7 @@ export default function SettingsScreen({ onBack }: Props) {
               headers: { Authorization: `Bearer ${sessionToken}` },
             });
             setIgAccount(null);
+            setExpandedPlatform(null);
             await setInstagramConnected(false);
           } catch {
             Alert.alert('Error', 'Could not disconnect. Try again.');
@@ -558,6 +560,7 @@ export default function SettingsScreen({ onBack }: Props) {
               headers: { Authorization: `Bearer ${sessionToken}` },
             });
             setThAccount(null);
+            setExpandedPlatform(null);
           } catch {
             Alert.alert('Error', 'Could not disconnect. Try again.');
           } finally {
