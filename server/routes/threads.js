@@ -35,6 +35,7 @@ async function waitForThreadsContainer(containerId, token, threadsFetch) {
       `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${containerId}?fields=status&access_token=${token}`
     ).then(r => r.json());
     if (data.error) throw Object.assign(new Error(data.error.message), { isRevoked: data.error.code === 190 });
+    console.log(`[threads] container ${containerId} status poll attempt ${attempt}:`, JSON.stringify(data));
     if (data.status === 'FINISHED') return;
     if (data.status === 'ERROR')    throw new Error('Threads media container processing failed.');
     if (data.status === 'EXPIRED')  throw new Error('Threads media container expired before publishing.');
@@ -589,14 +590,13 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           childIds.push(cData.id);
         }
 
-        // Threads API requires children as a JSON-encoded array, not a comma-separated string
         const carData = await threadsFetch(
           `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,
           {
             method: 'POST',
             body: new URLSearchParams({
               media_type:   'CAROUSEL',
-              children:     JSON.stringify(childIds),
+              children:     childIds.join(','),
               text:         text.trim(),
               access_token: thToken,
             }),
