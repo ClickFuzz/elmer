@@ -437,6 +437,7 @@ describe('POST /threads/publish (carousel)', () => {
       { data: { id: 'child-2' } },        // carousel item 2
       { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-2
       { data: { id: 'carousel-1' } },     // CAROUSEL container
+      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — carousel-1
       { data: { id: 'post-car-abc' } },   // threads_publish
     ]);
     app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({ threadsFetch: mockFetch }) });

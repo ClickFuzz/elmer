@@ -607,6 +607,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           console.error('[threads] carousel container error:', JSON.stringify(carData.error));
           throw Object.assign(new Error(carData.error.message), { isRevoked: carData.error.code === 190 });
         }
+        await waitForThreadsContainer(carData.id, thToken, threadsFetch);
 
         const pData = await threadsFetch(
           `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads_publish`,
