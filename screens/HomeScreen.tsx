@@ -128,52 +128,58 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
     Alert.alert('Add Photos', 'Choose a source', [
       {
         text: 'Camera',
-        onPress: async () => {
-          const perm = await ImagePicker.requestCameraPermissionsAsync();
-          if (!perm.granted) {
-            Alert.alert('Permission required', 'Camera access is needed to take photos.');
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-          if (!result.canceled && result.assets.length > 0) {
-            setPhotos(prev => {
-              const isFirst = prev.length === 0;
-              return [...prev, {
-                uri: result.assets[0].uri,
-                classification: 'General' as const,
-                isFeatured: isFirst,
-              }].slice(0, MAX_PHOTOS);
-            });
-          }
+        onPress: () => {
+          // Delay so the alert fully dismisses before the camera presents.
+          // Without this, iOS can stack the two native views and make the camera non-dismissable.
+          setTimeout(async () => {
+            const perm = await ImagePicker.requestCameraPermissionsAsync();
+            if (!perm.granted) {
+              Alert.alert('Permission required', 'Camera access is needed to take photos.');
+              return;
+            }
+            const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+            if (!result.canceled && result.assets.length > 0) {
+              setPhotos(prev => {
+                const isFirst = prev.length === 0;
+                return [...prev, {
+                  uri: result.assets[0].uri,
+                  classification: 'General' as const,
+                  isFeatured: isFirst,
+                }].slice(0, MAX_PHOTOS);
+              });
+            }
+          }, 300);
         },
       },
       {
         text: 'Photo Library',
-        onPress: async () => {
-          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (!perm.granted) {
-            Alert.alert('Permission required', 'Photo library access is needed.');
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsMultipleSelection: true,
-            selectionLimit: remaining,
-            quality: 0.8,
-            exif: true,
-          });
-          if (!result.canceled) {
-            setPhotos(prev => {
-              const existingCount = prev.length;
-              const newPhotos: PhotoItem[] = result.assets.map((a, idx) => ({
-                uri: a.uri,
-                classification: 'General' as const,
-                isFeatured: existingCount === 0 && idx === 0,
-                gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
-              }));
-              return [...prev, ...newPhotos].slice(0, MAX_PHOTOS);
+        onPress: () => {
+          setTimeout(async () => {
+            const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (!perm.granted) {
+              Alert.alert('Permission required', 'Photo library access is needed.');
+              return;
+            }
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsMultipleSelection: true,
+              selectionLimit: remaining,
+              quality: 0.8,
+              exif: true,
             });
-          }
+            if (!result.canceled) {
+              setPhotos(prev => {
+                const existingCount = prev.length;
+                const newPhotos: PhotoItem[] = result.assets.map((a, idx) => ({
+                  uri: a.uri,
+                  classification: 'General' as const,
+                  isFeatured: existingCount === 0 && idx === 0,
+                  gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
+                }));
+                return [...prev, ...newPhotos].slice(0, MAX_PHOTOS);
+              });
+            }
+          }, 300);
         },
       },
       { text: 'Cancel', style: 'cancel' },
