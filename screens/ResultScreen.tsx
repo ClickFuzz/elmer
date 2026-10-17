@@ -617,7 +617,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                 >
                   <Ionicons name={cfg.icon as any} size={20} color={iconColor} />
                   <View style={styles.viewOnBtnText}>
-                    <Text style={[styles.viewOnLabel, !r.ok && styles.viewOnLabelDim]}>
+                    <Text style={[styles.viewOnLabel, { color: r.ok ? cfg.iconColor : undefined }, !r.ok && styles.viewOnLabelDim]}>
                       {r.ok
                         ? (r.duplicate ? `Already posted · ${platformDisplayName(r.platform)}` : `View on ${platformDisplayName(r.platform)}`)
                         : `Failed · ${platformDisplayName(r.platform)}`}
@@ -630,7 +630,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                     )}
                   </View>
                   {canOpen && (
-                    <Ionicons name="open-outline" size={14} color={cfg.iconColor} style={styles.viewOnExternal} />
+                    <Ionicons name="open-outline" size={14} color={r.ok ? cfg.iconColor : colors.textMuted} style={styles.viewOnExternal} />
                   )}
                 </TouchableOpacity>
               );
@@ -976,7 +976,7 @@ const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string
   google:    { bg: colors.cyan, iconColor: colors.bg,     icon: 'logo-google' },
   wordpress: { bg: '#3D454E', iconColor: '#A0AEC0',       icon: 'globe-outline' },
   instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
-  threads:   { bg: '#101010', iconColor: '#fff',          icon: 'logo-instagram' },
+  threads:   { bg: '#fff',    iconColor: '#101010',        icon: 'logo-threads'   },
   twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
   default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
 };
