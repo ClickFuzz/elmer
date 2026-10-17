@@ -388,14 +388,17 @@ function createThreadsRouter({
       );
       if (rows[0]) {
         cleanup();
-        const postId = rows[0].platform_post_id;
+        const postId  = rows[0].platform_post_id;
+        const plData  = await threadsFetch(
+          `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${postId}?fields=permalink&access_token=${thToken}`
+        ).then(r => r.json()).catch(() => ({}));
         return res.json({
           ok:          true,
           duplicate:   true,
           accountId:   thUserId,
           accountName: thAccount.account_name,
           postId,
-          postUrl:     `https://www.threads.net/t/${postId}`,
+          postUrl:     plData.permalink || `https://www.threads.net/t/${postId}`,
         });
       }
     } catch (err) {
@@ -690,7 +693,10 @@ function createThreadsRouter({
         postId = pData.id;
       }
 
-      const postUrl = `https://www.threads.net/t/${postId}`;
+      const plData = await threadsFetch(
+        `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${postId}?fields=permalink&access_token=${thToken}`
+      ).then(r => r.json()).catch(() => ({}));
+      const postUrl = plData.permalink || `https://www.threads.net/t/${postId}`;
 
       await pool.query(
         `UPDATE publishing_records

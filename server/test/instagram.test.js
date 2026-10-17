@@ -542,9 +542,10 @@ describe('POST /instagram/publish', () => {
     await setupFreshTestDb();
 
     const mockIgFetch = makeIgMock([
-      { data: { id: 'container-1' } },           // create media container
-      { data: { status_code: 'FINISHED' } },      // waitForContainer poll
-      { data: { id: 'ig-post-abc123' } },         // media_publish
+      { data: { id: 'container-1' } },                                            // create media container
+      { data: { status_code: 'FINISHED' } },                                      // waitForContainer poll
+      { data: { id: 'ig-post-abc123' } },                                         // media_publish
+      { data: { permalink: 'https://www.instagram.com/p/ig-post-abc123/' } },     // permalink fetch
     ]);
 
     const { createInstagramRouter } = require('../routes/instagram');
@@ -591,6 +592,9 @@ describe('POST /instagram/publish', () => {
       if (url.includes('fields=status_code')) {
         return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
       }
+      if (url.includes('fields=permalink')) {
+        return { ok: true, json: async () => ({ permalink: 'https://www.instagram.com/p/ig-carousel-post/' }) };
+      }
       // carousel container creation calls
       const callIndex = callLog.length;
       return { ok: true, json: async () => ({ id: `child-${callIndex}` }) };
@@ -616,8 +620,8 @@ describe('POST /instagram/publish', () => {
       assert.ok(res.body.ok, 'carousel publish should be ok');
       assert.strictEqual(res.body.postId, 'ig-carousel-post');
 
-      // 2 child containers + 2 polls + 1 carousel container + 1 poll + 1 media_publish = 7 calls
-      assert.strictEqual(callLog.length, 7, 'should make 7 API calls for a 2-photo carousel');
+      // 2 child containers + 2 polls + 1 carousel container + 1 poll + 1 media_publish + 1 permalink = 8 calls
+      assert.strictEqual(callLog.length, 8, 'should make 8 API calls for a 2-photo carousel');
     } finally {
       fs.unlinkSync(tmp1);
       fs.unlinkSync(tmp2);
@@ -632,6 +636,9 @@ describe('POST /instagram/publish', () => {
       callCount++;
       if (url.includes('fields=status_code')) {
         return { ok: true, json: async () => ({ status_code: 'FINISHED' }) };
+      }
+      if (url.includes('fields=permalink')) {
+        return { ok: true, json: async () => ({ permalink: 'https://www.instagram.com/p/ig-post-dup/' }) };
       }
       return { ok: true, json: async () => ({ id: 'ig-post-dup' }) };
     };
@@ -662,8 +669,8 @@ describe('POST /instagram/publish', () => {
 
       assert.strictEqual(second.status, 200);
       assert.ok(second.body.duplicate, 'second attempt should be a duplicate');
-      // API should only be called for the first publish
-      assert.strictEqual(callCount, 3, 'API calls should be: 1 container + 1 poll + 1 publish = 3, only on first attempt');
+      // First publish: 1 container + 1 poll + 1 publish + 1 permalink = 4; duplicate path: 1 permalink = 1; total 5
+      assert.strictEqual(callCount, 5, 'API calls should be: 4 on first publish + 1 permalink on duplicate = 5');
     } finally {
       fs.unlinkSync(tmp);
     }

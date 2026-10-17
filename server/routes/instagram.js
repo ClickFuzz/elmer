@@ -396,13 +396,16 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       if (rows[0]) {
         cleanup();
         const postId  = rows[0].platform_post_id;
+        const plData  = await igFetch(
+          `${IG_GRAPH_BASE}/${IG_API_VERSION}/${postId}?fields=permalink&access_token=${igToken}`
+        ).then(r => r.json()).catch(() => ({}));
         return res.json({
           ok: true,
           duplicate: true,
           accountId:   igUserId,
           accountName: igAccount.account_name,
           postId,
-          postUrl: `https://www.instagram.com/p/${postId}/`,
+          postUrl: plData.permalink || `https://www.instagram.com/p/${postId}/`,
         });
       }
     } catch (err) {
@@ -547,7 +550,10 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         postId = pData.id;
       }
 
-      const postUrl = `https://www.instagram.com/p/${postId}/`;
+      const plData = await igFetch(
+        `${IG_GRAPH_BASE}/${IG_API_VERSION}/${postId}?fields=permalink&access_token=${igToken}`
+      ).then(r => r.json()).catch(() => ({}));
+      const postUrl = plData.permalink || `https://www.instagram.com/p/${postId}/`;
 
       await pool.query(
         `UPDATE publishing_records
