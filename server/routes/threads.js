@@ -565,9 +565,8 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         postId = pData.id;
 
       } else {
-        // Carousel — create child containers, then the album container
-        const childIds = [];
-        for (const item of mediaItems) {
+        // Carousel — create all child containers in parallel, then wait for all to finish
+        const childDatas = await Promise.all(mediaItems.map(async (item) => {
           const cData = await threadsFetch(
             `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,
             {
@@ -585,10 +584,15 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
             console.error('[threads] carousel child error:', JSON.stringify(cData.error));
             throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
           }
-          await waitForThreadsContainer(cData.id, thToken, threadsFetch);
-          fs.unlink(item.stagedPath, () => {});
-          childIds.push(cData.id);
-        }
+          return { id: cData.id, stagedPath: item.stagedPath };
+        }));
+
+        await Promise.all(childDatas.map(async ({ id, stagedPath }) => {
+          await waitForThreadsContainer(id, thToken, threadsFetch);
+          fs.unlink(stagedPath, () => {});
+        }));
+
+        const childIds = childDatas.map(d => d.id);
 
         const carData = await threadsFetch(
           `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,

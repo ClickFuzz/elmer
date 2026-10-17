@@ -432,10 +432,10 @@ describe('POST /threads/publish (carousel)', () => {
 
   it('publishes a carousel post', async () => {
     const mockFetch = makeThreadsMock([
-      { data: { id: 'child-1' } },        // carousel item 1
-      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-1
-      { data: { id: 'child-2' } },        // carousel item 2
-      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-2
+      { data: { id: 'child-1' } },        // carousel item 1 (parallel create)
+      { data: { id: 'child-2' } },        // carousel item 2 (parallel create)
+      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-1 (parallel wait)
+      { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — child-2 (parallel wait)
       { data: { id: 'carousel-1' } },     // CAROUSEL container
       { data: { status: 'FINISHED' } },   // waitForThreadsContainer poll — carousel-1
       { data: { id: 'post-car-abc' } },   // threads_publish
