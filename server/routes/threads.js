@@ -23,24 +23,45 @@ const THREADS_API_VERSION        = 'v1.0';
 const THREADS_PERMISSIONS        = 'threads_basic,threads_content_publish';
 const OAUTH_STATE_TTL_MS         = 10 * 60 * 1000;
 const MAX_CAROUSEL               = 20;
-const CONTAINER_POLL_INTERVAL_MS = 3000;
-const CONTAINER_POLL_MAX_ATTEMPTS = 15;
+const CONTAINER_POLL_INITIAL_DELAY_MS  = 2000;
+const CONTAINER_POLL_MAX_DELAY_MS      = 10000;
+const CONTAINER_POLL_MAX_ATTEMPTS      = 15;
+const CAROUSEL_PUBLISH_MAX_RETRIES     = 3;
+const CAROUSEL_PUBLISH_RETRY_DELAY_MS  = 5000;
 
 // Polls a Threads media container until status is FINISHED (or ERROR/EXPIRED).
-// Threads uses the field name 'status', Instagram uses 'status_code'.
-async function waitForThreadsContainer(containerId, token, threadsFetch) {
-  for (let attempt = 0; attempt < CONTAINER_POLL_MAX_ATTEMPTS; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, CONTAINER_POLL_INTERVAL_MS));
+// Uses exponential backoff starting at initialDelayMs, capped at maxDelayMs.
+// opts: { maxAttempts, initialDelayMs, maxDelayMs } — injectable for tests.
+async function waitForThreadsContainer(containerId, token, threadsFetch, opts = {}) {
+  const maxAttempts    = opts.maxAttempts    ?? CONTAINER_POLL_MAX_ATTEMPTS;
+  const initialDelayMs = opts.initialDelayMs ?? CONTAINER_POLL_INITIAL_DELAY_MS;
+  const maxDelayMs     = opts.maxDelayMs     ?? CONTAINER_POLL_MAX_DELAY_MS;
+  const startMs        = Date.now();
+  let delay            = initialDelayMs;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, maxDelayMs);
+
     const data = await threadsFetch(
-      `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${containerId}?fields=status&access_token=${token}`
+      `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${containerId}?fields=id,status,error_message&access_token=${token}`
     ).then(r => r.json());
-    if (data.error) throw Object.assign(new Error(data.error.message), { isRevoked: data.error.code === 190 });
-    console.log(`[threads] container ${containerId} status poll attempt ${attempt}:`, JSON.stringify(data));
+
+    if (data.error) {
+      throw Object.assign(new Error(data.error.message), { isRevoked: data.error.code === 190 });
+    }
+    console.log(
+      `[threads] container ${containerId} poll #${attempt}:`,
+      `status=${data.status ?? 'unknown'}`,
+      data.error_message ? `error_msg=${data.error_message}` : '',
+      `elapsed=${Date.now() - startMs}ms`
+    );
     if (data.status === 'FINISHED') return;
-    if (data.status === 'ERROR')    throw new Error('Threads media container processing failed.');
-    if (data.status === 'EXPIRED')  throw new Error('Threads media container expired before publishing.');
+    if (data.status === 'ERROR')    throw new Error(`Threads container ${containerId} processing failed: ${data.error_message ?? 'unknown'}`);
+    if (data.status === 'EXPIRED')  throw new Error(`Threads container ${containerId} expired before publishing.`);
+    // IN_PROGRESS or unrecognised status — keep polling
   }
-  throw new Error('Threads media container timed out waiting for FINISHED status.');
+  throw new Error(`Threads container ${containerId} timed out after ${maxAttempts} attempts (${Date.now() - startMs}ms).`);
 }
 
 function parseIntArray(v) {
@@ -70,7 +91,11 @@ function validateSignedRequest(signedRequest, appSecret) {
   try { return JSON.parse(payload.toString('utf8')); } catch { return null; }
 }
 
-function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}) {
+function createThreadsRouter({
+  threadsFetch        = (...args) => fetch(...args),
+  publishRetryDelayMs = CAROUSEL_PUBLISH_RETRY_DELAY_MS,
+  containerPollOpts   = {},
+} = {}) {
   const TMP_DIR   = path.join(__dirname, '..', 'tmp');
   const MEDIA_DIR = path.join(TMP_DIR, 'threads-media');
   if (!fs.existsSync(TMP_DIR))   fs.mkdirSync(TMP_DIR,   { recursive: true });
@@ -547,7 +572,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           console.error('[threads] image container error:', JSON.stringify(cData.error));
           throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
         }
-        await waitForThreadsContainer(cData.id, thToken, threadsFetch);
+        await waitForThreadsContainer(cData.id, thToken, threadsFetch, containerPollOpts);
         cleanupMedia();
 
         const pData = await threadsFetch(
@@ -565,7 +590,9 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
         postId = pData.id;
 
       } else {
-        // Carousel — create all child containers in parallel, then wait for all to finish
+        // Carousel: create all child containers in parallel, wait for all to reach FINISHED,
+        // then assemble and publish. Staged files are kept until after the carousel container
+        // is FINISHED — the Threads pipeline may re-access image URLs during processing.
         const childDatas = await Promise.all(mediaItems.map(async (item) => {
           const cData = await threadsFetch(
             `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,
@@ -581,18 +608,20 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           ).then(r => r.json());
 
           if (cData.error) {
-            console.error('[threads] carousel child error:', JSON.stringify(cData.error));
+            console.error('[threads] carousel child create error:', JSON.stringify(cData.error));
             throw Object.assign(new Error(cData.error.message), { isRevoked: cData.error.code === 190 });
           }
+          console.log(`[threads] carousel child created: id=${cData.id}`);
           return { id: cData.id, stagedPath: item.stagedPath };
         }));
 
-        await Promise.all(childDatas.map(async ({ id, stagedPath }) => {
-          await waitForThreadsContainer(id, thToken, threadsFetch);
-          fs.unlink(stagedPath, () => {});
-        }));
+        // Wait for all children concurrently. Files remain staged (publicly accessible).
+        await Promise.all(childDatas.map(({ id }) =>
+          waitForThreadsContainer(id, thToken, threadsFetch, containerPollOpts)
+        ));
 
         const childIds = childDatas.map(d => d.id);
+        console.log(`[threads] carousel children FINISHED: ids=${childIds.join(',')}`);
 
         const carData = await threadsFetch(
           `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads`,
@@ -611,15 +640,48 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
           console.error('[threads] carousel container error:', JSON.stringify(carData.error));
           throw Object.assign(new Error(carData.error.message), { isRevoked: carData.error.code === 190 });
         }
-        await waitForThreadsContainer(carData.id, thToken, threadsFetch);
+        console.log(`[threads] carousel container created: id=${carData.id}`);
 
-        const pData = await threadsFetch(
-          `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads_publish`,
-          {
-            method: 'POST',
-            body: new URLSearchParams({ creation_id: carData.id, access_token: thToken }),
+        await waitForThreadsContainer(carData.id, thToken, threadsFetch, containerPollOpts);
+        console.log(`[threads] carousel container FINISHED: id=${carData.id}`);
+
+        // Staged files no longer needed — release them before publishing.
+        cleanupMedia();
+
+        // Publish with bounded retry on 4279009 (Threads API propagation delay after FINISHED).
+        // On each retry, re-verify the container is still FINISHED before retrying.
+        let pData;
+        for (let attempt = 0; attempt < CAROUSEL_PUBLISH_MAX_RETRIES; attempt++) {
+          if (attempt > 0) {
+            const checkData = await threadsFetch(
+              `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${carData.id}?fields=id,status,error_message&access_token=${thToken}`
+            ).then(r => r.json());
+            const recheckStatus = checkData.status ?? 'unknown';
+            console.log(`[threads] carousel container ${carData.id} recheck #${attempt}: status=${recheckStatus}${checkData.error_message ? ' msg=' + checkData.error_message : ''}`);
+            if (recheckStatus === 'ERROR' || recheckStatus === 'EXPIRED') {
+              throw new Error(`Carousel container ${recheckStatus} during publish retry: ${checkData.error_message ?? recheckStatus}`);
+            }
+            await new Promise(r => setTimeout(r, publishRetryDelayMs));
           }
-        ).then(r => r.json());
+
+          pData = await threadsFetch(
+            `${THREADS_GRAPH_BASE}/${THREADS_API_VERSION}/${thUserId}/threads_publish`,
+            {
+              method: 'POST',
+              body: new URLSearchParams({ creation_id: carData.id, access_token: thToken }),
+            }
+          ).then(r => r.json());
+
+          console.log(
+            `[threads] carousel publish attempt ${attempt + 1}:`,
+            pData.error
+              ? `error code=${pData.error.code} subcode=${pData.error.error_subcode} reused_container=${attempt > 0}`
+              : `ok id=${pData.id}`
+          );
+
+          if (!pData.error) break;
+          if (pData.error.error_subcode !== 4279009) break;  // only retry on media-not-found
+        }
 
         if (pData.error) {
           console.error('[threads] carousel publish error:', JSON.stringify(pData.error));
@@ -643,6 +705,7 @@ function createThreadsRouter({ threadsFetch = (...args) => fetch(...args) } = {}
     } catch (err) {
       console.error('[threads] publish error:', err.message);
       await markFailed(err.message);
+      cleanupMedia();
       cleanup();
       return res.json({
         ok: false, accountId: thUserId, accountName: thAccount.account_name,

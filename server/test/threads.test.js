@@ -458,6 +458,256 @@ describe('POST /threads/publish (carousel)', () => {
   });
 });
 
+// ── POST /threads/publish — container polling edge cases ─────────────────────
+
+describe('POST /threads/publish (container polling edge cases)', () => {
+  let app;
+  let tmpPhoto1, tmpPhoto2;
+  beforeEach(async () => {
+    await setupFreshTestDb();
+    tmpPhoto1 = makeTempPhoto();
+    tmpPhoto2 = makeTempPhoto();
+  });
+  after(() => {
+    [tmpPhoto1, tmpPhoto2].forEach(p => { if (p && fs.existsSync(p)) fs.unlinkSync(p); });
+  });
+
+  it('publishes single image after IN_PROGRESS poll (slow processing)', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'container-slow' } },        // create IMAGE container
+      { data: { status: 'IN_PROGRESS' } },       // poll #0 — still processing
+      { data: { status: 'FINISHED' } },          // poll #1 — ready
+      { data: { id: 'post-slow-abc' } },         // threads_publish
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      containerPollOpts: { initialDelayMs: 0 },
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Slow post')
+      .field('job_id', '40')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg');
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.postId, 'post-slow-abc');
+  });
+
+  it('returns error when single-image container enters ERROR status', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'container-err' } },
+      { data: { status: 'ERROR', error_message: 'FAILED_DOWNLOADING_IMAGE' } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      containerPollOpts: { initialDelayMs: 0 },
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Error post')
+      .field('job_id', '41')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg');
+
+    assert.equal(res.body.ok, false);
+    assert.ok(res.body.error?.includes('FAILED_DOWNLOADING_IMAGE') || res.body.error?.includes('processing failed'));
+  });
+
+  it('returns error when single-image container expires', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'container-exp' } },
+      { data: { status: 'EXPIRED' } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      containerPollOpts: { initialDelayMs: 0 },
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Expired post')
+      .field('job_id', '42')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg');
+
+    assert.equal(res.body.ok, false);
+    assert.ok(res.body.error?.includes('expired'));
+  });
+
+  it('returns error when container polling times out', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'container-timeout' } },
+      { data: { status: 'IN_PROGRESS' } },   // maxAttempts=2 → timeout after 2 polls
+      { data: { status: 'IN_PROGRESS' } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      containerPollOpts: { maxAttempts: 2, initialDelayMs: 0 },
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Timeout post')
+      .field('job_id', '43')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg');
+
+    assert.equal(res.body.ok, false);
+    assert.ok(res.body.error?.includes('timed out'));
+  });
+
+  it('publishes carousel after parent container IN_PROGRESS poll (parent readiness)', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'child-1' } },             // create child 1
+      { data: { id: 'child-2' } },             // create child 2
+      { data: { status: 'FINISHED' } },        // poll child-1
+      { data: { status: 'FINISHED' } },        // poll child-2
+      { data: { id: 'carousel-slow' } },       // create CAROUSEL container
+      { data: { status: 'IN_PROGRESS' } },     // poll carousel #0 — still processing
+      { data: { status: 'FINISHED' } },        // poll carousel #1 — ready
+      { data: { id: 'post-car-slow' } },       // threads_publish
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      containerPollOpts: { initialDelayMs: 0 },
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Slow carousel')
+      .field('job_id', '44')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg')
+      .attach('photo_1', tmpPhoto2, 'photo_1.jpg');
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.postId, 'post-car-slow');
+  });
+
+  it('retries carousel publish on 4279009 (media-not-found propagation delay)', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'child-1' } },
+      { data: { id: 'child-2' } },
+      { data: { status: 'FINISHED' } },        // poll child-1
+      { data: { status: 'FINISHED' } },        // poll child-2
+      { data: { id: 'carousel-retry' } },      // CAROUSEL container
+      { data: { status: 'FINISHED' } },        // poll carousel
+      // publish attempt 1 → 4279009
+      { data: { error: { message: 'Media Not Found', code: 24, error_subcode: 4279009, is_transient: false } } },
+      // recheck container status → still FINISHED
+      { data: { status: 'FINISHED' } },
+      // publish attempt 2 → success
+      { data: { id: 'post-car-retry' } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      publishRetryDelayMs: 0,
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Retry carousel')
+      .field('job_id', '45')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg')
+      .attach('photo_1', tmpPhoto2, 'photo_1.jpg');
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.postId, 'post-car-retry');
+  });
+
+  it('fails carousel publish after exhausting all 4279009 retries', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'child-1' } },
+      { data: { id: 'child-2' } },
+      { data: { status: 'FINISHED' } },        // poll child-1
+      { data: { status: 'FINISHED' } },        // poll child-2
+      { data: { id: 'carousel-exhaust' } },    // CAROUSEL container
+      { data: { status: 'FINISHED' } },        // poll carousel
+      // attempt 1: 4279009
+      { data: { error: { message: 'Media Not Found', code: 24, error_subcode: 4279009 } } },
+      { data: { status: 'FINISHED' } },        // recheck
+      // attempt 2: 4279009
+      { data: { error: { message: 'Media Not Found', code: 24, error_subcode: 4279009 } } },
+      { data: { status: 'FINISHED' } },        // recheck
+      // attempt 3: 4279009
+      { data: { error: { message: 'Media Not Found', code: 24, error_subcode: 4279009 } } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      publishRetryDelayMs: 0,
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Exhaust retries')
+      .field('job_id', '46')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg')
+      .attach('photo_1', tmpPhoto2, 'photo_1.jpg');
+
+    assert.equal(res.body.ok, false);
+    assert.ok(res.body.error?.includes('Media Not Found') || res.body.error?.includes('not found'));
+  });
+
+  it('fails carousel publish immediately when container ERROR on recheck', async () => {
+    const mockFetch = makeThreadsMock([
+      { data: { id: 'child-1' } },
+      { data: { id: 'child-2' } },
+      { data: { status: 'FINISHED' } },
+      { data: { status: 'FINISHED' } },
+      { data: { id: 'carousel-err-recheck' } },
+      { data: { status: 'FINISHED' } },
+      // first publish attempt → 4279009
+      { data: { error: { message: 'Media Not Found', code: 24, error_subcode: 4279009 } } },
+      // recheck → container ERROR
+      { data: { status: 'ERROR', error_message: 'PROCESSING_FAILED' } },
+    ]);
+    app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({
+      threadsFetch: mockFetch,
+      publishRetryDelayMs: 0,
+    }) });
+
+    const { token, userId } = await registerAndLogin(app);
+    await insertThAccount(userId);
+
+    const res = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('text', 'Error on recheck')
+      .field('job_id', '47')
+      .attach('photo_0', tmpPhoto1, 'photo_0.jpg')
+      .attach('photo_1', tmpPhoto2, 'photo_1.jpg');
+
+    assert.equal(res.body.ok, false);
+    assert.ok(res.body.error?.includes('ERROR') || res.body.error?.includes('retry'));
+  });
+});
+
 // ── POST /threads/uninstall ───────────────────────────────────────────────────
 
 describe('POST /threads/uninstall', () => {
