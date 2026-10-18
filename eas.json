@@ -11,7 +11,11 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.getelmer.com"
+      }
+    }
   },
   "submit": {
     "production": {}
