@@ -103,6 +103,17 @@ async function migrate(db: SQLite.SQLiteDatabase) {
   }
   if (version < 10) {
     try { await db.execAsync('ALTER TABLE jobs ADD COLUMN user_email TEXT'); } catch { /* already exists */ }
+    // Claim any pre-migration jobs that belong to the current session's owner.
+    // Only assigns jobs that are still unclaimed (user_email IS NULL).
+    // A new login must never claim NULL jobs — that is intentionally left to the startup
+    // path (useEffect in App.tsx), which only runs for the already-authenticated user.
+    try {
+      await db.execAsync(
+        `UPDATE jobs SET user_email = (SELECT value FROM settings WHERE key = 'session_email')
+         WHERE user_email IS NULL
+           AND (SELECT value FROM settings WHERE key = 'session_email') IS NOT NULL`
+      );
+    } catch { /* ignore — settings row may not exist on fresh install */ }
   }
 
   if (version < SCHEMA_VERSION) {
@@ -441,7 +452,8 @@ export type Job = {
 
 export async function deleteJob(id: number): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM jobs WHERE id = ?', [id]);
+  const email = await getSessionEmail();
+  await db.runAsync('DELETE FROM jobs WHERE id = ? AND user_email = ?', [id, email ?? '']);
 }
 
 export type JobPhoto = {
@@ -453,14 +465,19 @@ export type JobPhoto = {
 
 export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
   const db = await getDb();
+  const email = await getSessionEmail();
   const rows = await db.getAllAsync<{
     local_uri: string;
     classification: string;
     is_featured: number;
     sort_order: number;
   }>(
-    'SELECT local_uri, classification, is_featured, sort_order FROM job_photos WHERE job_id = ? ORDER BY sort_order ASC',
-    [jobId]
+    `SELECT jp.local_uri, jp.classification, jp.is_featured, jp.sort_order
+     FROM job_photos jp
+     JOIN jobs j ON jp.job_id = j.id
+     WHERE jp.job_id = ? AND j.user_email = ?
+     ORDER BY jp.sort_order ASC`,
+    [jobId, email ?? '']
   );
   return rows.map(r => ({
     localUri: r.local_uri,
@@ -520,9 +537,10 @@ export async function updateJobPublishStatus(
   publishStatus: JobPublishStatus,
 ): Promise<void> {
   const db = await getDb();
+  const email = await getSessionEmail();
   await db.runAsync(
-    `UPDATE jobs SET status = ?, publish_status = ?, updated_at = ? WHERE id = ?`,
-    [status, JSON.stringify(publishStatus), Date.now(), jobId],
+    `UPDATE jobs SET status = ?, publish_status = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
+    [status, JSON.stringify(publishStatus), Date.now(), jobId, email ?? ''],
   );
 }
 

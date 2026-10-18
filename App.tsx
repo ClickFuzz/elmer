@@ -78,9 +78,6 @@ function AppShell() {
     setIsAuthed(authed);
     if (authed) {
       setScreen('home');
-      getSessionEmail().then(email => {
-        if (email) claimLegacyJobs(email).catch(() => {});
-      });
     } else {
       setSavedHomeState(null);
       savePendingHomeState(null);
