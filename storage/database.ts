@@ -487,10 +487,6 @@ export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
   }));
 }
 
-export async function claimLegacyJobs(email: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(`UPDATE jobs SET user_email = ? WHERE user_email IS NULL`, [email]);
-}
 
 export async function getAllJobs(): Promise<Job[]> {
   const db = await getDb();
