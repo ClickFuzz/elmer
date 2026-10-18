@@ -62,7 +62,10 @@ export default function SignInScreen({ onSignIn }: Props) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.inner}>
-        <Text style={styles.wordmark}>Elmer</Text>
+        <View style={styles.logoRow}>
+          <Text style={styles.logoText}>elmer</Text>
+          <Text style={styles.logoPeriod}>.</Text>
+        </View>
         <Text style={styles.tagline}>Sign in to get started</Text>
 
         <View style={styles.card}>
@@ -135,12 +138,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 40,
   },
-  wordmark: {
-    fontSize: 36,
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  logoText: {
+    fontSize: 42,
     fontFamily: 'DMSans_700Bold',
     color: colors.textPrimary,
-    textAlign: 'center',
-    marginBottom: 8,
+    letterSpacing: -1,
+  },
+  logoPeriod: {
+    fontSize: 42,
+    fontFamily: 'DMSans_700Bold',
+    color: colors.cyan,
+    letterSpacing: -1,
   },
   tagline: {
     fontSize: 15,
