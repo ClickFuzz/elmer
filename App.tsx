@@ -12,6 +12,7 @@ import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import SignInScreen from './screens/SignInScreen';
 
 export type PhotoClassification = 'General' | 'Before' | 'After' | 'Team';
 
@@ -114,7 +115,7 @@ function AppShell() {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
         <StatusBar style="light" />
-        <SettingsScreen onBack={() => {}} onAuthChange={handleAuthChange} />
+        <SignInScreen onSignIn={() => handleAuthChange(true)} />
       </SafeAreaView>
     );
   }
