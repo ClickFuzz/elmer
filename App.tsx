@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, Job } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionEmail, claimLegacyJobs, Job } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
@@ -61,7 +61,14 @@ function AppShell() {
   const [isAuthed, setIsAuthed] = useState<boolean | null>(null); // null = loading
 
   useEffect(() => {
-    getSessionToken().then(tok => setIsAuthed(!!tok));
+    getSessionToken().then(tok => {
+      setIsAuthed(!!tok);
+      if (tok) {
+        getSessionEmail().then(email => {
+          if (email) claimLegacyJobs(email).catch(() => {});
+        });
+      }
+    });
     getPendingHomeState().then(state => {
       if (state) setSavedHomeState(state as HomeState);
     });
@@ -69,7 +76,15 @@ function AppShell() {
 
   const handleAuthChange = (authed: boolean) => {
     setIsAuthed(authed);
-    if (authed) setScreen('home');
+    if (authed) {
+      setScreen('home');
+      getSessionEmail().then(email => {
+        if (email) claimLegacyJobs(email).catch(() => {});
+      });
+    } else {
+      setSavedHomeState(null);
+      savePendingHomeState(null);
+    }
   };
 
   const handleGenerate = (data: GeneratePayload) => {

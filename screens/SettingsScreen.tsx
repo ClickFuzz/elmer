@@ -1049,6 +1049,14 @@ export default function SettingsScreen({ onBack, onAuthChange }: Props) {
           )}
         </View>
 
+        <TouchableOpacity
+          style={styles.supportLink}
+          onPress={() => Linking.openURL('mailto:help@getelmer.com')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.supportLinkText}>Need help? Email help@getelmer.com</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </View>
   );
@@ -1218,4 +1226,6 @@ const styles = StyleSheet.create({
   storageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
   storageKey: { fontSize: 15, color: colors.textPrimary },
   storageVal: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
+  supportLink: { alignItems: 'center', paddingVertical: 20, marginBottom: 8 },
+  supportLinkText: { fontSize: 13, color: colors.textMuted, textDecorationLine: 'underline' },
 });

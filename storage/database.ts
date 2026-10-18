@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 
 const JOBS_DIR = (FileSystem.documentDirectory ?? '') + 'elmer_jobs/';
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 export type SeoMetadata = {
   seoTitle: string;
@@ -45,7 +45,8 @@ async function migrate(db: SQLite.SQLiteDatabase) {
         job_location TEXT,
         seo_metadata TEXT,
         is_mock INTEGER NOT NULL DEFAULT 0,
-        publish_status TEXT
+        publish_status TEXT,
+        user_email TEXT
       );
       CREATE TABLE IF NOT EXISTS job_photos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +101,9 @@ async function migrate(db: SQLite.SQLiteDatabase) {
   if (version < 9) {
     try { await db.execAsync('ALTER TABLE jobs ADD COLUMN publish_status TEXT'); } catch { /* already exists */ }
   }
+  if (version < 10) {
+    try { await db.execAsync('ALTER TABLE jobs ADD COLUMN user_email TEXT'); } catch { /* already exists */ }
+  }
 
   if (version < SCHEMA_VERSION) {
     await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -133,17 +137,20 @@ export async function saveJob(params: {
     }
   }
 
+  const email = await getSessionEmail();
+
   const result = await db.runAsync(
     `INSERT INTO jobs
        (created_at, updated_at, status, audio_local_uri, transcription,
-        post_content, social_content, web_content, job_location, seo_metadata, is_mock)
-     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        post_content, social_content, web_content, job_location, seo_metadata, is_mock, user_email)
+     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       now, now, audioLocalUri, params.transcription,
       params.googlePost, params.socialPost, params.webContent,
       params.location || null,
       params.seoMetadata ? JSON.stringify(params.seoMetadata) : null,
       params.isMock ? 1 : 0,
+      email,
     ]
   );
 
@@ -161,10 +168,12 @@ export async function saveJob(params: {
 
 export async function getJobStats(): Promise<{ total: number; drafts: number }> {
   const db = await getDb();
+  const email = await getSessionEmail();
   const row = await db.getFirstAsync<{ total: number; drafts: number }>(
     `SELECT COUNT(*) as total,
             SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) as drafts
-     FROM jobs`
+     FROM jobs WHERE user_email = ?`,
+    [email ?? '']
   );
   return { total: row?.total ?? 0, drafts: row?.drafts ?? 0 };
 }
@@ -262,17 +271,23 @@ export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
 };
 
 export async function getBusinessProfile(): Promise<BusinessProfile> {
-  const raw = await getSetting('business_profile');
+  const email = await getSessionEmail();
+  const key = email ? `business_profile_${email}` : 'business_profile';
+  const raw = await getSetting(key);
   if (raw) {
     try { return { ...DEFAULT_BUSINESS_PROFILE, ...JSON.parse(raw) }; } catch { /* fall through */ }
   }
-  // Migrate legacy standalone key if present
-  const legacyLoc = await getSetting('business_location');
-  return { ...DEFAULT_BUSINESS_PROFILE, ...(legacyLoc ? { location: legacyLoc } : {}) };
+  if (!email) {
+    const legacyLoc = await getSetting('business_location');
+    if (legacyLoc) return { ...DEFAULT_BUSINESS_PROFILE, location: legacyLoc };
+  }
+  return { ...DEFAULT_BUSINESS_PROFILE };
 }
 
 export async function saveBusinessProfile(profile: BusinessProfile): Promise<void> {
-  await setSetting('business_profile', JSON.stringify(profile));
+  const email = await getSessionEmail();
+  const key = email ? `business_profile_${email}` : 'business_profile';
+  await setSetting(key, JSON.stringify(profile));
 }
 
 // ── Pending home state (draft before generate) ────────────────────────────────
@@ -455,8 +470,14 @@ export async function getJobPhotos(jobId: number): Promise<JobPhoto[]> {
   }));
 }
 
+export async function claimLegacyJobs(email: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`UPDATE jobs SET user_email = ? WHERE user_email IS NULL`, [email]);
+}
+
 export async function getAllJobs(): Promise<Job[]> {
   const db = await getDb();
+  const email = await getSessionEmail();
   const rows = await db.getAllAsync<{
     id: number;
     created_at: number;
@@ -471,7 +492,8 @@ export async function getAllJobs(): Promise<Job[]> {
   }>(`SELECT j.id, j.created_at, j.status, j.social_content, j.web_content,
              j.post_content, j.job_location, j.is_mock, j.publish_status,
              (SELECT local_uri FROM job_photos WHERE job_id = j.id ORDER BY sort_order ASC LIMIT 1) AS first_photo_uri
-      FROM jobs j ORDER BY j.created_at DESC`);
+      FROM jobs j WHERE j.user_email = ? ORDER BY j.created_at DESC`,
+    [email ?? '']);
   return rows.map(r => {
     let publishStatus: JobPublishStatus | null = null;
     if (r.publish_status) {

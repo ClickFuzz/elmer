@@ -101,7 +101,7 @@ function createThreadsRouter({
   if (!fs.existsSync(TMP_DIR))   fs.mkdirSync(TMP_DIR,   { recursive: true });
   if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-  const upload = multer({ dest: TMP_DIR });
+  const upload = multer({ dest: TMP_DIR, limits: { fileSize: 50 * 1024 * 1024 } });
   const router = Router();
 
   // ── GET /threads/media/:filename ────────────────────────────────────────────

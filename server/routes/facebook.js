@@ -22,7 +22,7 @@ const FB_PERMISSIONS =
 function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {}) {
   const TMP_DIR = path.join(__dirname, '..', 'tmp');
   if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
-  const upload = multer({ dest: TMP_DIR });
+  const upload = multer({ dest: TMP_DIR, limits: { fileSize: 50 * 1024 * 1024 } });
 
   const router = Router();
 
