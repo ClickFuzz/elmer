@@ -226,6 +226,8 @@ export default function SettingsScreen({ onBack }: Props) {
       setAuthEmail('');
       setAuthPassword('');
       await refreshFbPages(data.token);
+      await refreshIgAccount(data.token);
+      await refreshThAccount(data.token);
     } catch {
       setAuthError('Could not reach the server. Check your connection.');
     } finally {
@@ -247,6 +249,9 @@ export default function SettingsScreen({ onBack }: Props) {
         setSessionEmailState(null);
         setFbPages([]);
         setSelectedPageIds([]);
+        setIgAccount(null);
+        setThAccount(null);
+        setProfile(DEFAULT_BUSINESS_PROFILE);
       }},
       { text: 'Cancel', style: 'cancel' },
     ]);
