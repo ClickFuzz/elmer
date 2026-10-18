@@ -36,7 +36,7 @@ import {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-type Props = { onBack: () => void };
+type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void };
 type JobStats = { total: number; drafts: number };
 
 const CATEGORIES = [
@@ -73,7 +73,7 @@ function showPicker(title: string, options: string[], onSelect: (v: string) => v
   }
 }
 
-export default function SettingsScreen({ onBack }: Props) {
+export default function SettingsScreen({ onBack, onAuthChange }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
   const [saved, setSaved] = useState(false);
@@ -228,6 +228,7 @@ export default function SettingsScreen({ onBack }: Props) {
       await refreshFbPages(data.token);
       await refreshIgAccount(data.token);
       await refreshThAccount(data.token);
+      onAuthChange?.(true);
     } catch {
       setAuthError('Could not reach the server. Check your connection.');
     } finally {
@@ -252,6 +253,7 @@ export default function SettingsScreen({ onBack }: Props) {
         setIgAccount(null);
         setThAccount(null);
         setProfile(DEFAULT_BUSINESS_PROFILE);
+        onAuthChange?.(false);
       }},
       { text: 'Cancel', style: 'cancel' },
     ]);

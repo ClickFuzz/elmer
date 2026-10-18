@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, Job } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, Job } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ResultScreen from './screens/ResultScreen';
@@ -57,13 +57,19 @@ function AppShell() {
   const [payload, setPayload] = useState<GeneratePayload | null>(null);
   const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
   const [draftJob, setDraftJob] = useState<Job | null>(null);
+  const [isAuthed, setIsAuthed] = useState<boolean | null>(null); // null = loading
 
-  // Restore persisted home state on first launch
   useEffect(() => {
+    getSessionToken().then(tok => setIsAuthed(!!tok));
     getPendingHomeState().then(state => {
       if (state) setSavedHomeState(state as HomeState);
     });
   }, []);
+
+  const handleAuthChange = (authed: boolean) => {
+    setIsAuthed(authed);
+    if (authed) setScreen('home');
+  };
 
   const handleGenerate = (data: GeneratePayload) => {
     // Preserve photos + audio so Back from ResultScreen restores them.
@@ -99,6 +105,20 @@ function AppShell() {
     setScreen('result');
   };
 
+  // Blank while SecureStore resolves on first render
+  if (isAuthed === null) {
+    return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="light" /></SafeAreaView>;
+  }
+
+  if (!isAuthed) {
+    return (
+      <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
+        <StatusBar style="light" />
+        <SettingsScreen onBack={() => {}} onAuthChange={handleAuthChange} />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
       <StatusBar style="light" />
@@ -119,7 +139,7 @@ function AppShell() {
           />
         )}
         {screen === 'settings' && (
-          <SettingsScreen onBack={() => setScreen('home')} />
+          <SettingsScreen onBack={() => setScreen('home')} onAuthChange={handleAuthChange} />
         )}
         {screen === 'history' && (
           <HistoryScreen
