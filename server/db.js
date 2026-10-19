@@ -207,6 +207,9 @@ async function initDb() {
     cleanExpiredSessions().catch(err =>
       console.warn('[elmer] session cleanup error:', err.message)
     );
+    cleanExpiredPublishingRecords().catch(err =>
+      console.warn('[elmer] publishing records cleanup error:', err.message)
+    );
   }
   return pool;
 }
@@ -226,6 +229,14 @@ async function cleanExpiredSessions() {
   );
 }
 
+async function cleanExpiredPublishingRecords() {
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  await getPool().query(
+    "DELETE FROM publishing_records WHERE status = 'published' AND published_at IS NOT NULL AND published_at < $1",
+    [cutoff]
+  );
+}
+
 // Test-only: inject a mock pool (e.g. pg-mem). Resets initialisation state.
 function _setPoolForTesting(pool) {
   if (_pool && _pool !== pool) {
@@ -235,4 +246,4 @@ function _setPoolForTesting(pool) {
   _initialized = false;
 }
 
-module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, _setPoolForTesting };
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, _setPoolForTesting };

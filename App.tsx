@@ -7,9 +7,10 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionEmail, Job } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionEmail, runAutoCleanup, Job } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
+import ManageDataScreen from './screens/ManageDataScreen';
 import ResultScreen from './screens/ResultScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import SignInScreen from './screens/SignInScreen';
@@ -33,7 +34,7 @@ export type HomeState = {
   audioUri: string | null;
 };
 
-export type AppScreen = 'home' | 'result' | 'settings' | 'history';
+export type AppScreen = 'home' | 'result' | 'settings' | 'history' | 'managedata';
 
 type NavItemProps = {
   iconActive: React.ComponentProps<typeof Ionicons>['name'];
@@ -65,6 +66,7 @@ function AppShell() {
     getPendingHomeState().then(state => {
       if (state) setSavedHomeState(state as HomeState);
     });
+    runAutoCleanup().catch(() => {});
   }, []);
 
   const handleAuthChange = (authed: boolean) => {
@@ -145,7 +147,17 @@ function AppShell() {
           />
         )}
         {screen === 'settings' && (
-          <SettingsScreen onBack={() => setScreen('home')} onAuthChange={handleAuthChange} />
+          <SettingsScreen
+            onBack={() => setScreen('home')}
+            onAuthChange={handleAuthChange}
+            onManageData={() => setScreen('managedata')}
+          />
+        )}
+        {screen === 'managedata' && (
+          <ManageDataScreen
+            onBack={() => setScreen('settings')}
+            onAccountDeleted={() => handleAuthChange(false)}
+          />
         )}
         {screen === 'history' && (
           <HistoryScreen

@@ -554,3 +554,135 @@ export async function deleteOldPublishedMedia(): Promise<void> {
     await db.runAsync(`UPDATE jobs SET audio_local_uri = NULL WHERE id = ?`, [job.id]);
   }
 }
+
+// Recursively sum all file sizes under a directory URI.
+async function sumDirectorySize(dirUri: string): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await FileSystem.readDirectoryAsync(dirUri);
+    for (const entry of entries) {
+      const uri = dirUri.endsWith('/') ? dirUri + entry : dirUri + '/' + entry;
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info.exists) {
+        if (info.isDirectory) {
+          total += await sumDirectorySize(uri + '/');
+        } else {
+          total += (info as FileSystem.FileInfo & { size?: number }).size ?? 0;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return total;
+}
+
+export async function calculateStorageUsage(): Promise<{
+  totalBytes: number;
+  dbBytes: number;
+  mediaBytes: number;
+}> {
+  let dbBytes = 0;
+  let mediaBytes = 0;
+
+  // SQLite database file (and WAL/SHM companions)
+  const dbBase = (FileSystem.documentDirectory ?? '') + 'SQLite/elmer.db';
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      const info = await FileSystem.getInfoAsync(dbBase + suffix);
+      if (info.exists && !info.isDirectory) {
+        dbBytes += (info as FileSystem.FileInfo & { size?: number }).size ?? 0;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Elmer jobs directory (photos + audio)
+  try {
+    const jobsDirInfo = await FileSystem.getInfoAsync(JOBS_DIR);
+    if (jobsDirInfo.exists && jobsDirInfo.isDirectory) {
+      mediaBytes += await sumDirectorySize(JOBS_DIR);
+    }
+  } catch { /* ignore */ }
+
+  // Orphaned recordings in documentDirectory
+  try {
+    const docDir = FileSystem.documentDirectory ?? '';
+    const entries = await FileSystem.readDirectoryAsync(docDir);
+    for (const entry of entries) {
+      if (entry.startsWith('elmer_recording_') && entry.endsWith('.m4a')) {
+        try {
+          const info = await FileSystem.getInfoAsync(docDir + entry);
+          if (info.exists && !info.isDirectory) {
+            mediaBytes += (info as FileSystem.FileInfo & { size?: number }).size ?? 0;
+          }
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+
+  return { totalBytes: dbBytes + mediaBytes, dbBytes, mediaBytes };
+}
+
+export async function runAutoCleanup(): Promise<void> {
+  const db = await getDb();
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  const jobs = await db.getAllAsync<{ id: number; audio_local_uri: string | null }>(
+    `SELECT id, audio_local_uri FROM jobs WHERE status = 'published' AND updated_at < ?`,
+    [cutoff]
+  );
+
+  for (const job of jobs) {
+    const photos = await db.getAllAsync<{ local_uri: string }>(
+      `SELECT local_uri FROM job_photos WHERE job_id = ?`,
+      [job.id]
+    );
+    for (const photo of photos) {
+      await FileSystem.deleteAsync(photo.local_uri, { idempotent: true }).catch(() => {});
+    }
+    if (job.audio_local_uri) {
+      await FileSystem.deleteAsync(job.audio_local_uri, { idempotent: true }).catch(() => {});
+    }
+    const jobDir = JOBS_DIR + job.id + '/';
+    await FileSystem.deleteAsync(jobDir, { idempotent: true }).catch(() => {});
+    await db.runAsync(`DELETE FROM jobs WHERE id = ?`, [job.id]);
+  }
+}
+
+export async function deleteAllJobsForCurrentUser(): Promise<{ deletedJobs: number }> {
+  const db = await getDb();
+  const email = await getSessionEmail();
+
+  const jobs = await db.getAllAsync<{ id: number; audio_local_uri: string | null }>(
+    `SELECT id, audio_local_uri FROM jobs WHERE user_email = ?`,
+    [email ?? '']
+  );
+
+  for (const job of jobs) {
+    const photos = await db.getAllAsync<{ local_uri: string }>(
+      `SELECT local_uri FROM job_photos WHERE job_id = ?`,
+      [job.id]
+    );
+    for (const photo of photos) {
+      await FileSystem.deleteAsync(photo.local_uri, { idempotent: true }).catch(() => {});
+    }
+    if (job.audio_local_uri) {
+      await FileSystem.deleteAsync(job.audio_local_uri, { idempotent: true }).catch(() => {});
+    }
+    const jobDir = JOBS_DIR + job.id + '/';
+    await FileSystem.deleteAsync(jobDir, { idempotent: true }).catch(() => {});
+  }
+
+  await db.runAsync(`DELETE FROM jobs WHERE user_email = ?`, [email ?? '']);
+
+  // Also remove orphaned recordings
+  try {
+    const docDir = FileSystem.documentDirectory ?? '';
+    const entries = await FileSystem.readDirectoryAsync(docDir);
+    for (const entry of entries) {
+      if (entry.startsWith('elmer_recording_') && entry.endsWith('.m4a')) {
+        await FileSystem.deleteAsync(docDir + entry, { idempotent: true }).catch(() => {});
+      }
+    }
+  } catch { /* ignore */ }
+
+  return { deletedJobs: jobs.length };
+}

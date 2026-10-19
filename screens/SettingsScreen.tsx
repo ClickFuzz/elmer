@@ -32,11 +32,12 @@ import {
   setInstagramConnected,
   getInstagramExplanationShown,
   setInstagramExplanationShown,
+  calculateStorageUsage,
 } from '../storage/database';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void };
+type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void };
 type JobStats = { total: number; drafts: number };
 
 const CATEGORIES = [
@@ -73,8 +74,9 @@ function showPicker(title: string, options: string[], onSelect: (v: string) => v
   }
 }
 
-export default function SettingsScreen({ onBack, onAuthChange }: Props) {
+export default function SettingsScreen({ onBack, onAuthChange, onManageData }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
+  const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
   const [saved, setSaved] = useState(false);
   const [savedStyle, setSavedStyle] = useState(false);
@@ -151,6 +153,7 @@ export default function SettingsScreen({ onBack, onAuthChange }: Props) {
 
   useEffect(() => {
     getJobStats().then(setStats).catch(() => setStats({ total: 0, drafts: 0 }));
+    calculateStorageUsage().then(u => setStorageBytes(u.totalBytes)).catch(() => setStorageBytes(0));
     getBusinessProfile().then(p => {
       setProfile(p);
       setBizExpanded(!p.name || !p.category);
@@ -942,26 +945,24 @@ export default function SettingsScreen({ onBack, onAuthChange }: Props) {
             : 'Sign in to connect publishing accounts.'}
         </Text>
 
-        {/* ── Local Storage ── */}
-        <Text style={styles.groupLabel}>Local Storage</Text>
+        {/* ── Data & Privacy ── */}
+        <Text style={styles.groupLabel}>Data &amp; Privacy</Text>
         <View style={styles.card}>
-          <View style={styles.storageRow}>
-            <Text style={styles.storageKey}>Saved jobs</Text>
-            <Text style={styles.storageVal}>{stats ? stats.total : '—'}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.storageRow}>
-            <Text style={styles.storageKey}>Unpublished drafts</Text>
-            <Text style={styles.storageVal}>{stats ? stats.drafts : '—'}</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.storageRow}>
-            <Text style={styles.storageKey}>Storage location</Text>
-            <Text style={styles.storageVal}>On-device</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={onManageData}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.rowTitle}>Manage Data</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
         </View>
         <Text style={styles.groupNote}>
-          Photos and audio are stored in your app&apos;s private document directory.
+          {storageBytes !== null
+            ? `${storageBytes < 1024 * 1024
+                ? `${(storageBytes / 1024).toFixed(1)} KB`
+                : `${(storageBytes / (1024 * 1024)).toFixed(1)} MB`} stored on this device · `
+            : ''}Completed jobs automatically deleted after 30 days.
         </Text>
 
         {/* ── Elmer Account ── */}

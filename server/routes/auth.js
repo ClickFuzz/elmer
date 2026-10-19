@@ -112,4 +112,30 @@ router.get('/me', requireAuth, (req, res) => {
   return res.json({ userId: req.userId, email: req.userEmail });
 });
 
+// ── DELETE /auth/history ───────────────────────────────────────────────────
+// Deletes the caller's publishing records. Local job data is managed client-side.
+router.delete('/history', requireAuth, wrap(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.query(
+    'DELETE FROM publishing_records WHERE user_id = $1',
+    [req.userId]
+  );
+  return res.json({ ok: true, deleted: result.rowCount });
+}));
+
+// ── DELETE /auth/account ───────────────────────────────────────────────────
+// Permanently deletes the account. Cascades to sessions, business_settings,
+// connected_platforms, oauth_states, and publishing_records via ON DELETE CASCADE.
+router.delete('/account', requireAuth, wrap(async (req, res) => {
+  const pool = getPool();
+  const result = await pool.query(
+    'DELETE FROM users WHERE id = $1',
+    [req.userId]
+  );
+  if (result.rowCount === 0) {
+    return res.status(404).json({ error: 'Account not found' });
+  }
+  return res.json({ ok: true });
+}));
+
 module.exports = router;
