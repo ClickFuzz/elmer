@@ -127,15 +127,15 @@ async function reverseGeocode(lat, lng) {
 
 function writingToneFor(style) {
   const map = {
-    'Professional':            'formal and authoritative',
-    'Casual / Professional':   'friendly yet professional',
-    'Friendly & Conversational': 'warm and conversational',
-    'Straightforward':         'direct and concise — no filler',
-    'Confident & Bold':        'confident and results-focused',
-    'Storytelling':            'narrative-driven with a clear story arc',
-    'Playful & Lighthearted':  'upbeat and lighthearted',
+    'Professional':              'formal and authoritative — clear, measured sentences; no slang or casual phrases; communicates expertise and reliability',
+    'Casual / Professional':     'friendly yet professional — approachable and polished; short sentences welcome; no excessive enthusiasm or corporate jargon',
+    'Friendly & Conversational': 'warm and conversational — write as if talking to a friend or neighbor; personal, grounded, and genuine',
+    'Straightforward':           'direct and concise — lead with the point; cut filler; every sentence earns its place; shorter is better than padded',
+    'Confident & Bold':          'confident and assertive — strong declarative statements; active verbs; no hedging, over-explaining, or false modesty',
+    'Storytelling':              'narrative-driven — give the post a clear arc; use specific details to bring the story to life; make the reader feel something',
+    'Playful & Lighthearted':    'upbeat and light — wit and personality are welcome; keep it genuine and grounded, never forced or juvenile',
   };
-  return map[style] || 'friendly yet professional';
+  return map[style] || 'friendly yet professional — approachable and polished; no excessive enthusiasm or corporate jargon';
 }
 
 function classificationSummary(classifications) {
@@ -202,6 +202,26 @@ function buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, busines
 
   return lines.join('\n');
 }
+
+// ── Editorial system prompt ────────────────────────────────────────────────
+// Injected as a system message into all content generation calls.
+// Sets the model's editorial persona, factual accuracy expectations,
+// structural variety mandate, and CTA optionality — once, cleanly.
+const EDITORIAL_SYSTEM_PROMPT = `You are an experienced content writer. Your job is to transform voice recordings from business owners into polished, authentic posts ready to publish.
+
+Your primary obligation is to the user's intended message. The user has already decided what they want to say — your job is to help them say it better, not to find a more compelling angle or reframe the update around a different story. The ultimate test: the user should read the output and think "That's exactly what I was trying to say, just written better."
+
+Follow the user's emphasis. Pay attention to what they spend more time on, repeat, or express enthusiasm about — that is the center of the post. If they emphasize the customer, center the customer. If they emphasize a technical challenge, center the challenge. If it's a simple project update, write a simple project update. Do not substitute your own judgment about what would make a stronger marketing hook.
+
+You may: fix grammar and flow, remove verbal filler and stumbles, reorganize slightly for clarity, improve the opening and closing, adapt length and format to the platform. You should not: change the main focus, introduce a new angle, exaggerate achievements, invent customer experiences, or replace meaningful details with generic marketing language.
+
+Structural variety emerges from the recordings themselves. Different transcripts naturally produce different posts — do not impose a template or manufacture an angle.
+
+Factual accuracy is non-negotiable. Copy every proper noun exactly as it appears in the transcript — business names, customer names, cities, product names, brand names. Do not substitute a similar-sounding alternative. If a name is unclear, omit it or handle it conservatively rather than guessing.
+
+Avoid habitual AI writing patterns ("We're excited to share...", "It was an absolute pleasure...", "We're thrilled to announce...", "Don't hesitate to reach out..."). Not banned — but using them by default makes every post sound the same. Write something specific to this update.
+
+CTAs are editorial decisions, not required elements. Include one when it fits naturally. End without one — with a short observation, a thank-you, or nothing at all — when that reads better.`;
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
@@ -308,7 +328,7 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
     }
 
     // Step 2 — Extract content context
-    let extracted = { location: null, mainService: '', specificWork: '', keyTerms: [], contentIntent: '', primarySubject: '', people: [], organizations: [], meaningfulFacts: [], explicitUrls: [], ctaHint: null };
+    let extracted = { location: null, mainService: '', specificWork: '', keyTerms: [], contentIntent: '', primarySubject: '', people: [], organizations: [], meaningfulFacts: [], explicitUrls: [], ctaHint: null, properNouns: [] };
     try {
       const extractResult = await openai.chat.completions.create({
         model:           'gpt-4o-mini',
@@ -336,7 +356,8 @@ Return JSON with exactly these fields:
   "meaningfulFacts": ["important details, personal observations, anecdotes — include seasonal notes, compliments, humor, specific products, materials"],
   "explicitUrls": ["URLs explicitly mentioned in the transcript — only include if actually stated"],
   "ctaHint": "desired audience action from the transcript, or null",
-  "keyTerms": ["4-6 relevant search terms based on actual topic, industry, and confirmed location"]
+  "keyTerms": ["4-6 relevant search terms based on actual topic, industry, and confirmed location"],
+  "properNouns": ["every proper noun from the transcript that must be preserved verbatim: business names, customer names, cities, product names, brand names"]
 }
 
 Rules:
@@ -344,10 +365,11 @@ Rules:
 - primarySubject: If the recording describes work for a client, the client is the subject; the publishing business is the speaker.
 - meaningfulFacts: Preserve human details — personal observations, employee recognition, humor, anecdotes, seasonal notes. Do not discard non-commercial observations.
 - explicitUrls: Only include URLs actually stated in the transcript.
+- properNouns: List every proper noun exactly as it appears in the transcript — business names, customer names, place names, product names, brand names. Copy verbatim; do not normalize, guess, or expand.
 - Do not add information absent from the transcript or business profile.`,
           },
         ],
-        max_tokens:  450,
+        max_tokens:  550,
         temperature: 0.1,
       });
       extracted = safeParseJSON(extractResult.choices[0]?.message?.content ?? '{}') ?? extracted;
@@ -403,6 +425,7 @@ Rules:
       extracted.ctaHint                      && `Desired audience action: ${extracted.ctaHint}`,
       locationStr !== 'location not specified' && `Location: ${locationStr}`,
       keyTermsStr                            && `Relevant terms: ${keyTermsStr}`,
+      extracted.properNouns?.length          && `Proper nouns — preserve verbatim: ${extracted.properNouns.join(', ')}`,
     ].filter(Boolean);
     const contentBrief = contentBriefLines.join('\n');
 
@@ -428,20 +451,25 @@ Rules:
       bizLines     ? `\nPUBLISHING BUSINESS:\n${bizLines}` : '',
       serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
       '',
-      'WRITING REQUIREMENTS:',
-      `- Writing tone: ${tone}${customStyleCtx}`,
+            'WRITING:',
+      `- Style: ${tone}${customStyleCtx}`,
       `- Write from ${speakerCtx} perspective`,
       `- ${beforeAfterRule}`,
-      '- Preserve all meaningful ideas from the transcript: named people and their contributions, personal observations, anecdotes, seasonal details, humor',
-      '- Improve grammar, flow, and clarity while keeping the speaker\'s voice',
-      '- Match post length to the content — concise for brief updates, fuller for detailed recordings; do not pad to a word count',
-      '- Use hashtags only where they feel natural — a small number or none at all',
+      '- Follow the user\'s emphasis — communicate what they actually wanted to say, with the same focus and priorities they expressed',
+      '- Do not reframe the update around a different angle than what the user recorded',
+      '- Preserve all meaningful details: named people and their contributions, observations, anecdotes, specific outcomes, humor',
+      '- Improve grammar, flow, and clarity while keeping the speaker\'s voice and intent',
+      '- Match length to content — do not pad to reach a word count; a brief update may need only 2–3 sentences',
+      '- Hashtags: a small number where they feel natural, or none',
       '- Plain text only — no markdown, no asterisks, no brackets',
-      '- Do not assume every post is from a contractor or describes a completed job',
-      '- Do not invent facts, quotes, testimonials, or results not in the recording',
-      '- Never fabricate locations, certifications, or commercial claims',
+      '',
+      'FACTUAL ACCURACY:',
+      '- Copy all proper nouns exactly as they appear in the transcript: business names, customer names, cities, products',
+      '- Do not invent, alter, or approximate names, locations, or specific results',
+      '- Distinguish completed facts from anticipated outcomes — do not present expected benefits as proven results',
       '',
       ctaBlock,
+      '- Social posts often end better without a CTA — use editorial judgment; a natural ending is better than a forced sales pitch',
       '',
       'Return only the post text.',
     ].filter(s => s !== undefined).join('\n');
@@ -456,17 +484,20 @@ Rules:
       bizLines     ? `\nBUSINESS PROFILE:\n${bizLines}` : '',
       serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
       '',
-      'WRITING REQUIREMENTS:',
-      `- Writing tone: ${tone}${customStyleCtx}`,
+            'WRITING:',
+      `- Style: ${tone}${customStyleCtx}`,
       `- ${beforeAfterRule}`,
-      '- Naturally include the location when verified',
-      '- Describe what happened and its value to customers',
-      '- Length appropriate to the content — typically 150–300 words for substantial updates, shorter for brief announcements',
+      '- Communicate what the user actually wanted to highlight — follow their emphasis, not a predetermined structure',
+      '- Describe what happened and why it matters to potential customers, drawn from the transcript',
+      '- Naturally include the confirmed location when available',
+      '- Match length to content — do not pad to a word count',
       '- Plain text only — no markdown, no brackets, no asterisks',
-      '- Include 2–4 hashtags only if they add value; omit otherwise',
-      '- No keyword stuffing — write for people, not search engines',
-      '- Do not assume every post is from a contractor',
-      '- Do not invent facts, services, or locations',
+      '- 2–4 hashtags if they add value; omit if they don\'t',
+      '- Write for the reader, not for search engines',
+      '',
+      'FACTUAL ACCURACY:',
+      '- Copy all proper nouns exactly as they appear in the transcript',
+      '- Do not invent services, locations, or results not in the recording',
       '',
       ctaBlock,
       '',
@@ -483,19 +514,22 @@ Rules:
       bizLines     ? `\nBUSINESS PROFILE:\n${bizLines}` : '',
       serviceAreaCtx ? `\n${serviceAreaCtx}` : '',
       '',
-      'WRITING REQUIREMENTS:',
-      `- Writing tone: ${tone}${customStyleCtx}`,
+            'WRITING:',
+      `- Style: ${tone}${customStyleCtx}`,
       `- ${beforeAfterRule}`,
-      '- Choose a structure appropriate to the content: project showcase, case study, product announcement, event recap, educational article, client spotlight, or other relevant format',
-      '- Target at least 400 words when the content supports it — do not pad with generic filler to reach a count',
-      '- Use ## and ### headings when they improve readability; do not force a fixed heading count',
-      '- Preserve meaningful transcript details: named people, client work, personal observations, anecdotes',
-      '- Develop explanations only where supported by the recording',
+      '- Follow the user\'s emphasis — the article structure and focus should reflect what they actually wanted to communicate',
+      '- Choose an article format appropriate to the content: project showcase, case study, product announcement, event recap, educational piece, client spotlight, or other — inferred from the transcript, not imposed',
+      '- Target at least 400 words when the content supports it — do not add generic filler to reach a word count',
+      '- Use ## and ### headings when they improve readability; do not force a heading structure',
+      '- Preserve meaningful details: named people, client work, observations, specific outcomes',
+      '- Develop explanations only where the recording supports them',
       '- Natural keyword usage — no stuffing',
       `- End with a relevant contact or CTA paragraph${businessName ? ` mentioning ${businessName}` : ''} — do not include a website URL in the article body`,
       '- No hashtags',
-      '- Do not fabricate case study metrics, customer quotes, or project details not in the recording',
-      '- Do not assume every post is about contractor work',
+      '',
+      'FACTUAL ACCURACY:',
+      '- Copy all proper nouns exactly as they appear in the transcript',
+      '- Do not fabricate metrics, testimonials, case study details, or project outcomes not in the recording',
       '',
       'Return only the article with markdown headings.',
     ].filter(s => s !== undefined).join('\n');
@@ -527,10 +561,10 @@ Base all fields on actual content. Never invent locations, services, or facts no
       const tasks    = [];
       const taskKeys = [];
 
-      if (needsGoogle)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: googlePrompt }], max_tokens: 600, temperature: 0.75 })); taskKeys.push('google'); }
-      if (needsSocial)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: socialPrompt }], max_tokens: 600, temperature: 0.80 })); taskKeys.push('social'); }
+      if (needsGoogle)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: EDITORIAL_SYSTEM_PROMPT }, { role: 'user', content: googlePrompt }], max_tokens: 650, temperature: 0.77 })); taskKeys.push('google'); }
+      if (needsSocial)    { tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: EDITORIAL_SYSTEM_PROMPT }, { role: 'user', content: socialPrompt }], max_tokens: 700, temperature: 0.82 })); taskKeys.push('social'); }
       if (needsWordpress) {
-        tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: wordpressPrompt }], max_tokens: 1800, temperature: 0.72 })); taskKeys.push('wordpress');
+        tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: EDITORIAL_SYSTEM_PROMPT }, { role: 'user', content: wordpressPrompt }], max_tokens: 1800, temperature: 0.75 })); taskKeys.push('wordpress');
         tasks.push(openai.chat.completions.create({ model: 'gpt-4o-mini', response_format: { type: 'json_object' }, messages: [{ role: 'system', content: 'You generate SEO metadata as JSON.' }, { role: 'user', content: seoPrompt }], max_tokens: 600, temperature: 0.3 })); taskKeys.push('seo');
       }
 
