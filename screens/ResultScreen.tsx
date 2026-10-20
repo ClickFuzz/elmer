@@ -65,6 +65,11 @@ type State =
   | ({ status: 'success' } & SuccessData)
   | { status: 'error'; message: string };
 
+function extractMarkdownTitle(md: string): string {
+  const m = md.match(/^#{1,3}\s+(.+)/m);
+  return m ? m[1].trim() : '';
+}
+
 const BADGE_COLORS: Record<PhotoClassification, string> = {
   General: '#28344B',
   Before: '#5C3200',
@@ -95,6 +100,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [editedSocial, setEditedSocial] = useState('');
   const [editedThreads, setEditedThreads] = useState('');
   const [editedWordpress, setEditedWordpress] = useState('');
+  const [editedWordpressTitle, setEditedWordpressTitle] = useState('');
   const [editedLocation, setEditedLocation] = useState('');
   const [excludedPlatforms, setExcludedPlatforms] = useState<Set<string>>(new Set());
   const [showVariations, setShowVariations] = useState(false);
@@ -224,6 +230,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         setEditedSocial(data.socialPost ?? '');
         setEditedThreads(truncateForThreads(data.socialPost ?? ''));
         setEditedWordpress(data.webContent ?? '');
+        setEditedWordpressTitle(data.seoMetadata?.seoTitle ?? extractMarkdownTitle(data.webContent ?? ''));
         setEditedLocation(loc);
 
         saveJob({
@@ -274,6 +281,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       setEditedSocial(social);
       setEditedThreads(truncateForThreads(social));
       setEditedWordpress(web);
+      setEditedWordpressTitle(extractMarkdownTitle(web));
       setEditedLocation(loc);
       // Still need to load channels for publishing
       (async () => {
@@ -487,6 +495,70 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     return { pageId: 'th', pageName, platform: 'threads', ok: false, error: result.error };
   };
 
+  const runWordpressPublish = async (sessionToken: string, wpChannels: ConnectedChannel[]): Promise<PageResult[]> => {
+    const jobId        = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+    const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const seoState     = state.status === 'success' ? state.seoMetadata : null;
+
+    const results: PageResult[] = [];
+    for (const ch of wpChannels) {
+      const wpSiteId = ch.id;
+      const formData = new FormData();
+      formData.append('title',       editedWordpressTitle || extractMarkdownTitle(editedWordpress) || 'New Post');
+      formData.append('content',     editedWordpress);
+      formData.append('job_id',      jobId);
+      formData.append('wp_site_id',  wpSiteId);
+      formData.append('featured_index', String(Math.max(0, featuredIndex)));
+      formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
+      if (seoState?.urlSlug)          formData.append('seo_slug',    seoState.urlSlug);
+      if (seoState?.metaDescription)  formData.append('seo_excerpt', seoState.metaDescription);
+
+      payload.photos.forEach((photo, i) => {
+        formData.append(`photo_${i}`, {
+          uri:  photo.uri,
+          type: 'image/jpeg',
+          name: `photo_${i}.jpg`,
+        } as unknown as Blob);
+      });
+
+      try {
+        const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `${API_URL}/wordpress/publish`);
+          xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+          xhr.timeout = TIMEOUT_MS;
+          xhr.onload  = () => resolve({ status: xhr.status, body: xhr.responseText });
+          xhr.onerror = () => reject(new Error('Network error'));
+          xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+          xhr.send(formData);
+        });
+
+        let data: Record<string, unknown>;
+        try { data = JSON.parse(body); } catch { data = {}; }
+
+        if (status === 422 && data.error === 'no_wordpress_site') {
+          results.push({ pageId: `wp_${wpSiteId}`, pageName: ch.accountName, platform: 'wordpress', ok: false, error: 'WordPress site not connected. Go to Settings → Connected Accounts.' });
+          continue;
+        }
+        if (status < 200 || status >= 300) {
+          results.push({ pageId: `wp_${wpSiteId}`, pageName: ch.accountName, platform: 'wordpress', ok: false, error: (data.error as string) ?? `Server error ${status}` });
+          continue;
+        }
+
+        const result = data as { ok: boolean; siteName?: string; postId?: string; postUrl?: string; duplicate?: boolean; error?: string };
+        const pageName = result.siteName ?? ch.accountName;
+        if (result.ok) {
+          results.push({ pageId: `wp_${wpSiteId}`, pageName, platform: 'wordpress', ok: true, postId: result.postId, postUrl: result.postUrl, duplicate: result.duplicate });
+        } else {
+          results.push({ pageId: `wp_${wpSiteId}`, pageName, platform: 'wordpress', ok: false, error: result.error });
+        }
+      } catch (err) {
+        results.push({ pageId: `wp_${wpSiteId}`, pageName: ch.accountName, platform: 'wordpress', ok: false, error: err instanceof Error ? err.message : 'Publishing failed' });
+      }
+    }
+    return results;
+  };
+
   const handlePostEverywhere = async () => {
     if (connectedChannels.length === 0) {
       Alert.alert(
@@ -521,6 +593,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const hasFacebook  = activeChannels.some(ch => ch.platform === 'facebook');
     const hasInstagram = activeChannels.some(ch => ch.platform === 'instagram');
     const hasThreads   = activeChannels.some(ch => ch.platform === 'threads');
+    const wpChannels   = activeChannels.filter(ch => ch.platform === 'wordpress');
     const channelList  = activeChannels.map(ch => ch.accountName).join(', ');
 
     Alert.alert(
@@ -531,9 +604,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           setPublishState({ status: 'publishing' });
           try {
             const tasks: Promise<PageResult[]>[] = [];
-            if (hasFacebook)  tasks.push(runFacebookPublish(token));
-            if (hasInstagram) tasks.push(runInstagramPublish(token).then(r => [r]));
-            if (hasThreads)   tasks.push(runThreadsPublish(token).then(r => [r]));
+            if (hasFacebook)         tasks.push(runFacebookPublish(token));
+            if (hasInstagram)        tasks.push(runInstagramPublish(token).then(r => [r]));
+            if (hasThreads)          tasks.push(runThreadsPublish(token).then(r => [r]));
+            if (wpChannels.length)   tasks.push(runWordpressPublish(token, wpChannels));
 
             const settled = await Promise.allSettled(tasks);
             const allResults: PageResult[] = [];
@@ -855,6 +929,15 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                     {hasWordpress && (
                       <>
                         <Text style={styles.variationLabel}>WordPress article</Text>
+                        <TextInput
+                          style={styles.wpTitleInput}
+                          value={editedWordpressTitle}
+                          onChangeText={setEditedWordpressTitle}
+                          placeholder="Article title"
+                          placeholderTextColor={colors.textMuted}
+                          autoCorrect
+                          returnKeyType="next"
+                        />
                         <TextInput
                           style={styles.webInput}
                           value={editedWordpress}
@@ -1273,6 +1356,17 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     lineHeight: 22,
     minHeight: 200,
+    padding: 0,
+  },
+
+  wpTitleInput: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingBottom: 10,
+    marginBottom: 12,
     padding: 0,
   },
 

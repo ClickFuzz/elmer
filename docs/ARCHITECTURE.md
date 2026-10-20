@@ -76,6 +76,8 @@ server/routes/auth.js     — /auth/* endpoints
 server/routes/platforms.js — /platforms/* endpoints
 server/routes/facebook.js — /facebook/* endpoints (OAuth, pages, publish)
 server/routes/instagram.js — /instagram/* endpoints (OAuth, publish)
+server/routes/threads.js  — /threads/* endpoints (OAuth, publish, Meta callbacks)
+server/routes/wordpress.js — /wordpress/* endpoints (connect, callback, sites, publish)
 server/routes/media-utils.js — shared image processing (sharp): EXIF, IG prep, composites
 server/test/              — node:test + supertest test suite
 ```
@@ -278,6 +280,7 @@ All platform endpoints require a valid Bearer token.
 | `THREADS_APP_SECRET` | _(required for Threads OAuth)_ | Threads App Secret — keep server-side only, never in mobile code; also used to validate uninstall/delete callbacks |
 | `THREADS_REDIRECT_URI` | _(required for Threads OAuth)_ | Must match "Valid OAuth Redirect URIs" in Meta App Dashboard; production: `https://api.getelmer.com/threads/callback` |
 | `SERVER_URL` | _(required for Instagram/Threads publish)_ | Base URL the IG/Threads API uses to fetch prepared images; must be publicly reachable; production: `https://api.getelmer.com` |
+| `WORDPRESS_CALLBACK_URL` | `https://api.getelmer.com/wordpress/callback` | WordPress Application Password authorization callback URL; must match `success_url` registered with each WordPress site |
 
 ---
 
@@ -559,6 +562,81 @@ Mobile                          Elmer Server                  Threads (Meta)
 
 ---
 
+## WordPress Integration
+
+### Connection flow (Application Passwords)
+
+WordPress uses the built-in Application Passwords authorization flow (available since WP 5.6). There is no OAuth server — instead, the user grants the app a named application password via a browser-based WordPress admin dialog.
+
+```
+Mobile                          Elmer Server                  WordPress Site
+  │                                  │                              │
+  ├─POST /wordpress/connect-url ─────►│ validates URL (HTTPS, SSRF check)
+  │                                  │ checks /wp-json/ for app-password support
+  │                                  │ creates oauth_state, builds authorize URL
+  │◄─── { authUrl } ─────────────────┤                              │
+  ├─openAuthSessionAsync(authUrl) ───►│                              │
+  │                    browser opens /wp-admin/authorize-application.php ──►
+  │                                  │◄── GET /wordpress/callback?user_login=&password=&site_url= ──┤
+  │                                  │  consumes state (FOR UPDATE, single-use)
+  │                                  │  re-checks SSRF on returned site_url
+  │                                  │  verifies credentials via GET /wp-json/wp/v2/users/me
+  │                                  │  checks publish_posts capability
+  │                                  │  encrypts {userLogin, password} JSON (AES-256-GCM)
+  │                                  │  upserts connected_platforms row
+  │◄── redirect to elmer://oauth/callback?platform=wordpress&success=true ─┤
+```
+
+**URL validation**: `normalizeWordPressUrl` strips paths (connection is per-site, not per-page), enforces HTTPS, and blocks private IP ranges via `isPrivateHost` (localhost, 127.x, 10.x, 192.168.x, 172.16–31.x, 169.254.x, ::1, fd00:/8 ULA, fe80: link-local).
+
+**Site verification**: `checkWordPressInstallation` fetches `GET /wp-json/` and confirms `authentication['application-passwords']` is present in the response. Times out at 8 seconds.
+
+**Credential verification**: `verifyWordPressCredentials` calls `GET /wp-json/wp/v2/users/me` with Basic auth. Confirms `capabilities.publish_posts` or `capabilities.edit_posts` is truthy.
+
+**Multiple sites**: Each WordPress site is stored as an independent `connected_platforms` row. Users can connect multiple sites; each is an independent publishing destination.
+
+### Publishing flow
+
+```
+1. Mobile → POST /wordpress/publish (multipart: title, content, job_id, wp_site_id,
+                                      featured_index, classifications, seo_slug,
+                                      seo_excerpt, photo_0…photo_N)
+2. Server loads site credentials (decrypt {userLogin, password} from connected_platforms)
+3. Idempotency check: job_ref = wp_{userId}_{jobId}_{siteId}; skip if already published
+4. Upload each photo to /wp-json/wp/v2/media (raw JPEG, Basic auth)
+5. Set featured photo as featured_media on the post
+6. Convert markdown content → HTML (markdownToHtml)
+7. Embed non-featured photos as <figure class="wp-block-image"> blocks after every 2nd section
+8. POST /wp-json/wp/v2/posts: {title, content, status:'publish', featured_media, slug, excerpt}
+9. Record result in publishing_records; return { ok, postId?, postUrl? }
+```
+
+**Markdown → HTML**: Block-based converter (split on `\n{2,}`). Supports `# `, `## `, `### ` headings, paragraphs, `**bold**`, `*italic*`, HTML entity escaping. Keeps content as markdown in the mobile app (for display and editing); converts only at publish time.
+
+**Image embedding**: Featured photo → `featured_media` field. Additional photos distributed as `<figure>` blocks inserted after every 2nd h2/h3 section heading to break up long articles naturally.
+
+**Title**: Mobile sends an editable title field (pre-populated by `extractMarkdownTitle` from the first heading in the article, falling back to `seoMetadata.seoTitle`).
+
+### Disconnect
+
+`DELETE /wordpress/sites/:id` makes a best-effort attempt to revoke the Application Password via the WP REST API (fetch list → find by name 'Elmer' → DELETE by UUID), then deletes the `connected_platforms` row regardless of revocation success.
+
+### WordPress Routes
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /wordpress/connect-url` | Bearer | Validates WP site URL, checks REST API + Application Passwords support, creates CSRF state, returns `authorize-application.php` URL |
+| `GET /wordpress/callback` | Public (validates via state) | WordPress redirects here with credentials; verifies, encrypts, stores; redirects to app |
+| `GET /wordpress/sites` | Bearer | Lists the user's connected WordPress sites (credentials excluded) |
+| `DELETE /wordpress/sites/:id` | Bearer | Best-effort revoke Application Password, then delete site from DB |
+| `POST /wordpress/publish` | Bearer, multipart | Upload media, convert markdown→HTML, create post; idempotency via `publishing_records` |
+
+**No new DB migration required**: `connected_platforms.platform` already includes `'wordpress'` in the CHECK constraint (added in V3 migration alongside `'google'` and `'facebook'`).  
+**Credential storage**: `{userLogin, password}` JSON serialized, then AES-256-GCM encrypted; stored in `access_token_enc`. No separate refresh token.  
+**SSRF protection**: Applied on both the initial connect-url request and again on the callback's returned `site_url` to prevent redirect-based SSRF.
+
+---
+
 ## Content Types
 
 | Type | Field | Platform target | Generation condition |
@@ -624,10 +702,18 @@ Mobile                          Elmer Server                  Threads (Meta)
 - **Threads data deletion callback**: `POST /threads/delete` — validates signed_request, deletes Threads-associated data, returns `{ url, confirmation_code }` as required by Meta; human-readable status page at `GET /threads/deletion-status` (`server/routes/threads.js`).
 - **205 automated tests** (DB, auth, platforms, Facebook, Instagram, Threads, media-utils, generation) — all passing (`server/test/`).
 
+### Implemented (Phase 3 — WordPress integration)
+
+- **WordPress connection — server**: `POST /wordpress/connect-url` validates site URL (HTTPS + SSRF guard), checks `/wp-json/` for Application Password support, creates CSRF state token, returns `authorize-application.php` URL; `GET /wordpress/callback` consumes state (FOR UPDATE), re-validates SSRF on returned site_url, verifies credentials via `/wp-json/wp/v2/users/me`, checks `publish_posts` capability, encrypts `{userLogin, password}` JSON (AES-256-GCM), upserts `connected_platforms` (`server/routes/wordpress.js`).
+- **WordPress connection — mobile**: URL input form in SettingsScreen; `openAuthSessionAsync` opens browser; deep-link return to `elmer://oauth/callback`; handles success/error codes; lists connected sites with Disconnect and "Add Another Site" (`SettingsScreen.tsx`).
+- **WordPress multi-site management**: `GET /wordpress/sites` lists sites; `DELETE /wordpress/sites/:id` revokes Application Password (best-effort) then removes from DB; each site is an independent publishing destination (`server/routes/wordpress.js`, `SettingsScreen.tsx`).
+- **WordPress publishing**: `POST /wordpress/publish` — uploads photos to WP Media Library, sets featured photo as `featured_media`, converts markdown → HTML (`markdownToHtml`), embeds non-featured photos as `<figure>` blocks distributed after every 2nd section heading, creates published post; per-site idempotency key `wp_{userId}_{jobId}_{siteId}` (`server/routes/wordpress.js`).
+- **WordPress publish — mobile**: Editable article title input in ResultScreen (pre-populated from first heading or seoMetadata.seoTitle); `runWordpressPublish` iterates over connected WP sites independently; per-site result shown in result footer (`ResultScreen.tsx`).
+- **276 automated tests** (DB, auth, platforms, Facebook, Instagram, Threads, media-utils, generation, WordPress) — all passing (`server/test/`).
+
 ### Stub — UI exists but action is a no-op or alert
 
 - **Connect channels — Google** (`SettingsScreen.tsx`): Shows "Coming Soon — awaiting API approval" alert.
-- **Connect channels — WordPress** (`SettingsScreen.tsx`): Shows "Coming Soon" alert. Server-side OAuth state infrastructure exists; WordPress-specific flow not implemented.
 
 ### Requires live Meta credentials before functional testing
 
@@ -637,7 +723,6 @@ Mobile                          Elmer Server                  Threads (Meta)
 ### Planned — no implementation exists
 
 - Google Business Profile OAuth callback and posting API
-- WordPress REST API publishing
 - Cross-device settings synchronization
 - Stripe billing and subscription management
 - Push notifications
@@ -649,7 +734,7 @@ Mobile                          Elmer Server                  Threads (Meta)
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/media-utils.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.

@@ -111,6 +111,14 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
   const [thConnecting, setThConnecting] = useState(false);
   const [thDisconnecting, setThDisconnecting] = useState(false);
 
+  // ── WordPress state ────────────────────────────────────────────────────────
+  type WpSite = { id: number; account_name: string; account_id: string; connected_at: number };
+  const [wpSites, setWpSites] = useState<WpSite[]>([]);
+  const [wpConnecting, setWpConnecting] = useState(false);
+  const [wpDisconnecting, setWpDisconnecting] = useState<number | null>(null);
+  const [wpConnectOpen, setWpConnectOpen] = useState(false);
+  const [wpUrl, setWpUrl] = useState('');
+
   // ── Platform manage panel ──────────────────────────────────────────────────
   const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
 
@@ -151,6 +159,17 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
     } catch { /* ignore */ }
   };
 
+  const refreshWpSites = async (token: string) => {
+    try {
+      const res = await fetch(`${API_URL}/wordpress/sites`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setWpSites(data.sites ?? []);
+    } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     getJobStats().then(setStats).catch(() => setStats({ total: 0, drafts: 0 }));
     calculateStorageUsage().then(u => setStorageBytes(u.totalBytes)).catch(() => setStorageBytes(0));
@@ -167,6 +186,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
           refreshFbPages(tok);
           refreshIgAccount(tok);
           refreshThAccount(tok);
+          refreshWpSites(tok);
         }
       }
     ).catch(() => {});
@@ -231,6 +251,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
       await refreshFbPages(data.token);
       await refreshIgAccount(data.token);
       await refreshThAccount(data.token);
+      await refreshWpSites(data.token);
       onAuthChange?.(true);
     } catch {
       setAuthError('Could not reach the server. Check your connection.');
@@ -255,6 +276,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
         setSelectedPageIds([]);
         setIgAccount(null);
         setThAccount(null);
+        setWpSites([]);
         setProfile(DEFAULT_BUSINESS_PROFILE);
         onAuthChange?.(false);
       }},
@@ -582,10 +604,94 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
     );
   };
 
+  // ── WordPress handlers ─────────────────────────────────────────────────────
+
+  const handleConnectWordPress = async () => {
+    if (!sessionToken) {
+      Alert.alert('Sign In Required', 'Sign in to your Elmer account to connect WordPress.', [{ text: 'OK' }]);
+      return;
+    }
+    const url = wpUrl.trim();
+    if (!url) {
+      Alert.alert('Website URL Required', 'Enter your WordPress website URL to continue.', [{ text: 'OK' }]);
+      return;
+    }
+
+    setWpConnecting(true);
+    try {
+      const res = await fetch(`${API_URL}/wordpress/connect-url`, {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ siteUrl: url }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Connection failed', data.error ?? 'Could not reach your WordPress site.');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      console.log('[wp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
+
+      if (result.type === 'success') {
+        const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
+        const error  = params.get('error');
+        if (error) {
+          if (error === 'rejected') {
+            Alert.alert('Authorization cancelled', 'You cancelled the WordPress authorization. Try again when ready.', [{ text: 'OK' }]);
+          } else {
+            Alert.alert('Connection failed', `WordPress returned: ${error}`);
+          }
+          return;
+        }
+        if (params.get('success') === 'true') {
+          const siteName = params.get('site_name') ?? url;
+          await refreshWpSites(sessionToken);
+          setWpUrl('');
+          setWpConnectOpen(false);
+          Alert.alert('WordPress connected!', `"${siteName}" has been connected.`, [{ text: 'OK' }]);
+        }
+      }
+
+      await refreshWpSites(sessionToken);
+    } catch (err) {
+      Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
+    } finally {
+      setWpConnecting(false);
+    }
+  };
+
+  const handleDisconnectWordPress = (site: { id: number; account_name: string }) => {
+    Alert.alert(
+      'Disconnect WordPress',
+      `Remove "${site.account_name}"? Previously published articles will remain on your site.`,
+      [
+        { text: 'Disconnect', style: 'destructive', onPress: async () => {
+          if (!sessionToken) return;
+          setWpDisconnecting(site.id);
+          try {
+            await fetch(`${API_URL}/wordpress/sites/${site.id}`, {
+              method:  'DELETE',
+              headers: { Authorization: `Bearer ${sessionToken}` },
+            });
+            setWpSites(prev => prev.filter(s => s.id !== site.id));
+            if (wpSites.length <= 1) setExpandedPlatform(null);
+          } catch {
+            Alert.alert('Error', 'Could not disconnect. Try again.');
+          } finally {
+            setWpDisconnecting(null);
+          }
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
   const effectiveCategory = profile.category === 'Other' ? profile.categoryCustom : profile.category;
   const isFbConnected = fbPages.length > 0;
   const selectedCount = selectedPageIds.length;
   const isIgConnected = igAccount !== null;
+  const isWpConnected = wpSites.length > 0;
   const now = Date.now();
   const EXPIRY_WARN_MS = 7 * 24 * 60 * 60 * 1000;
   const igTokenExpiringSoon = igAccount?.token_expires_at != null
@@ -601,6 +707,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
     : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? '#FF5050'
     : thAccount.token_expires_at != null && thAccount.token_expires_at < now + EXPIRY_WARN_MS ? '#C8A040'
     : '#52D6A4';
+  const wpDot  = isWpConnected ? '#52D6A4' : colors.textMuted;
 
   return (
     <View style={styles.container}>
@@ -925,18 +1032,111 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
 
           {/* WordPress */}
           <View style={styles.platformRow}>
-            <View style={[styles.statusDot, { backgroundColor: colors.textMuted }]} />
+            <View style={[styles.statusDot, { backgroundColor: wpDot }]} />
             <View style={styles.platformInfo}>
-              <Text style={[styles.platformName, styles.platformNameDim]}>WordPress</Text>
+              <Text style={[styles.platformName, !isWpConnected && styles.platformNameDim]}>WordPress</Text>
+              {isWpConnected && (
+                <Text style={styles.platformSub}>
+                  {wpSites.length === 1 ? wpSites[0].account_name : `${wpSites.length} sites connected`}
+                </Text>
+              )}
             </View>
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.actionBtnDisabled]}
-              onPress={() => Alert.alert('Coming Soon', 'WordPress connection will be available in a future update.', [{ text: 'OK' }])}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.actionBtnText, styles.actionBtnTextDisabled]}>Connect</Text>
-            </TouchableOpacity>
+            {isWpConnected ? (
+              <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('wordpress')} activeOpacity={0.7}>
+                <Text style={styles.manageBtnText}>Manage</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionBtn, (!sessionToken || wpConnecting) && styles.actionBtnDisabled]}
+                onPress={() => {
+                  if (!sessionToken) {
+                    Alert.alert('Sign In Required', 'Sign in to your Elmer account to connect WordPress.', [{ text: 'OK' }]);
+                    return;
+                  }
+                  setWpConnectOpen(v => !v);
+                }}
+                disabled={wpConnecting}
+                activeOpacity={0.7}
+              >
+                {wpConnecting
+                  ? <ActivityIndicator color={colors.bg} size="small" />
+                  : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+              </TouchableOpacity>
+            )}
           </View>
+          {/* WordPress connect form — shown when not yet connected */}
+          {!isWpConnected && wpConnectOpen && (
+            <View style={styles.managePanelInner}>
+              <View style={styles.divider} />
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabelAbove}>Website URL</Text>
+                <TextInput
+                  style={[styles.descInput, { minHeight: 0, paddingVertical: 10 }]}
+                  value={wpUrl}
+                  onChangeText={setWpUrl}
+                  placeholder="https://yoursite.com"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  returnKeyType="done"
+                  onSubmitEditing={handleConnectWordPress}
+                />
+              </View>
+              <View style={styles.managePagesActions}>
+                <TouchableOpacity
+                  style={[styles.savePagesBtn, (wpConnecting || !wpUrl.trim()) && styles.authBtnDisabled]}
+                  onPress={handleConnectWordPress}
+                  disabled={wpConnecting || !wpUrl.trim()}
+                  activeOpacity={0.8}
+                >
+                  {wpConnecting
+                    ? <ActivityIndicator color={colors.bg} size="small" />
+                    : <Text style={styles.savePagesBtnText}>Connect Website</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.cancelPagesBtn} onPress={() => { setWpConnectOpen(false); setWpUrl(''); }} activeOpacity={0.8}>
+                  <Text style={styles.cancelPagesBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+          {/* WordPress manage panel — shown when connected */}
+          {expandedPlatform === 'wordpress' && isWpConnected && (
+            <View style={styles.managePanelInner}>
+              <View style={styles.divider} />
+              {wpSites.map(site => (
+                <View key={site.id} style={[styles.managePanelRow, { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.managePanelSubText, { color: colors.textPrimary }]} numberOfLines={1}>{site.account_name}</Text>
+                    <Text style={[styles.platformSub, { marginTop: 2 }]} numberOfLines={1}>{site.account_id}</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.fbDisconnectBtn}
+                    onPress={() => handleDisconnectWordPress(site)}
+                    disabled={wpDisconnecting === site.id}
+                    activeOpacity={0.8}
+                  >
+                    {wpDisconnecting === site.id
+                      ? <ActivityIndicator color={colors.textMuted} size="small" />
+                      : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {/* Add another site */}
+              <View style={styles.managePagesActions}>
+                <TouchableOpacity
+                  style={[styles.savePagesBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.cyan }]}
+                  onPress={() => {
+                    setExpandedPlatform(null);
+                    setWpConnectOpen(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.savePagesBtnText, { color: colors.cyan }]}>Add Another Site</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
         </View>
         <Text style={styles.groupNote}>

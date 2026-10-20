@@ -14,6 +14,7 @@ const platformRoutes                  = require('./routes/platforms');
 const { createFacebookRouter }        = require('./routes/facebook');
 const { createInstagramRouter }       = require('./routes/instagram');
 const { createThreadsRouter }         = require('./routes/threads');
+const { createWordPressRouter }       = require('./routes/wordpress');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -204,7 +205,7 @@ function buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, busines
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
-function createApp({ facebookRouter, instagramRouter, threadsRouter } = {}) {
+function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRouter } = {}) {
   const app = express();
 
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
@@ -222,9 +223,10 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter } = {}) {
 
   app.use('/auth',      authRateLimit, authRoutes);
   app.use('/platforms', platformRoutes);
-  app.use('/facebook',  facebookRouter  ?? createFacebookRouter());
-  app.use('/instagram', instagramRouter ?? createInstagramRouter());
-  app.use('/threads',   threadsRouter   ?? createThreadsRouter());
+  app.use('/facebook',  facebookRouter   ?? createFacebookRouter());
+  app.use('/instagram', instagramRouter  ?? createInstagramRouter());
+  app.use('/threads',   threadsRouter    ?? createThreadsRouter());
+  app.use('/wordpress', wordpressRouter  ?? createWordPressRouter());
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });
@@ -562,4 +564,4 @@ Base all fields on actual content. Never invent locations, services, or facts no
   return app;
 }
 
-module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor };
+module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor, _createWordPressRouter: createWordPressRouter };
