@@ -21,7 +21,7 @@ const { describe, it, beforeEach, after } = require('node:test');
 const assert  = require('node:assert/strict');
 const request = require('supertest');
 
-const { setupFreshTestDb } = require('./helpers');
+const { setupFreshTestDb, seedActiveSubscription } = require('./helpers');
 const { getPool, closeDb } = require('../db');
 const { createApp }        = require('../app');
 const { encrypt }          = require('../crypto');
@@ -32,7 +32,9 @@ async function registerAndLogin(app, email, password = 'password123') {
   await request(app).post('/auth/register').send({ email, password });
   const login = await request(app).post('/auth/login').send({ email, password });
   const me    = await request(app).get('/auth/me').set('Authorization', `Bearer ${login.body.token}`);
-  return { token: login.body.token, userId: me.body.userId };
+  const userId = me.body.userId;
+  await seedActiveSubscription(userId);
+  return { token: login.body.token, userId };
 }
 
 async function insertPlatform(userId, platform, accountName, accountId) {

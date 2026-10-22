@@ -7,13 +7,16 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionEmail, runAutoCleanup, Job } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, runAutoCleanup, Job, clearSession } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ManageDataScreen from './screens/ManageDataScreen';
 import ResultScreen from './screens/ResultScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import SignInScreen from './screens/SignInScreen';
+import SubscriptionScreen, { SubscriptionStatus } from './screens/SubscriptionScreen';
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export type PhotoClassification = 'General' | 'Before' | 'After' | 'Team';
 
@@ -34,7 +37,7 @@ export type HomeState = {
   audioUri: string | null;
 };
 
-export type AppScreen = 'home' | 'result' | 'settings' | 'history' | 'managedata';
+export type AppScreen = 'home' | 'result' | 'settings' | 'history' | 'managedata' | 'subscription';
 
 type NavItemProps = {
   iconActive: React.ComponentProps<typeof Ionicons>['name'];
@@ -60,23 +63,77 @@ function AppShell() {
   const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
   const [draftJob, setDraftJob] = useState<Job | null>(null);
   const [isAuthed, setIsAuthed] = useState<boolean | null>(null); // null = loading
+  // null = not yet checked; SubscriptionStatus | false = checked
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null | false>(null);
+
+  const fetchSubscriptionStatus = async (token: string): Promise<SubscriptionStatus | false> => {
+    try {
+      const res = await fetch(`${API_URL}/billing/subscription`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return false;
+      return await res.json();
+    } catch {
+      return false;
+    }
+  };
 
   useEffect(() => {
-    getSessionToken().then(tok => setIsAuthed(!!tok));
+    getSessionToken().then(async tok => {
+      if (!tok) {
+        setIsAuthed(false);
+        return;
+      }
+      setIsAuthed(true);
+      const status = await fetchSubscriptionStatus(tok);
+      setSubscriptionStatus(status);
+    });
     getPendingHomeState().then(state => {
       if (state) setSavedHomeState(state as HomeState);
     });
     runAutoCleanup().catch(() => {});
   }, []);
 
-  const handleAuthChange = (authed: boolean) => {
+  const handleAuthChange = async (authed: boolean) => {
     setIsAuthed(authed);
     if (authed) {
+      const tok = await getSessionToken();
+      if (tok) {
+        const status = await fetchSubscriptionStatus(tok);
+        setSubscriptionStatus(status);
+      }
       setScreen('home');
     } else {
+      setSubscriptionStatus(null);
       setSavedHomeState(null);
       savePendingHomeState(null);
     }
+  };
+
+  const handleSubscribed = () => {
+    // Refresh subscription status then show the main app
+    getSessionToken().then(async tok => {
+      if (tok) {
+        const status = await fetchSubscriptionStatus(tok);
+        setSubscriptionStatus(status);
+      }
+      setScreen('home');
+    });
+  };
+
+  const handleSubscriptionSignOut = async () => {
+    const tok = await getSessionToken();
+    if (tok) {
+      fetch(`${API_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}` },
+      }).catch(() => {});
+    }
+    await clearSession();
+    setIsAuthed(false);
+    setSubscriptionStatus(null);
+    setSavedHomeState(null);
+    savePendingHomeState(null);
   };
 
   const handleGenerate = (data: GeneratePayload) => {
@@ -113,8 +170,8 @@ function AppShell() {
     setScreen('result');
   };
 
-  // Blank while SecureStore resolves on first render
-  if (isAuthed === null) {
+  // Blank while SecureStore resolves on first render, or while subscription is being fetched
+  if (isAuthed === null || (isAuthed && subscriptionStatus === null)) {
     return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="light" /></SafeAreaView>;
   }
 
@@ -123,6 +180,22 @@ function AppShell() {
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
         <StatusBar style="light" />
         <SignInScreen onSignIn={() => handleAuthChange(true)} />
+      </SafeAreaView>
+    );
+  }
+
+  // Subscription gate: show offer / management screen when user has no access
+  const subStatus = subscriptionStatus as SubscriptionStatus | false;
+  const hasSubscriptionAccess = subStatus && subStatus.hasAccess;
+  if (!hasSubscriptionAccess || screen === 'subscription') {
+    return (
+      <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
+        <StatusBar style="light" />
+        <SubscriptionScreen
+          onSubscribed={handleSubscribed}
+          onSignOut={handleSubscriptionSignOut}
+          initialStatus={subStatus || undefined}
+        />
       </SafeAreaView>
     );
   }
@@ -151,6 +224,7 @@ function AppShell() {
             onBack={() => setScreen('home')}
             onAuthChange={handleAuthChange}
             onManageData={() => setScreen('managedata')}
+            onManageSubscription={() => setScreen('subscription')}
           />
         )}
         {screen === 'managedata' && (

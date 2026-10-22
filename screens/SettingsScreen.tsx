@@ -37,7 +37,7 @@ import {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void };
+type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void };
 type JobStats = { total: number; drafts: number };
 
 const CATEGORIES = [
@@ -74,7 +74,7 @@ function showPicker(title: string, options: string[], onSelect: (v: string) => v
   }
 }
 
-export default function SettingsScreen({ onBack, onAuthChange, onManageData }: Props) {
+export default function SettingsScreen({ onBack, onAuthChange, onManageData, onManageSubscription }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
@@ -1169,15 +1169,29 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData }: P
         <Text style={styles.groupLabel}>Elmer Account</Text>
         <View style={styles.card}>
           {sessionToken ? (
-            <View style={styles.row}>
-              <View style={styles.rowContent}>
-                <Text style={styles.rowTitle}>Signed in</Text>
-                <Text style={styles.rowSubtitle}>{sessionEmail}</Text>
+            <>
+              <View style={styles.row}>
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowTitle}>Signed in</Text>
+                  <Text style={styles.rowSubtitle}>{sessionEmail}</Text>
+                </View>
+                <TouchableOpacity style={[styles.actionBtn, styles.actionBtnDanger]} onPress={handleSignOut} activeOpacity={0.8}>
+                  <Text style={[styles.actionBtnText, styles.actionBtnTextDanger]}>Sign Out</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionBtnDanger]} onPress={handleSignOut} activeOpacity={0.8}>
-                <Text style={[styles.actionBtnText, styles.actionBtnTextDanger]}>Sign Out</Text>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity
+                style={styles.row}
+                onPress={onManageSubscription}
+                activeOpacity={0.7}
+              >
+                <View style={styles.rowContent}>
+                  <Text style={styles.rowTitle}>Subscription</Text>
+                  <Text style={styles.rowSubtitle}>Manage billing and payment</Text>
+                </View>
+                <Text style={styles.chevron}>›</Text>
               </TouchableOpacity>
-            </View>
+            </>
           ) : (
             <>
               <TouchableOpacity

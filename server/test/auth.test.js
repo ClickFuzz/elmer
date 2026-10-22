@@ -8,9 +8,9 @@ const { describe, it, before, after, beforeEach } = require('node:test');
 const assert   = require('node:assert/strict');
 const request  = require('supertest');
 
-const { setupFreshTestDb } = require('./helpers');
-const { closeDb }          = require('../db');
-const { createApp }        = require('../app');
+const { setupFreshTestDb, seedActiveSubscription } = require('./helpers');
+const { closeDb, getPool }  = require('../db');
+const { createApp }         = require('../app');
 
 let app;
 
@@ -185,6 +185,8 @@ describe('/api/generate auth enforcement', () => {
   it('returns mock content for an authenticated request (no OPENAI_API_KEY in test env)', async () => {
     await register();
     const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedActiveSubscription(userId);
     const res = await request(app)
       .post('/api/generate')
       .set('Authorization', `Bearer ${token}`)

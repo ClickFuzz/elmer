@@ -15,7 +15,7 @@ const fs      = require('fs');
 const os      = require('os');
 const path    = require('path');
 
-const { setupFreshTestDb }    = require('./helpers');
+const { setupFreshTestDb, seedActiveSubscription } = require('./helpers');
 const { getPool, closeDb }    = require('../db');
 const { createApp }           = require('../app');
 const { encrypt }             = require('../crypto');
@@ -37,7 +37,9 @@ async function registerAndLogin(app, email = 'ig@example.com', password = 'passw
   const login = await request(app).post('/auth/login').send({ email, password });
   const me    = await request(app).get('/auth/me')
     .set('Authorization', `Bearer ${login.body.token}`);
-  return { token: login.body.token, userId: me.body.userId };
+  const userId = me.body.userId;
+  await seedActiveSubscription(userId);
+  return { token: login.body.token, userId };
 }
 
 async function createIgState(app, token) {

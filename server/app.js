@@ -8,13 +8,14 @@ const path      = require('path');
 const rateLimit = require('express-rate-limit');
 
 // db initialisation happens in index.js (initDb) before createApp is called
-const { requireAuth, optionalAuth }   = require('./auth');
-const authRoutes                      = require('./routes/auth');
-const platformRoutes                  = require('./routes/platforms');
-const { createFacebookRouter }        = require('./routes/facebook');
-const { createInstagramRouter }       = require('./routes/instagram');
-const { createThreadsRouter }         = require('./routes/threads');
-const { createWordPressRouter }       = require('./routes/wordpress');
+const { requireAuth, optionalAuth }           = require('./auth');
+const { createBillingRouter, requireSubscription } = require('./routes/billing');
+const authRoutes                              = require('./routes/auth');
+const platformRoutes                          = require('./routes/platforms');
+const { createFacebookRouter }                = require('./routes/facebook');
+const { createInstagramRouter }               = require('./routes/instagram');
+const { createThreadsRouter }                 = require('./routes/threads');
+const { createWordPressRouter }               = require('./routes/wordpress');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -50,6 +51,8 @@ if (DISABLE_AUTH && process.env.NODE_ENV === 'production') {
 }
 
 const generateAuth = DISABLE_AUTH ? optionalAuth : requireAuth;
+// When auth is disabled (local dev), skip subscription checks too
+const subscriptionGuard = DISABLE_AUTH ? (_req, _res, next) => next() : requireSubscription;
 
 if (DISABLE_AUTH) {
   console.warn('[elmer] DISABLE_AUTH=true — /api/generate accepts unauthenticated requests');
@@ -225,13 +228,22 @@ CTAs are editorial decisions, not required elements. Include one when it fits na
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
-function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRouter } = {}) {
+function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRouter, billingRouter } = {}) {
   const app = express();
 
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
   if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
   app.use(cors());
+
+  // Stripe webhook requires the raw request body for signature verification.
+  // This middleware must be registered BEFORE express.json() so the raw buffer
+  // is available on req.body for the /billing/webhook route only.
+  app.use(
+    '/billing/webhook',
+    express.raw({ type: 'application/json' })
+  );
+
   app.use(express.json());
 
   // Warn if encryption key is missing.
@@ -243,6 +255,15 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
 
   app.use('/auth',      authRateLimit, authRoutes);
   app.use('/platforms', platformRoutes);
+  app.use('/billing',   billingRouter ?? createBillingRouter());
+
+  // Subscription entitlement guards for platform publish endpoints.
+  // MUST be registered before the platform routers so they fire first.
+  app.post('/facebook/publish',  requireAuth, subscriptionGuard, (_req, _res, next) => next());
+  app.post('/instagram/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
+  app.post('/threads/publish',   requireAuth, subscriptionGuard, (_req, _res, next) => next());
+  app.post('/wordpress/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
+
   app.use('/facebook',  facebookRouter   ?? createFacebookRouter());
   app.use('/instagram', instagramRouter  ?? createInstagramRouter());
   app.use('/threads',   threadsRouter    ?? createThreadsRouter());
@@ -254,7 +275,7 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
 
   // ── POST /api/generate ─────────────────────────────────────────────────────
 
-  app.post('/api/generate', generateRateLimit, generateAuth, optionalAudioUpload, async (req, res) => {
+  app.post('/api/generate', generateRateLimit, generateAuth, subscriptionGuard, optionalAudioUpload, async (req, res) => {
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     const photoCount     = parseInt(req.body.photoCount ?? '0', 10);
     const audioFile      = req.file ?? null;
@@ -598,4 +619,4 @@ Base all fields on actual content. Never invent locations, services, or facts no
   return app;
 }
 
-module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor, _createWordPressRouter: createWordPressRouter };
+module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor, _createWordPressRouter: createWordPressRouter, _createBillingRouter: createBillingRouter };

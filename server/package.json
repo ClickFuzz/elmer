@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "test": "node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js"
+    "test": "node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -17,7 +17,8 @@
     "multer": "^1.4.5-lts.1",
     "openai": "^4.52.0",
     "pg": "^8.13.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "stripe": "^17.7.0"
   },
   "devDependencies": {
     "pg-mem": "^2.9.0",

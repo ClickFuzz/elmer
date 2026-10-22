@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 let _pool        = null;
 let _initialized = false;
@@ -187,6 +187,47 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [4, Date.now()]
+      );
+    }
+
+    // ── V5: Stripe billing tables ─────────────────────────────────────────────
+    if (!applied.has(5)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS stripe_customers (
+          id          BIGSERIAL PRIMARY KEY,
+          user_id     BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          customer_id TEXT   NOT NULL UNIQUE,
+          created_at  BIGINT NOT NULL,
+          updated_at  BIGINT NOT NULL
+        )
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_stripe_customers_customer ON stripe_customers(customer_id)`);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS subscriptions (
+          id                     BIGSERIAL PRIMARY KEY,
+          user_id                BIGINT  NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          stripe_subscription_id TEXT    UNIQUE,
+          stripe_customer_id     TEXT    NOT NULL,
+          status                 TEXT    NOT NULL DEFAULT 'none',
+          current_period_start   BIGINT,
+          current_period_end     BIGINT,
+          trial_start            BIGINT,
+          trial_end              BIGINT,
+          cancel_at_period_end   BOOLEAN NOT NULL DEFAULT false,
+          cancel_at              BIGINT,
+          canceled_at            BIGINT,
+          trial_used             BOOLEAN NOT NULL DEFAULT false,
+          created_at             BIGINT  NOT NULL,
+          updated_at             BIGINT  NOT NULL
+        )
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_sub_id ON subscriptions(stripe_subscription_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id)`);
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [5, Date.now()]
       );
     }
 
