@@ -16,6 +16,7 @@ const { createFacebookRouter }                = require('./routes/facebook');
 const { createInstagramRouter }               = require('./routes/instagram');
 const { createThreadsRouter }                 = require('./routes/threads');
 const { createWordPressRouter }               = require('./routes/wordpress');
+const { createGoogleRouter }                  = require('./routes/google');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -228,7 +229,7 @@ CTAs are editorial decisions, not required elements. Include one when it fits na
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
-function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRouter, billingRouter } = {}) {
+function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRouter, billingRouter, googleRouter } = {}) {
   const app = express();
 
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
@@ -263,11 +264,13 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
   app.post('/instagram/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
   app.post('/threads/publish',   requireAuth, subscriptionGuard, (_req, _res, next) => next());
   app.post('/wordpress/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
+  app.post('/google/publish',    requireAuth, subscriptionGuard, (_req, _res, next) => next());
 
   app.use('/facebook',  facebookRouter   ?? createFacebookRouter());
   app.use('/instagram', instagramRouter  ?? createInstagramRouter());
   app.use('/threads',   threadsRouter    ?? createThreadsRouter());
   app.use('/wordpress', wordpressRouter  ?? createWordPressRouter());
+  app.use('/google',    googleRouter     ?? createGoogleRouter());
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });
@@ -619,4 +622,4 @@ Base all fields on actual content. Never invent locations, services, or facts no
   return app;
 }
 
-module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor, _createWordPressRouter: createWordPressRouter, _createBillingRouter: createBillingRouter };
+module.exports = { createApp, _buildCtaBlock: buildCtaBlock, _writingToneFor: writingToneFor, _createWordPressRouter: createWordPressRouter, _createBillingRouter: createBillingRouter, _createGoogleRouter: createGoogleRouter };

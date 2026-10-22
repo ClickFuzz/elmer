@@ -99,6 +99,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedThreads, setEditedThreads] = useState('');
+  const [editedGoogle, setEditedGoogle] = useState('');
   const [editedWordpress, setEditedWordpress] = useState('');
   const [editedWordpressTitle, setEditedWordpressTitle] = useState('');
   const [editedLocation, setEditedLocation] = useState('');
@@ -131,7 +132,8 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       setConnectedChannels(channels);
     } catch { /* ignore */ }
 
-    // Only generate content for connected platforms; social post is always included
+    // Generate content for connected platforms; social post is always included.
+    // Google and WordPress content are only generated when those channels are connected.
     const platforms = [
       'social',
       ...(channels.some(ch => ch.platform === 'google')    ? ['google']    : []),
@@ -229,6 +231,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         googlePostRef.current = data.googlePost ?? '';
         setEditedSocial(data.socialPost ?? '');
         setEditedThreads(truncateForThreads(data.socialPost ?? ''));
+        setEditedGoogle(data.googlePost ?? '');
         setEditedWordpress(data.webContent ?? '');
         setEditedWordpressTitle(data.seoMetadata?.seoTitle ?? extractMarkdownTitle(data.webContent ?? ''));
         setEditedLocation(loc);
@@ -280,6 +283,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       googlePostRef.current = draftJob.googlePost ?? '';
       setEditedSocial(social);
       setEditedThreads(truncateForThreads(social));
+      setEditedGoogle(draftJob.googlePost ?? '');
       setEditedWordpress(web);
       setEditedWordpressTitle(extractMarkdownTitle(web));
       setEditedLocation(loc);
@@ -373,6 +377,76 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       Alert.alert(
         'Facebook needs to reconnect',
         'Your connection has expired or been revoked. Reconnect Facebook in Settings to continue publishing.',
+        [
+          { text: 'Open Settings', onPress: onShowSettings },
+          { text: 'Dismiss', style: 'cancel' },
+        ]
+      );
+    }
+    return mapped;
+  };
+
+  const runGooglePublish = async (sessionToken: string): Promise<PageResult[]> => {
+    const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
+    const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+
+    const profile = await getBusinessProfile();
+    const businessUrl = profile.inquiryUrl || profile.website || '';
+
+    const formData = new FormData();
+    formData.append('message', editedGoogle.trim() || editedSocial);
+    formData.append('job_id', jobId);
+    formData.append('featured_index', String(Math.max(0, featuredIndex)));
+    formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
+    if (businessUrl) formData.append('business_url', businessUrl);
+
+    payload.photos.forEach((photo, i) => {
+      formData.append(`photo_${i}`, {
+        uri: photo.uri,
+        type: 'image/jpeg',
+        name: `photo_${i}.jpg`,
+      } as unknown as Blob);
+    });
+
+    const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}/google/publish`);
+      xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      xhr.timeout = TIMEOUT_MS;
+      xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Request timed out. Check your connection and try again.'));
+      xhr.send(formData);
+    });
+
+    let data: Record<string, unknown>;
+    try { data = JSON.parse(body); } catch { data = {}; }
+
+    if (status === 422 && data.error === 'no_locations_selected') {
+      return [{ pageId: 'gbp', pageName: 'Google Business', platform: 'google', ok: false, error: 'No Google Business locations selected. Go to Settings → Connected Accounts to select a location.' }];
+    }
+    if (status < 200 || status >= 300) {
+      return [{ pageId: 'gbp', pageName: 'Google Business', platform: 'google', ok: false, error: (data.error as string) ?? `Server error ${status}` }];
+    }
+
+    const rawResults = (data.results as Array<{ locationId: string; locationName: string; ok: boolean; postId?: string; postUrl?: string; duplicate?: boolean; error?: string; reconnect_required?: boolean }>) ?? [];
+    const mapped: PageResult[] = rawResults.map(r => ({
+      pageId: r.locationId,
+      pageName: r.locationName,
+      platform: 'google',
+      ok: r.ok,
+      postId: r.postId,
+      postUrl: r.postUrl,
+      error: r.error,
+      duplicate: r.duplicate,
+      reconnect_required: r.reconnect_required,
+    }));
+
+    const needsReconnect = mapped.some(r => r.reconnect_required);
+    if (needsReconnect) {
+      Alert.alert(
+        'Google needs to reconnect',
+        'Your Google Business Profile connection has expired. Reconnect in Settings to continue publishing.',
         [
           { text: 'Open Settings', onPress: onShowSettings },
           { text: 'Dismiss', style: 'cancel' },
@@ -593,6 +667,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const hasFacebook  = activeChannels.some(ch => ch.platform === 'facebook');
     const hasInstagram = activeChannels.some(ch => ch.platform === 'instagram');
     const hasThreads   = activeChannels.some(ch => ch.platform === 'threads');
+    const hasGoogle    = activeChannels.some(ch => ch.platform === 'google');
     const wpChannels   = activeChannels.filter(ch => ch.platform === 'wordpress');
     const channelList  = activeChannels.map(ch => ch.accountName).join(', ');
 
@@ -607,6 +682,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             if (hasFacebook)         tasks.push(runFacebookPublish(token));
             if (hasInstagram)        tasks.push(runInstagramPublish(token).then(r => [r]));
             if (hasThreads)          tasks.push(runThreadsPublish(token).then(r => [r]));
+            if (hasGoogle)           tasks.push(runGooglePublish(token));
             if (wpChannels.length)   tasks.push(runWordpressPublish(token, wpChannels));
 
             const settled = await Promise.allSettled(tasks);
@@ -652,6 +728,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
   const hasConnections = connectedChannels.length > 0;
   const hasWordpress = connectedChannels.some(ch => ch.platform === 'wordpress');
+  const hasGoogleChannel = connectedChannels.some(ch => ch.platform === 'google');
   const threadsChannel = connectedChannels.find(ch => ch.platform === 'threads');
 
   // Full-screen confirmation after a successful publish
@@ -881,8 +958,8 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               )}
             </View>
 
-            {/* Platform variations — Threads (500 chars) and/or WordPress, collapsed by default */}
-            {(threadsChannel || hasWordpress) && (
+            {/* Platform variations — Google, Threads (500 chars), and/or WordPress, collapsed by default */}
+            {(hasGoogleChannel || threadsChannel || hasWordpress) && (
               <View style={styles.articleCard}>
                 <TouchableOpacity
                   style={styles.articleHeader}
@@ -892,7 +969,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                   <View>
                     <Text style={styles.cardLabel}>Platform variations</Text>
                     <Text style={styles.articleMeta}>
-                      {[threadsChannel && 'Threads', hasWordpress && 'WordPress'].filter(Boolean).join(' · ')}
+                      {[hasGoogleChannel && 'Google Business', threadsChannel && 'Threads', hasWordpress && 'WordPress'].filter(Boolean).join(' · ')}
                     </Text>
                   </View>
                   <Text style={styles.previewToggle}>
@@ -902,6 +979,30 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
                 {showVariations && (
                   <View style={styles.articleBody}>
+                    {hasGoogleChannel && (
+                      <>
+                        <Text style={styles.variationLabel}>Google Business Profile · 1500 char limit</Text>
+                        <TextInput
+                          style={styles.webInput}
+                          value={editedGoogle}
+                          onChangeText={text => setEditedGoogle(text.slice(0, 1500))}
+                          multiline
+                          textAlignVertical="top"
+                          autoCorrect
+                          scrollEnabled={false}
+                        />
+                        <View style={styles.postCardFooter}>
+                          <Text style={[styles.metaCount, editedGoogle.length > 1400 && styles.threadsCountWarn]}>
+                            {editedGoogle.length}/1500
+                          </Text>
+                        </View>
+                      </>
+                    )}
+
+                    {hasGoogleChannel && threadsChannel && (
+                      <View style={[styles.divider, { marginHorizontal: 0, marginVertical: 16 }]} />
+                    )}
+
                     {threadsChannel && (
                       <>
                         <Text style={styles.variationLabel}>Threads · 500 char limit</Text>
@@ -922,7 +1023,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                       </>
                     )}
 
-                    {threadsChannel && hasWordpress && (
+                    {(threadsChannel || hasGoogleChannel) && hasWordpress && (
                       <View style={[styles.divider, { marginHorizontal: 0, marginVertical: 16 }]} />
                     )}
 

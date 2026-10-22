@@ -92,6 +92,15 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const [authError, setAuthError] = useState<string | null>(null);
   const passwordRef = useRef<TextInput>(null);
 
+  // ── Google Business Profile state ─────────────────────────────────────────
+  type GbpLocation = { id: number; account_name: string; account_id: string; selected: boolean; token_expires_at: number | null };
+  const [gbpLocations, setGbpLocations] = useState<GbpLocation[]>([]);
+  const [gbpConnecting, setGbpConnecting] = useState(false);
+  const [gbpDisconnecting, setGbpDisconnecting] = useState(false);
+  const [gbpManageOpen, setGbpManageOpen] = useState(false);
+  const [gbpPendingSelection, setGbpPendingSelection] = useState<number[]>([]);
+  const [gbpSavingSelection, setGbpSavingSelection] = useState(false);
+
   // ── Facebook state ─────────────────────────────────────────────────────────
   const [fbPages, setFbPages] = useState<FacebookPage[]>([]);
   const [selectedPageIds, setSelectedPageIds] = useState<number[]>([]);
@@ -128,6 +137,17 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       if (next !== 'facebook') setManagePagesOpen(false);
       return next;
     });
+  };
+
+  const refreshGbpLocations = async (token: string) => {
+    try {
+      const res = await fetch(`${API_URL}/google/locations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setGbpLocations(data.locations ?? []);
+    } catch { /* ignore */ }
   };
 
   const refreshFbPages = async (token: string) => {
@@ -183,6 +203,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         setSessionToken(tok);
         setSessionEmailState(email);
         if (tok) {
+          refreshGbpLocations(tok);
           refreshFbPages(tok);
           refreshIgAccount(tok);
           refreshThAccount(tok);
@@ -248,6 +269,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       setAuthExpanded(false);
       setAuthEmail('');
       setAuthPassword('');
+      await refreshGbpLocations(data.token);
       await refreshFbPages(data.token);
       await refreshIgAccount(data.token);
       await refreshThAccount(data.token);
@@ -272,6 +294,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         await clearSession();
         setSessionToken(null);
         setSessionEmailState(null);
+        setGbpLocations([]);
         setFbPages([]);
         setSelectedPageIds([]);
         setIgAccount(null);
@@ -282,6 +305,112 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       }},
       { text: 'Cancel', style: 'cancel' },
     ]);
+  };
+
+  // ── Google Business Profile OAuth handlers ───────────────────────────────
+
+  const handleConnectGoogle = async () => {
+    if (!sessionToken) {
+      Alert.alert('Sign In Required', 'Sign in to your Elmer account to connect Google Business Profile.', [{ text: 'OK' }]);
+      return;
+    }
+
+    setGbpConnecting(true);
+    try {
+      const res = await fetch(`${API_URL}/google/connect-url`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert('Connection failed', data.error ?? 'Could not start Google authorization.');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      console.log('[gbp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
+
+      if (result.type === 'success') {
+        const url = result.url;
+        const params = new URLSearchParams((url.split('?')[1] ?? '').split('#')[0]);
+        const error = params.get('error');
+
+        if (error) {
+          if (error === 'no_business_accounts') {
+            Alert.alert('No business accounts found', 'No Google Business accounts were found for your Google account. Make sure you have a verified Google Business Profile.');
+            return;
+          }
+          if (error === 'no_locations') {
+            Alert.alert('No locations found', 'No business locations were found. Add a location in Google Business Profile Manager, then reconnect.');
+            return;
+          }
+          Alert.alert('Connection failed', `Google returned: ${error}`);
+          return;
+        }
+
+        if (params.get('success') === 'true') {
+          const count = parseInt(params.get('location_count') ?? '1', 10);
+          await refreshGbpLocations(sessionToken);
+          Alert.alert(
+            'Google Business Profile connected!',
+            `${count} location${count !== 1 ? 's' : ''} connected.`,
+            [{ text: 'OK' }]
+          );
+        }
+      }
+
+      await refreshGbpLocations(sessionToken);
+    } catch (err) {
+      Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
+    } finally {
+      setGbpConnecting(false);
+    }
+  };
+
+  const handleDisconnectGoogle = () => {
+    Alert.alert(
+      'Disconnect Google Business Profile',
+      'Remove your Google Business Profile connections? You can reconnect at any time.',
+      [
+        { text: 'Disconnect', style: 'destructive', onPress: async () => {
+          if (!sessionToken) return;
+          setGbpDisconnecting(true);
+          try {
+            for (const loc of gbpLocations) {
+              await fetch(`${API_URL}/platforms/${loc.id}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${sessionToken}` },
+              });
+            }
+            setGbpLocations([]);
+            setExpandedPlatform(null);
+          } catch {
+            Alert.alert('Error', 'Could not disconnect. Try again.');
+          } finally {
+            setGbpDisconnecting(false);
+          }
+        }},
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleSaveGbpSelection = async () => {
+    if (!sessionToken) return;
+    setGbpSavingSelection(true);
+    try {
+      await fetch(`${API_URL}/google/locations/selection`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_ids: gbpPendingSelection }),
+      });
+      setGbpLocations(prev => prev.map(loc => ({ ...loc, selected: gbpPendingSelection.includes(loc.id) })));
+      setGbpManageOpen(false);
+    } catch {
+      Alert.alert('Error', 'Could not save location selection. Check your connection.');
+    } finally {
+      setGbpSavingSelection(false);
+    }
   };
 
   // ── Facebook OAuth handlers ────────────────────────────────────────────────
@@ -847,19 +976,92 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         <View style={styles.card}>
 
           {/* Google Business Profile */}
-          <View style={styles.platformRow}>
-            <View style={[styles.statusDot, { backgroundColor: colors.textMuted }]} />
-            <View style={styles.platformInfo}>
-              <Text style={[styles.platformName, styles.platformNameDim]}>Google Business Profile</Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.actionBtnDisabled]}
-              onPress={() => Alert.alert('Coming Soon', 'Google Business Profile connection is awaiting API approval.', [{ text: 'OK' }])}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.actionBtnText, styles.actionBtnTextDisabled]}>Connect</Text>
-            </TouchableOpacity>
-          </View>
+          {(() => {
+            const isGbpConnected = gbpLocations.length > 0;
+            const selectedCount  = gbpLocations.filter(l => l.selected).length;
+            const gbpDot = isGbpConnected ? colors.success : colors.textMuted;
+            return (
+              <>
+                <View style={styles.platformRow}>
+                  <View style={[styles.statusDot, { backgroundColor: gbpDot }]} />
+                  <View style={styles.platformInfo}>
+                    <Text style={[styles.platformName, !isGbpConnected && styles.platformNameDim]}>Google Business Profile</Text>
+                    {isGbpConnected && (
+                      <Text style={styles.platformSub}>
+                        {selectedCount === 0 ? 'No locations selected' : `${selectedCount} location${selectedCount !== 1 ? 's' : ''} selected`}
+                      </Text>
+                    )}
+                  </View>
+                  {isGbpConnected ? (
+                    <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('google')} activeOpacity={0.7}>
+                      <Text style={styles.manageBtnText}>Manage</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.actionBtn, (!sessionToken || gbpConnecting) && styles.actionBtnDisabled]}
+                      onPress={handleConnectGoogle}
+                      disabled={!sessionToken || gbpConnecting}
+                      activeOpacity={0.7}
+                    >
+                      {gbpConnecting
+                        ? <ActivityIndicator color={colors.bg} size="small" />
+                        : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {expandedPlatform === 'google' && (
+                  <View style={styles.managePanelInner}>
+                    <View style={styles.divider} />
+                    <TouchableOpacity style={styles.managePanelRow} onPress={() => {
+                      setGbpPendingSelection(gbpLocations.filter(l => l.selected).map(l => l.id));
+                      setGbpManageOpen(v => !v);
+                    }} activeOpacity={0.7}>
+                      <Text style={styles.managePanelSubText}>Locations</Text>
+                      <TouchableOpacity style={styles.manageBtn} onPress={() => {
+                        setGbpPendingSelection(gbpLocations.filter(l => l.selected).map(l => l.id));
+                        setGbpManageOpen(v => !v);
+                      }} activeOpacity={0.7}>
+                        <Text style={styles.manageBtnText}>Select Locations</Text>
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                    {gbpManageOpen && (
+                      <View>
+                        {gbpLocations.map(loc => {
+                          const isChecked = gbpPendingSelection.includes(loc.id);
+                          return (
+                            <TouchableOpacity key={loc.id} style={styles.pageRow} onPress={() => setGbpPendingSelection(prev =>
+                              prev.includes(loc.id) ? prev.filter(id => id !== loc.id) : [...prev, loc.id]
+                            )} activeOpacity={0.7}>
+                              <Text style={styles.pageRowName} numberOfLines={2}>{loc.account_name}</Text>
+                              <View style={[styles.checkbox, isChecked && styles.checkboxChecked]}>
+                                {isChecked && <Text style={styles.checkmark}>✓</Text>}
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })}
+                        <View style={styles.managePagesActions}>
+                          <TouchableOpacity style={[styles.savePagesBtn, gbpSavingSelection && styles.authBtnDisabled]} onPress={handleSaveGbpSelection} disabled={gbpSavingSelection} activeOpacity={0.8}>
+                            {gbpSavingSelection ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={styles.savePagesBtnText}>Save</Text>}
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.cancelPagesBtn} onPress={() => setGbpManageOpen(false)} activeOpacity={0.8}>
+                            <Text style={styles.cancelPagesBtnText}>Cancel</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+                    <View style={styles.fbActionsRow}>
+                      <TouchableOpacity style={styles.fbReconnectBtn} onPress={handleConnectGoogle} disabled={gbpConnecting} activeOpacity={0.8}>
+                        {gbpConnecting ? <ActivityIndicator color={colors.cyan} size="small" /> : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.fbDisconnectBtn} onPress={handleDisconnectGoogle} disabled={gbpDisconnecting} activeOpacity={0.8}>
+                        {gbpDisconnecting ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </>
+            );
+          })()}
 
           <View style={styles.rowDivider} />
 
