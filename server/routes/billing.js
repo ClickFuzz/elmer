@@ -6,9 +6,21 @@ const { requireAuth } = require('../auth');
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const STRIPE_SECRET_KEY    = () => process.env.STRIPE_SECRET_KEY;
-const STRIPE_WEBHOOK_SECRET = () => process.env.STRIPE_WEBHOOK_SECRET;
-const STRIPE_PRICE_ID      = () => process.env.STRIPE_PRICE_ID;
+// Set STRIPE_TEST_MODE=true in Railway to use test keys instead of live keys.
+const isTestMode = () => process.env.STRIPE_TEST_MODE === 'true';
+
+const STRIPE_SECRET_KEY     = () => isTestMode()
+  ? process.env.STRIPE_TEST_SECRET_KEY
+  : process.env.STRIPE_SECRET_KEY;
+
+const STRIPE_WEBHOOK_SECRET = () => isTestMode()
+  ? process.env.STRIPE_TEST_WEBHOOK_SECRET
+  : process.env.STRIPE_WEBHOOK_SECRET;
+
+const STRIPE_PRICE_ID       = () => isTestMode()
+  ? process.env.STRIPE_TEST_PRICE_ID
+  : process.env.STRIPE_PRICE_ID;
+
 const APP_URL              = () => process.env.APP_URL ?? 'https://api.getelmer.com';
 const APP_SCHEME           = () => process.env.APP_SCHEME ?? 'elmer';
 
