@@ -637,6 +637,85 @@ Mobile                          Elmer Server                  WordPress Site
 
 ---
 
+## Google Business Profile Integration
+
+### OAuth flow
+
+```
+Mobile                          Elmer Server                  Google OAuth
+  │                                  │                              │
+  ├─POST /google/connect-url ────────►│ creates oauth_state, returns authUrl
+  │◄─── { authUrl } ─────────────────┤                              │
+  ├─openAuthSessionAsync(authUrl) ───►│                              │
+  │                          browser opens Google consent screen ───►
+  │                                  │◄── GET /google/callback?code&state ──┤
+  │                                  │  validates + consumes state           │
+  │                                  │  exchanges code → access + refresh tokens
+  │                                  │  GET /v1/accounts → list accounts     │
+  │                                  │  GET /v1/{account}/locations → locs   │
+  │                                  │  stores each location as connected_platforms row
+  │◄── redirect to elmer://oauth/callback?platform=google&success=true&location_count=N ─┤
+  ├─GET /google/locations ───────────►│ returns connected locations
+  │◄─── { locations } ───────────────┤
+```
+
+### Publishing flow
+
+```
+1. Mobile → POST /google/publish (multipart: message, job_id, featured_index,
+                                   classifications, business_url [optional],
+                                   photo_0…photo_N [optional])
+2. Server loads all selected=true Google locations for the user
+3. If none selected → 422 no_locations_selected
+4. For each selected location:
+   a. getValidToken(userId, pool) — proactive refresh if < 5 min until expiry
+   b. Check idempotency: job_ref = gbp_{userId}_{jobId}_{sanitized_locationPath}
+   c. Insert publishing_record status='pending'
+   d. Upload each photo: copy to tmp, serve via GET /google/media/:filename
+   e. POST /{locationPath}/localPosts — summary (≤1500 chars), optional LEARN_MORE CTA, optional media array
+   f. On 401: _doRefresh → retry once
+   g. Update publishing_record to status='published' or 'failed'
+   h. Delete temp photo files
+5. Returns { ok: anyOk, results: [{locationName, ok, postId?, postUrl?,
+                                    reconnect_required?, duplicate?, error?}] }
+```
+
+**APIs used:**
+- Account Management: `https://mybusinessaccountmanagement.googleapis.com/v1/accounts`
+- Business Information: `https://mybusinessbusinessinformation.googleapis.com/v1/{account}/locations`
+- Local Posts (v4): `https://mybusiness.googleapis.com/v4/{locationPath}/localPosts`
+
+**Token lifecycle**: `access_type=offline&prompt=consent` forces refresh token on first authorization. Access tokens expire in 1 hour; proactively refreshed when < 5 minutes until expiry. Reactive 401 retry with single re-refresh. All rows for the same Google account are updated together (tokens are per-account, not per-location).
+
+**Location storage**: each location stored as a separate `connected_platforms` row. `account_id` = full location path `accounts/{accountId}/locations/{locationId}`. All locations from the same OAuth consent share the same access/refresh tokens, updated atomically.
+
+**Image delivery**: GBP local posts accept `sourceUrl` in the `media` array. Server copies prepared images to `server/tmp/`, serves them at `GET /google/media/:filename` (public, short-lived), then deletes them after publish.
+
+**Summary limit**: GBP local post `summary` field is capped at 1500 characters. Truncation applied server-side with `…` suffix if needed.
+
+**Optional CTA**: When `business_url` is provided, a `LEARN_MORE` call-to-action is appended to the local post.
+
+**No new DB migration**: `connected_platforms.platform` CHECK constraint already includes `'google'` (V3 migration). `refresh_token_enc` column already exists.
+
+### Google Business Profile Routes
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `POST /google/connect-url` | Bearer | Creates CSRF state, returns Google OAuth authorization URL |
+| `GET /google/callback` | Public (validates via state) | Google redirects here; exchanges code, fetches accounts + locations, stores encrypted tokens, redirects to app |
+| `GET /google/locations` | Bearer | Lists connected GBP locations with `selected` flag |
+| `POST /google/locations/selection` | Bearer | Replace the user's selected-location set; body: `{location_ids: number[]}` |
+| `GET /google/media/:filename` | Public (short-lived) | Serves temp photos for GBP API `sourceUrl`; deleted post-publish |
+| `POST /google/publish` | Bearer, multipart | Publishes local post to all selected locations; idempotency via `publishing_records`; token auto-refresh |
+
+**Required scopes**: `https://www.googleapis.com/auth/business.manage`  
+**Google Cloud Project**: `elmer-511511`  
+**Required APIs (enable in GCP console)**: My Business API, My Business Account Management API, My Business Business Information API  
+**OAuth redirect URI**: `https://api.getelmer.com/google/callback` (add to authorized redirect URIs in GCP OAuth 2.0 client)  
+**Token invalidation**: HTTP 401 from GBP API → `reconnect_required: true` in per-location result → mobile shows "Reconnect Google" alert
+
+---
+
 ## Content Types
 
 | Type | Field | Platform target | Generation condition |
@@ -645,8 +724,6 @@ Mobile                          Elmer Server                  WordPress Site
 | Google Business post | `post_content` | Google Business Profile | When 'google' in platforms |
 | WordPress article | `web_content` | WordPress | When 'wordpress' in platforms |
 | SEO metadata | `seo_metadata` (JSON) | WordPress | When 'wordpress' in platforms |
-
-**Current gap**: The Google Business post is generated and saved to `post_content` but is not shown in the ResultScreen UI. Users cannot review it before publishing.
 
 ---
 
@@ -662,7 +739,7 @@ Mobile                          Elmer Server                  WordPress Site
 - Location extraction from transcription (`server/index.js`)
 - Reverse geocode fallback via Nominatim (`server/index.js`)
 - Social post generation (`server/index.js`)
-- Google Business post generation (server-side; not surfaced in UI)
+- Google Business post generation (surfaced in ResultScreen platform variations tab)
 - WordPress article generation (conditional on WordPress channel)
 - SEO metadata generation (conditional on WordPress channel)
 - Writing style customization (7 styles)
@@ -731,18 +808,28 @@ Mobile                          Elmer Server                  WordPress Site
 - **SettingsScreen**: "Subscription" row in Elmer Account card navigates to SubscriptionScreen.
 - **308 automated tests** (all prior + 32 billing tests) — all passing (`server/test/`).
 
-### Stub — UI exists but action is a no-op or alert
+### Implemented (Phase 5 — Google Business Profile integration)
 
-- **Connect channels — Google** (`SettingsScreen.tsx`): Shows "Coming Soon — awaiting API approval" alert.
+- **GBP OAuth — server**: `POST /google/connect-url` creates CSRF state, returns Google authorization URL; `GET /google/callback` exchanges code, fetches all accounts + locations via My Business Account Management + Business Information APIs, stores encrypted access + refresh tokens, one row per location; redirect to `elmer://oauth/callback?platform=google&success=true` (`server/routes/google.js`).
+- **GBP OAuth — mobile**: "Coming Soon" stub replaced with full Connect / Manage UI; `openAuthSessionAsync` opens browser; deep-link return; lists connected locations with checkbox selection; Disconnect option; Reconnect alert on token invalidation (`SettingsScreen.tsx`).
+- **GBP location selection**: `GET /google/locations` lists locations with `selected` flag; `POST /google/locations/selection` replaces selection set; mobile renders per-location checkboxes in Manage Locations sheet.
+- **GBP token refresh**: proactive refresh when < 5 minutes until expiry; reactive 401 retry with single re-refresh; `UPDATE ... WHERE user_id = $1 AND platform = 'google'` keeps all location rows for the same account in sync.
+- **GBP publishing**: `POST /google/publish` publishes to all selected locations; `summary` capped at 1500 chars; optional `LEARN_MORE` CTA when `business_url` provided; optional photo array via temporary `sourceUrl` serving; idempotency key `gbp_{userId}_{jobId}_{sanitized_locationPath}` (`server/routes/google.js`).
+- **GBP publish — mobile**: `runGooglePublish` in ResultScreen sends edited Google post + optional photos; appends `business_url` from inquiry URL / website; per-location results in result footer; Reconnect alert on `reconnect_required` (`ResultScreen.tsx`).
+- **GBP content editor**: Google post preview/editing in ResultScreen platform variations tab (1500-char limit indicator); uses `editedGoogle || editedSocial` fallback.
+- **Post Everywhere**: `if (hasGoogle)` branch added to `handlePostEverywhere`; GBP publishes independently alongside Facebook, Instagram, Threads, WordPress.
+- **33 automated tests** (connect-url, callback state validation, callback success, locations list, selection, media serving, publish — including idempotency, cross-user isolation, reconnect on 401) — all passing (`server/test/google.test.js`).
+- **341 total automated tests** — all passing.
 
-### Requires live Meta credentials before functional testing
+### Requires live credentials before functional testing
 
 - Facebook OAuth callback requires `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI` in `server/.env`.
 - Publishing requires a verified Meta App with `pages_manage_posts` permission and a real Page access token.
+- GBP OAuth requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` in `server/.env`; redirect URI must be added to the GCP OAuth 2.0 client's authorized redirect URIs.
+- GBP publishing requires the My Business API, My Business Account Management API, and My Business Business Information API to be enabled in GCP project `elmer-511511`, and may require Google's GBP API access verification process.
 
 ### Planned — no implementation exists
 
-- Google Business Profile OAuth callback and posting API
 - Cross-device settings synchronization
 - Push notifications
 
@@ -753,7 +840,7 @@ Mobile                          Elmer Server                  WordPress Site
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
@@ -816,9 +903,9 @@ Railway offers automatic daily backups via the database service → **Backups** 
 
 ---
 
-## Publishing Architecture (Planned)
+## Publishing Architecture
 
-Each platform must be independently implemented, tested, and deployable. A failure in Google publishing must not affect Facebook publishing.
+Each platform is independently implemented, tested, and deployable. A failure in Google publishing must not affect Facebook publishing.
 
 **Per-platform requirements:**
 - Independent OAuth token storage (server-side, encrypted)
@@ -855,7 +942,6 @@ These are bugs confirmed by audit. They should be fixed before user testing or p
 
 | Issue | Location | Impact |
 |---|---|---|
-| Google post generated but not shown in UI | `ResultScreen.tsx` | Users cannot review Google content before publishing |
 | `connected_channels` never written | `SettingsScreen.tsx` | Platform-specific content never generated for real users |
 | Orphaned `elmer_recording_*.m4a` files | `HomeScreen.tsx` | Audio files accumulate; never deleted |
 | Job status never changes from `draft` | `storage/database.ts` | `deleteOldPublishedMedia` is dead code; history always shows "Draft" |

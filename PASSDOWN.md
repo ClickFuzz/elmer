@@ -20,7 +20,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | 2 | Facebook + Instagram OAuth + publishing | COMPLETE |
 | 3 | Threads OAuth + publishing; WordPress Application Password publishing | COMPLETE |
 | 4 | Stripe billing ($19/month, 14-day trial, subscription gate) | COMPLETE |
-| 5 | Google Business Profile OAuth + posting | NOT STARTED (awaiting API approval) |
+| 5 | Google Business Profile OAuth + posting | COMPLETE |
 
 ---
 
@@ -28,8 +28,8 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 - **Branch:** `main`
 - **HEAD:** `4c7c4e7`
-- **iOS build number:** 6 (auto-incremented by EAS remote versioning)
-- **TestFlight:** Build #6 submitted and processing (submitted 2026-10-22)
+- **iOS build number:** 6 (auto-incremented by EAS remote versioning; next build will be #7)
+- **TestFlight:** Build #6 submitted and in TestFlight; Phase 5 (GBP) requires new build #7
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Bundle ID:** `com.clickfuzz.elmer`
@@ -59,6 +59,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 - **Instagram:** connect (OAuth), single photo + carousel publish, Before/After composite
 - **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
+- **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
 - **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal
 
 ### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
@@ -71,6 +72,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 - Instagram: connect-url, callback, account info, media serving, publish (`server/routes/instagram.js`)
 - Threads: connect-url, callback, account info, media serving, publish, uninstall/delete callbacks (`server/routes/threads.js`)
 - WordPress: connect-url, callback, sites list/disconnect, publish (`server/routes/wordpress.js`)
+- Google Business Profile: connect-url, callback, locations list/selection, media serving, publish (`server/routes/google.js`)
 - Image processing: EXIF correction, AR fitting, carousels, Before/After composites (`server/routes/media-utils.js`)
 - **Billing** (`server/routes/billing.js`):
   - `GET /billing/subscription` — status + `hasAccess`
@@ -79,8 +81,8 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
   - `GET /billing/checkout-return` → redirects to `elmer://billing/return`
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
-- PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions
-- **308 automated tests passing** — `cd server && npm test`
+- PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions (no new migration for GBP — `connected_platforms` already supports `google` platform)
+- **341 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -113,6 +115,10 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | `STRIPE_SECRET_KEY` | Stripe secret key (`sk_live_…`) |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_…`) |
 | `STRIPE_PRICE_ID` | Stripe price ID for the $19/month plan |
+| `GOOGLE_CLIENT_ID` | OAuth 2.0 client ID from Google Cloud project `elmer-511511` |
+| `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret (keep server-side only) |
+| `GOOGLE_REDIRECT_URI` | `https://api.getelmer.com/google/callback` (must match GCP console + Railway) |
+| `GOOGLE_OAUTH_RETURN_SCHEME` | Default `elmer`; matches `scheme` in `app.json` |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
 
@@ -124,7 +130,10 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 2. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway.
 3. **Stripe webhook endpoint:** register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
 4. **Meta App Review:** submit Facebook/Instagram permissions for review (screencast: connect → select pages → create job → Post Everywhere → confirm posts).
-5. **Google Business Profile API approval:** still waiting.
+5. **Google Cloud Console:** add `https://api.getelmer.com/google/callback` to authorized redirect URIs for the OAuth 2.0 client in project `elmer-511511`. Add `https://api.getelmer.com` to authorized JavaScript origins.
+6. **Railway GBP env vars:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in the Elmer Server service and redeploy.
+7. **TestFlight build #7:** Phase 5 mobile UI changes require a new EAS build (`npx eas-cli@latest build --platform ios --profile production`) and submit (`npx eas-cli@latest submit --platform ios --latest`).
+8. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console and, if required, the app must go through Google's GBP API access verification process.
 
 ---
 
@@ -132,7 +141,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 | Bug | Location |
 |---|---|
-| Google post generated but not shown in UI | `ResultScreen.tsx` |
+| Google Business post generated but UI shows legacy stub (GBP edit/preview now in ResultScreen) | fixed in Phase 5 |
 | Orphaned `elmer_recording_*.m4a` accumulate | `HomeScreen.tsx` |
 | Job status never changes from `draft` | `storage/database.ts` |
 | `expo-file-system/legacy` import | `HomeScreen.tsx`, `ResultScreen.tsx` |
@@ -147,8 +156,8 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 ```bash
 cd server && npm test
-# 308 tests: db, auth, platforms, facebook, instagram, threads,
-#             media-utils, generation, account-isolation, wordpress, billing
+# 341 tests: db, auth, platforms, facebook, instagram, threads,
+#             media-utils, generation, account-isolation, wordpress, billing, google
 ```
 
 Mobile:
@@ -172,5 +181,7 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `server/auth.js` | `requireAuth` / `optionalAuth` |
 | `server/crypto.js` | AES-256-GCM encrypt/decrypt |
 | `server/routes/billing.js` | Stripe billing: checkout, portal, webhook, `requireSubscription` |
+| `server/routes/google.js` | GBP: OAuth connect-url/callback, locations, publish, token refresh |
 | `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
+| `server/test/google.test.js` | 33 GBP integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
