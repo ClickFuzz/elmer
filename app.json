@@ -16,9 +16,6 @@
         "NSMicrophoneUsageDescription": "Elmer uses your microphone to record a voice description of the job.",
         "ITSAppUsesNonExemptEncryption": false
       },
-      "entitlements": {
-        "com.apple.developer.storekit.external-purchase-link": true
-      }
     },
     "android": {
       "adaptiveIcon": {
