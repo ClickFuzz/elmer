@@ -711,6 +711,26 @@ Mobile                          Elmer Server                  WordPress Site
 - **WordPress publish — mobile**: Editable article title input in ResultScreen (pre-populated from first heading or seoMetadata.seoTitle); `runWordpressPublish` iterates over connected WP sites independently; per-site result shown in result footer (`ResultScreen.tsx`).
 - **276 automated tests** (DB, auth, platforms, Facebook, Instagram, Threads, media-utils, generation, WordPress) — all passing (`server/test/`).
 
+### Implemented (Phase 4 — Stripe billing)
+
+- **V5 DB migration**: `stripe_customers` (user ↔ Stripe customer mapping) and `subscriptions` (status, trial dates, `trial_used` sticky flag) tables (`server/db.js`).
+- **Billing routes** (`server/routes/billing.js`):
+  - `GET /billing/subscription` — returns current subscription status and `hasAccess` flag
+  - `POST /billing/checkout-session` — creates Stripe Checkout session; 409 if already subscribed; 503 if `STRIPE_SECRET_KEY` not set
+  - `POST /billing/portal-session` — creates Stripe Customer Portal session for managing/canceling
+  - `GET /billing/checkout-return` — Stripe success/cancel redirect; bridges to `elmer://billing/return` deep link
+  - `POST /billing/webhook` — receives Stripe events; verifies HMAC-SHA256 signature in production; handles `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
+- **US-only restriction**: `checkout.session.completed` webhook cancels the subscription if `customer_details.address.country !== 'US'`.
+- **`trial_used` sticky**: upsert uses `CASE WHEN … THEN true ELSE trial_used END` so `trial_used` can only go `false → true`, never reversed; prevents re-granting a free trial after cancellation.
+- **Entitlement check** (`requireSubscription` middleware): `trialing`/`active` = full access; `past_due` within a 3-day grace period = full access; all other statuses = 402. Guards `/api/generate` and all platform publish endpoints.
+- **`hasAccess` exported** for server-side use and unit testing.
+- **Checkout flow — iOS**: disclosure Alert before leaving the app (`Linking.openURL`); no StoreKit or external-purchase-link entitlement required — Elmer is US-only and Apple's App Review Guideline 3.1.1(a) (updated October 16, 2026) does not require an entitlement for US storefront apps linking to external purchase pages.
+- **Checkout flow — Android**: uses `Linking.openURL()` directly. Google Play Billing is not used; Elmer sells only access to an external backend service, not in-app digital goods, so the Google Play Billing policy exemption for SaaS applies.
+- **SubscriptionScreen** (`screens/SubscriptionScreen.tsx`): trial offer card (14 days free / $19/month); starts checkout via `Linking.openURL`; polls `GET /billing/subscription` every 2 s (up to 15 attempts) on return from browser; shows manage/portal card for existing subscribers; deep-link listener for `elmer://billing/return`.
+- **App.tsx subscription gate**: fetches subscription status after auth token found; shows loading spinner; blocks app access (shows SubscriptionScreen) until `hasAccess = true`; `onManageSubscription` callback from SettingsScreen.
+- **SettingsScreen**: "Subscription" row in Elmer Account card navigates to SubscriptionScreen.
+- **308 automated tests** (all prior + 32 billing tests) — all passing (`server/test/`).
+
 ### Stub — UI exists but action is a no-op or alert
 
 - **Connect channels — Google** (`SettingsScreen.tsx`): Shows "Coming Soon — awaiting API approval" alert.
@@ -724,7 +744,6 @@ Mobile                          Elmer Server                  WordPress Site
 
 - Google Business Profile OAuth callback and posting API
 - Cross-device settings synchronization
-- Stripe billing and subscription management
 - Push notifications
 
 ---
@@ -734,7 +753,7 @@ Mobile                          Elmer Server                  WordPress Site
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.

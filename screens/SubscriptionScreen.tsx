@@ -178,8 +178,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   // ── Checkout flow ──────────────────────────────────────────────────────────
 
   const handleStartTrial = async () => {
-    // iOS External Purchase Link disclosure — required before leaving the app.
-    // Apple requires this disclosure when linking to an external purchase website.
+    // iOS disclosure before opening external browser for checkout.
     if (Platform.OS === 'ios') {
       const proceed = await new Promise<boolean>(resolve => {
         Alert.alert(
