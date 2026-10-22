@@ -7,7 +7,7 @@
 
 ## Project Purpose
 
-Elmer is a mobile publishing tool for local contractors. After finishing a job, a contractor takes photos, records a voice description, and the app generates platform-ready posts for Google Business Profile, Facebook/social, and WordPress. Pre-launch prototype stage.
+Elmer is a mobile publishing tool for contractors and businesses. After finishing a job, the user takes photos, records a voice description, and the app generates platform-ready posts for Facebook, Instagram, Threads, WordPress, and Google Business Profile. Currently in TestFlight.
 
 ---
 
@@ -16,66 +16,83 @@ Elmer is a mobile publishing tool for local contractors. After finishing a job, 
 | # | Milestone | Status |
 |---|---|---|
 | 0 | Initial prototype (photos, audio, AI generation, history) | COMPLETE |
-| 1 | Backend persistence, auth, OAuth readiness | COMPLETE |
-| 2 | Mobile app auth (send Bearer token) | PARTIAL — sign-in/register implemented in SettingsScreen; token stored in local SQLite; used for Facebook integration |
-| 3 | Google Business Profile OAuth + posting | NOT STARTED (awaiting API approval) |
-| 4 | Facebook OAuth + posting | COMPLETE (awaiting live Meta credentials for functional test) |
-| 5 | WordPress REST API publishing | NOT STARTED |
-| 6 | Stripe billing | NOT STARTED |
+| 1 | Backend auth, PostgreSQL, OAuth CSRF, platform management API | COMPLETE |
+| 2 | Facebook + Instagram OAuth + publishing | COMPLETE |
+| 3 | Threads OAuth + publishing; WordPress Application Password publishing | COMPLETE |
+| 4 | Stripe billing ($19/month, 14-day trial, subscription gate) | COMPLETE |
+| 5 | Google Business Profile OAuth + posting | NOT STARTED (awaiting API approval) |
 
 ---
 
-## What Is Implemented and Working
+## Current Build State
 
-### Mobile App (Expo SDK 57 / React Native 0.86.3 / TypeScript 6.0.3)
+- **Branch:** `main`
+- **HEAD:** `4c7c4e7`
+- **iOS build number:** 6 (auto-incremented by EAS remote versioning)
+- **TestFlight:** Build #6 submitted and processing (submitted 2026-10-22)
+- **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
+- **ASC App ID:** `6824199734`
+- **Bundle ID:** `com.clickfuzz.elmer`
+- **Production API:** `https://api.getelmer.com` (Railway)
+
+---
+
+## What Is Implemented
+
+### Mobile App (Expo SDK 57 / React Native 0.86.3 / TypeScript)
 
 - Photo capture (camera + library), up to 5 photos, per-photo classification (General / Before / After / Team)
+- Featured image star toggle; featured photo promoted to index 0 on publish
 - GPS EXIF extraction from photo metadata
-- Audio recording and playback (`expo-audio`, SDK 50+ API)
-- AI pipeline: transcription → location extraction → parallel post generation
+- Audio recording and playback (`expo-audio`)
+- AI pipeline: Whisper transcription → location extraction → parallel post generation
 - Social post, Google Business post, WordPress article, SEO metadata generation
-- Writing style selection (7 styles)
-- Business profile settings (name, website, category, services, service areas, description) — persisted to SQLite
+- Writing style selection (7 styles); inquiry URL as CTA fallback
+- Business profile settings — persisted to server via authenticated API
 - Job history: browse past jobs, expand, copy generated content
-- Mock mode when `OPENAI_API_KEY` is absent (labeled in UI)
 - 3-attempt retry with 2-second delay on generation failure
-- Home state (photos + audio) preserved when navigating back from result screen
-- Local SQLite persistence, schema v5, WAL mode, versioned migrations (`storage/database.ts`)
+- Home state (photos + audio) preserved when navigating back from result
+- Local SQLite schema v8 (`storage/database.ts`): jobs, job_photos, settings
+- Manual screen switcher (`App.tsx`) — NOT Expo Router; screens: `home | result | settings | history | subscription`
+- **Auth:** sign-in/register in SettingsScreen; session token in SecureStore + SQLite
+- **Facebook:** connect (OAuth), multi-page management + selection, publish, token refresh alert
+- **Instagram:** connect (OAuth), single photo + carousel publish, Before/After composite
+- **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
+- **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
+- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal
 
-### Backend Server (Node.js + Express 4)
+### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
 
-- `POST /api/generate` — transcription + content generation pipeline (unchanged from prototype)
-- `GET /health` — server health check
-- **Auth endpoints** (`server/routes/auth.js`):
-  - `POST /auth/register` — validates email + password ≥ 8 chars; bcrypt 12 rounds; returns `{token, expiresAt}`
-  - `POST /auth/login` — constant-time comparison; returns `{token, expiresAt}`
-  - `POST /auth/logout` — deletes session row
-  - `GET /auth/me` — returns `{userId, email}`
-- **Platform endpoints** (`server/routes/platforms.js`):
-  - `GET /platforms` — list connected platforms for authenticated user (no credentials in response)
-  - `DELETE /platforms/:id` — disconnect; ownership-checked; 404 for missing or wrong user
-  - `POST /platforms/oauth/state` — create CSRF state token (48 hex chars, 10-min TTL)
-  - `POST /platforms/oauth/state/validate` — validate + consume state (single-use)
-- Server-side SQLite: WAL mode, foreign keys, busy timeout, schema v1 (`server/db.js`)
-- AES-256-GCM credential encryption at rest (`server/crypto.js`)
-- Auth middleware: `requireAuth` / `optionalAuth` (`server/auth.js`)
-- Rate limiting: `express-rate-limit` — 10 req/15min on generate, 20 req/15min on auth
-- `DISABLE_AUTH=true` escape hatch for local mobile dev (mobile app not yet sending tokens)
-- 52 automated tests passing: db (12), auth (18), platforms (22) — `npm test` in `server/`
+- `POST /api/generate` — Whisper + GPT-4o-mini content pipeline
+- `GET /health`
+- Auth: register, login, logout, /me (`server/routes/auth.js`)
+- Platforms: list, disconnect, OAuth CSRF state (`server/routes/platforms.js`)
+- Facebook: connect-url, callback, pages list/selection, publish (`server/routes/facebook.js`)
+- Instagram: connect-url, callback, account info, media serving, publish (`server/routes/instagram.js`)
+- Threads: connect-url, callback, account info, media serving, publish, uninstall/delete callbacks (`server/routes/threads.js`)
+- WordPress: connect-url, callback, sites list/disconnect, publish (`server/routes/wordpress.js`)
+- Image processing: EXIF correction, AR fitting, carousels, Before/After composites (`server/routes/media-utils.js`)
+- **Billing** (`server/routes/billing.js`):
+  - `GET /billing/subscription` — status + `hasAccess`
+  - `POST /billing/checkout-session` — Stripe Checkout; 409 if already subscribed
+  - `POST /billing/portal-session` — Stripe Customer Portal
+  - `GET /billing/checkout-return` → redirects to `elmer://billing/return`
+  - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
+  - `requireSubscription` middleware on `/api/generate` + all publish endpoints
+- PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions
+- **308 automated tests passing** — `cd server && npm test`
 
 ---
 
-## Server-Side Database Schema (schema v1, `server/elmer.db`)
+## Key Architectural Rules
 
-Six tables: `users`, `sessions`, `business_settings`, `connected_platforms`, `oauth_states`, `publishing_records`.
-
-See `docs/ARCHITECTURE.md → Server-Side Database Schema` for full DDL.
-
-Key constraints:
-- `connected_platforms.platform` CHECK(`google`, `facebook`, `wordpress`)
-- `publishing_records.status` CHECK(`pending`, `published`, `failed`)
-- All tables use `ON DELETE CASCADE` from `users`
-- `users.email` is `UNIQUE COLLATE NOCASE`
+- **No Expo Router** — manual `useState<AppScreen>` switcher in `App.tsx`.
+- **No JWTs** — opaque 64-hex tokens in `sessions` table.
+- **Credentials server-side only** — OAuth tokens and app passwords encrypted AES-256-GCM; mobile never holds provider credentials.
+- **No PostgreSQL/Redis/Supabase/Firebase addition** without explicit requirement.
+- **Platform independence** — Facebook, Instagram, Threads, WordPress failures must not affect each other.
+- **iOS billing:** `Linking.openURL()` to Stripe Checkout. No StoreKit or `com.apple.developer.storekit.external-purchase-link` entitlement needed — Elmer is US-only and App Review Guideline 3.1.1(a) (updated Oct 16, 2026) does not require the entitlement for US storefront apps.
+- **Android billing:** `Linking.openURL()`. SaaS exemption applies — Elmer sells backend service access, not in-app digital goods.
 
 ---
 
@@ -83,67 +100,46 @@ Key constraints:
 
 | Variable | Notes |
 |---|---|
+| `DATABASE_URL` | PostgreSQL connection string (Railway auto-injects) |
 | `OPENAI_API_KEY` | Required for real AI; omit for mock mode |
 | `PORT` | Default `3001` |
-| `DB_PATH` | Default `./elmer.db`; use `:memory:` for ephemeral tests only |
 | `SESSION_TTL_DAYS` | Default `30` |
-| `CREDENTIAL_ENCRYPTION_KEY` | **Required for OAuth** — 64 hex chars (32 bytes). Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `DISABLE_AUTH` | `true` during local dev before Phase 2; **never in production** |
-| `GENERATE_RATE_LIMIT` | Default `10` per 15 min |
-| `AUTH_RATE_LIMIT` | Default `20` per 15 min |
+| `CREDENTIAL_ENCRYPTION_KEY` | 64 hex chars (32 bytes) — required for all OAuth |
+| `FACEBOOK_APP_ID / _SECRET / _REDIRECT_URI` | Meta App credentials |
+| `INSTAGRAM_APP_ID / _SECRET / _REDIRECT_URI` | Same Meta App |
+| `THREADS_APP_ID / _SECRET / _REDIRECT_URI` | Separate Threads App |
+| `SERVER_URL` | Public base URL for image serving (IG/Threads publish) |
+| `WORDPRESS_CALLBACK_URL` | `https://api.getelmer.com/wordpress/callback` |
+| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_live_…`) |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (`whsec_…`) |
+| `STRIPE_PRICE_ID` | Stripe price ID for the $19/month plan |
+| `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
 
 ---
 
-## Architecture Decisions and Rules
+## Pending Actions Before App Store Release
 
-### Navigation
-Manual `useState<AppScreen>` switcher in `App.tsx` — NOT Expo Router. Do not introduce a navigation library without demonstrated requirement. Screens call parent callbacks; they do not navigate themselves. Screen names: `'home' | 'result' | 'settings' | 'history'`.
-
-### Databases
-- **Device**: `expo-sqlite` WAL, schema v5 — jobs, job_photos, settings
-- **Server**: `better-sqlite3` WAL, schema v1 — users, sessions, business_settings, connected_platforms, oauth_states, publishing_records
-
-### Auth pattern
-Opaque 64-hex-char tokens in `sessions` table. No JWTs. Sessions expire per `SESSION_TTL_DAYS`. `DISABLE_AUTH=true` bypasses requireAuth on `/api/generate` for backward compat while the mobile app doesn't yet send tokens.
-
-### Platform independence
-Google, Facebook, and WordPress integrations must be independently implemented, tested, and deployable. A failure in one must not affect the others. Each gets its own OAuth token storage, publish endpoint, status tracking, retry logic.
-
-### Credentials
-OAuth access/refresh tokens live server-side only, encrypted with AES-256-GCM. The mobile app never holds provider credentials. The app authenticates to the Elmer backend; the backend authenticates to platform APIs.
-
-### What must not be introduced without explicit approval
-PostgreSQL, Redis, Supabase, Firebase, permanent cloud media storage, cross-device job sync, Expo Router migration.
+1. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
+2. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway.
+3. **Stripe webhook endpoint:** register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
+4. **Meta App Review:** submit Facebook/Instagram permissions for review (screencast: connect → select pages → create job → Post Everywhere → confirm posts).
+5. **Google Business Profile API approval:** still waiting.
 
 ---
 
-## Known Bugs (not yet fixed)
+## Known Bugs (pre-existing, not yet fixed)
 
-| Bug | Location | Impact |
-|---|---|---|
-| "Post Everywhere" is a no-op | `ResultScreen.tsx:234` | Core publish action does nothing |
-| Google post generated but not shown in UI | `ResultScreen.tsx:71` | Users can't review Google content |
-| `connected_channels` never written | `SettingsScreen.tsx:93` | Platform-specific content not generated for real users |
-| Orphaned `elmer_recording_*.m4a` accumulate | `HomeScreen.tsx:273` | Device audio files never deleted |
-| Job status never changes from `draft` | `storage/database.ts` | `deleteOldPublishedMedia()` is dead code |
-| `expo-file-system/legacy` import | `HomeScreen.tsx:1`, `ResultScreen.tsx:1` | Deprecation warning; will break in future SDK |
-| `Clipboard` from `react-native` (deprecated) | `ResultScreen.tsx:13`, `HistoryScreen.tsx:7` | Replace with `expo-clipboard` |
-| Server `tmp/` not cleaned on crash | `server/app.js` | Orphan audio files possible |
-
----
-
-## Phase 2 Requirements (next milestone)
-
-Mobile app must send a Bearer token on all API requests. Steps:
-1. Add auth state to `App.tsx` / `AppShell` — store token in `expo-secure-store`
-2. Inject `Authorization: Bearer <token>` header in `ResultScreen`'s generate call
-3. Add login/register screens or modal
-4. Update `SettingsScreen` Sign In stub to call `/auth/register` + `/auth/login`
-5. Set `DISABLE_AUTH=false` (or remove it) in `server/.env` once the app sends tokens
-6. Tokens should persist across app restarts via `expo-secure-store`
-
-Do NOT use `AsyncStorage` for tokens — use `expo-secure-store`.
+| Bug | Location |
+|---|---|
+| Google post generated but not shown in UI | `ResultScreen.tsx` |
+| Orphaned `elmer_recording_*.m4a` accumulate | `HomeScreen.tsx` |
+| Job status never changes from `draft` | `storage/database.ts` |
+| `expo-file-system/legacy` import | `HomeScreen.tsx`, `ResultScreen.tsx` |
+| `Clipboard` imported from `react-native` (deprecated) | `ResultScreen.tsx`, `HistoryScreen.tsx` |
+| `deleteOldPublishedMedia` never called | `storage/database.ts` |
+| Server `tmp/` not cleaned on crash | `server/` |
+| Instagram/Threads temp media not cleaned on crash | `server/routes/instagram.js`, `threads.js` |
 
 ---
 
@@ -151,13 +147,14 @@ Do NOT use `AsyncStorage` for tokens — use `expo-secure-store`.
 
 ```bash
 cd server && npm test
-# 52 tests: db.test.js (12) + auth.test.js (18) + platforms.test.js (22)
+# 308 tests: db, auth, platforms, facebook, instagram, threads,
+#             media-utils, generation, account-isolation, wordpress, billing
 ```
 
 Mobile:
 ```bash
-npx expo lint
-npx tsc --noEmit
+npx tsc --noEmit    # 0 errors
+npx expo lint       # warnings only in pre-existing files; 0 errors in billing/subscription code
 ```
 
 ---
@@ -166,24 +163,14 @@ npx tsc --noEmit
 
 | File | Purpose |
 |---|---|
-| `docs/ARCHITECTURE.md` | Authoritative implementation status + schemas |
-| `AGENTS.md` | Dev rules, commands, Expo guidance |
+| `docs/ARCHITECTURE.md` | Authoritative schemas, routes, implementation status |
+| `AGENTS.md` | Dev rules, Expo guidance, commands |
 | `server/.env.example` | Template for required env vars |
 | `storage/database.ts` | All device SQLite access |
-| `server/db.js` | Server SQLite singleton + migrations |
-| `server/app.js` | Express app factory (createApp) |
-| `server/auth.js` | requireAuth / optionalAuth middleware |
+| `server/db.js` | PostgreSQL pool + migrations (schema v5) |
+| `server/app.js` | Express app factory — middleware + route mounting order |
+| `server/auth.js` | `requireAuth` / `optionalAuth` |
 | `server/crypto.js` | AES-256-GCM encrypt/decrypt |
-| `server/routes/auth.js` | /auth/* endpoints |
-| `server/routes/platforms.js` | /platforms/* endpoints |
-
----
-
-## Development Notes
-
-- Local IP for physical device testing: set `EXPO_PUBLIC_API_URL=http://<LAN-IP>:3001` in `server/.env`
-- `server/elmer.db`, `server/elmer.db-wal`, `server/elmer.db-shm` are gitignored
-- `server/.env` is gitignored — copy from `server/.env.example` and fill in values
-- `CREDENTIAL_ENCRYPTION_KEY` must be set before any OAuth connect flow will work
-- Tests use `:memory:` SQLite and set their own env vars — no `.env` file needed to run tests
-- Node 22 runs each test file in an isolated worker thread — test state does not bleed between files
+| `server/routes/billing.js` | Stripe billing: checkout, portal, webhook, `requireSubscription` |
+| `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
+| `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
