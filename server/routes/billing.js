@@ -418,9 +418,39 @@ function createBillingRouter() {
       );
       const sub        = rows[0] ?? null;
       const entitlement = await getEntitlement(req.userId);
+
+      // Onboarding completion check
+      let onboardingCompleted = false;
+      // Backward compat: users who already have a subscription row are established users
+      if (sub !== null) {
+        onboardingCompleted = true;
+      }
+      if (!onboardingCompleted) {
+        // Users who have published something are established users
+        const { rows: prRows } = await getPool().query(
+          'SELECT id FROM publishing_records WHERE user_id = $1 LIMIT 1',
+          [req.userId]
+        );
+        if (prRows.length > 0) onboardingCompleted = true;
+      }
+      if (!onboardingCompleted) {
+        // Check explicit flag stored during onboarding completion
+        const { rows: bsRows } = await getPool().query(
+          'SELECT settings_json FROM business_settings WHERE user_id = $1',
+          [req.userId]
+        );
+        if (bsRows.length > 0) {
+          try {
+            const bsData = JSON.parse(bsRows[0].settings_json || '{}');
+            if (bsData.onboarding_completed === true) onboardingCompleted = true;
+          } catch { /* ignore */ }
+        }
+      }
+
       res.json({
         hasAccess: hasAccess(sub),
         entitlement,
+        onboardingCompleted,
         subscription: sub ? {
           status:             sub.status,
           currentPeriodStart: sub.current_period_start,

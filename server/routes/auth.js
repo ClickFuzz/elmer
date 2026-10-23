@@ -118,6 +118,28 @@ router.get('/me', requireAuth, (req, res) => {
   return res.json({ userId: req.userId, email: req.userEmail });
 });
 
+// ── POST /auth/onboarding/complete ─────────────────────────────────────────
+router.post('/onboarding/complete', requireAuth, wrap(async (req, res) => {
+  const pool = getPool();
+  const now  = Date.now();
+  const { rows } = await pool.query(
+    'SELECT settings_json FROM business_settings WHERE user_id = $1',
+    [req.userId]
+  );
+  let settings = {};
+  if (rows.length > 0) {
+    try { settings = JSON.parse(rows[0].settings_json || '{}'); } catch { /* ignore */ }
+  }
+  settings.onboarding_completed = true;
+  await pool.query(
+    `INSERT INTO business_settings (user_id, settings_json, updated_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET settings_json = $2, updated_at = $3`,
+    [req.userId, JSON.stringify(settings), now]
+  );
+  return res.json({ ok: true });
+}));
+
 // ── DELETE /auth/history ───────────────────────────────────────────────────
 // Deletes the caller's publishing records. Local job data is managed client-side.
 router.delete('/history', requireAuth, wrap(async (req, res) => {

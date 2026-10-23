@@ -7,10 +7,11 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, runAutoCleanup, Job, clearSession } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ManageDataScreen from './screens/ManageDataScreen';
+import OnboardingWizard from './screens/OnboardingWizard';
 import ResultScreen from './screens/ResultScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import SignInScreen from './screens/SignInScreen';
@@ -66,8 +67,12 @@ function AppShell() {
   const [savedHomeState, setSavedHomeState] = useState<HomeState | null>(null);
   const [draftJob, setDraftJob] = useState<Job | null>(null);
   const [isAuthed, setIsAuthed] = useState<boolean | null>(null); // null = loading
+  const [authToken, setAuthToken] = useState<string | null>(null);
   // null = not yet checked; SubscriptionStatus | false = checked
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null | false>(null);
+  // null = loading; true/false = resolved
+  const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
+  const [settingsReturnToResult, setSettingsReturnToResult] = useState(false);
 
   const fetchSubscriptionStatus = async (token: string): Promise<SubscriptionStatus | false> => {
     try {
@@ -82,15 +87,25 @@ function AppShell() {
   };
 
   useEffect(() => {
-    getSessionToken().then(async tok => {
+    (async () => {
+      const tok = await getSessionToken();
       if (!tok) {
         setIsAuthed(false);
+        setIsOnboarded(false);
         return;
       }
       setIsAuthed(true);
-      const status = await fetchSubscriptionStatus(tok);
+      setAuthToken(tok);
+      const [status, localFlag] = await Promise.all([
+        fetchSubscriptionStatus(tok),
+        getSetting('onboarding_completed'),
+      ]);
       setSubscriptionStatus(status);
-    });
+      const serverOnboarded = (status as SubscriptionStatus | false)
+        ? (status as SubscriptionStatus).onboardingCompleted === true
+        : false;
+      setIsOnboarded(localFlag === '1' || serverOnboarded);
+    })();
     getPendingHomeState().then(state => {
       if (state) setSavedHomeState(state as HomeState);
     });
@@ -102,23 +117,40 @@ function AppShell() {
     if (authed) {
       const tok = await getSessionToken();
       if (tok) {
-        const status = await fetchSubscriptionStatus(tok);
+        setAuthToken(tok);
+        const [status, localFlag] = await Promise.all([
+          fetchSubscriptionStatus(tok),
+          getSetting('onboarding_completed'),
+        ]);
+        const serverOnboarded = (status as SubscriptionStatus | false)
+          ? (status as SubscriptionStatus).onboardingCompleted === true
+          : false;
         setSubscriptionStatus(status);
+        setIsOnboarded(localFlag === '1' || serverOnboarded);
       }
       setScreen('home');
     } else {
+      setAuthToken(null);
       setSubscriptionStatus(null);
+      setIsOnboarded(null);
       setSavedHomeState(null);
       savePendingHomeState(null);
     }
   };
 
   const handleSubscribed = () => {
-    // Refresh subscription status then show the main app
     getSessionToken().then(async tok => {
       if (tok) {
-        const status = await fetchSubscriptionStatus(tok);
+        setAuthToken(tok);
+        const [status, localFlag] = await Promise.all([
+          fetchSubscriptionStatus(tok),
+          getSetting('onboarding_completed'),
+        ]);
+        const serverOnboarded = (status as SubscriptionStatus | false)
+          ? (status as SubscriptionStatus).onboardingCompleted === true
+          : false;
         setSubscriptionStatus(status);
+        setIsOnboarded(localFlag === '1' || serverOnboarded);
       }
       setScreen('home');
     });
@@ -134,9 +166,25 @@ function AppShell() {
     }
     await clearSession();
     setIsAuthed(false);
+    setAuthToken(null);
     setSubscriptionStatus(null);
+    setIsOnboarded(null);
     setSavedHomeState(null);
     savePendingHomeState(null);
+  };
+
+  const handleOnboardingComplete = async () => {
+    // Persist locally so the wizard is bypassed even if the server call fails
+    await setSetting('onboarding_completed', '1');
+    setIsOnboarded(true);
+    setScreen('home');
+    // Best-effort server persist (fire and forget)
+    if (authToken) {
+      fetch(`${API_URL}/auth/onboarding/complete`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => {});
+    }
   };
 
   const handleGenerate = (data: GeneratePayload) => {
@@ -173,8 +221,8 @@ function AppShell() {
     setScreen('result');
   };
 
-  // Blank while SecureStore resolves on first render, or while subscription is being fetched
-  if (isAuthed === null || (isAuthed && subscriptionStatus === null)) {
+  // Blank while SecureStore resolves on first render, or while subscription / onboarding state is being fetched
+  if (isAuthed === null || (isAuthed && (subscriptionStatus === null || isOnboarded === null))) {
     return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="light" /></SafeAreaView>;
   }
 
@@ -192,6 +240,7 @@ function AppShell() {
   const subStatus = subscriptionStatus as SubscriptionStatus | false;
   const hasSubscriptionAccess = subStatus && subStatus.hasAccess;
   const hasFreeAccess = subStatus && FREE_ACCESS_VALUES.has((subStatus as any).entitlement?.access);
+  const hasFreePublicationAvailable = subStatus !== false && (subStatus as any)?.entitlement?.access === 'free_available';
   if ((!hasSubscriptionAccess && !hasFreeAccess) || screen === 'subscription') {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
@@ -200,6 +249,19 @@ function AppShell() {
           onSubscribed={handleSubscribed}
           onSignOut={handleSubscriptionSignOut}
           initialStatus={subStatus || undefined}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  // Onboarding wizard for first-time users
+  if (!isOnboarded) {
+    return (
+      <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
+        <StatusBar style="light" />
+        <OnboardingWizard
+          sessionToken={authToken}
+          onComplete={handleOnboardingComplete}
         />
       </SafeAreaView>
     );
@@ -221,16 +283,25 @@ function AppShell() {
             draftJob={draftJob}
             onBack={() => { setDraftJob(null); setScreen(draftJob ? 'history' : 'home'); }}
             onPublishComplete={handlePublishComplete}
-            onShowSettings={() => setScreen('settings')}
+            onShowSettings={() => { setSettingsReturnToResult(true); setScreen('settings'); }}
             onShowSubscription={() => setScreen('subscription')}
+            hasFreePublicationAvailable={hasFreePublicationAvailable}
           />
         )}
         {screen === 'settings' && (
           <SettingsScreen
-            onBack={() => setScreen('home')}
+            onBack={() => {
+              if (settingsReturnToResult) {
+                setSettingsReturnToResult(false);
+                setScreen('result');
+              } else {
+                setScreen('home');
+              }
+            }}
             onAuthChange={handleAuthChange}
             onManageData={() => setScreen('managedata')}
             onManageSubscription={() => setScreen('subscription')}
+            returnToPost={settingsReturnToResult}
           />
         )}
         {screen === 'managedata' && (
@@ -266,7 +337,7 @@ function AppShell() {
           iconInactive="settings-outline"
           label="Settings"
           active={screen === 'settings'}
-          onPress={() => setScreen('settings')}
+          onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
         />
       </View>
     </SafeAreaView>

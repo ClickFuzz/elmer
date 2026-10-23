@@ -49,6 +49,7 @@ type Props = {
   onPublishComplete?: () => void;
   onShowSettings: () => void;
   onShowSubscription?: () => void;
+  hasFreePublicationAvailable?: boolean;
 };
 
 type SuccessData = {
@@ -96,7 +97,7 @@ type PublishState =
   | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
-export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings, onShowSubscription }: Props) {
+export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings, onShowSubscription, hasFreePublicationAvailable }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedThreads, setEditedThreads] = useState('');
@@ -926,6 +927,19 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               </View>
             </View>
 
+            {/* Writing style customization hint — shown until first post is published */}
+            {hasFreePublicationAvailable && !draftJob && (
+              <View style={styles.customizeCard}>
+                <Text style={styles.customizeHeading}>Not quite your style?</Text>
+                <Text style={styles.customizeBody}>
+                  You can change how Elmer writes in the settings section. Make posts shorter, more casual, more professional, or add your own written work as a reference to your writing style.
+                </Text>
+                <TouchableOpacity style={styles.customizeBtn} onPress={onShowSettings} activeOpacity={0.8}>
+                  <Text style={styles.customizeBtnText}>Customize Writing Style in Settings</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Where Elmer will post */}
             <View style={styles.destinationsCard}>
               <Text style={styles.destinationsTitle}>Where Elmer will post</Text>
@@ -1358,6 +1372,42 @@ const styles = StyleSheet.create({
   },
   metaCount: { fontSize: 11, color: colors.textMuted },
   copyInline: { fontSize: 13, fontWeight: '700', color: colors.cyan },
+
+  // Writing style customization card
+  customizeCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  customizeHeading: {
+    fontSize: 15,
+    fontFamily: 'DMSans_600SemiBold',
+    color: colors.textPrimary,
+    marginBottom: 6,
+  },
+  customizeBody: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  customizeBtn: {
+    backgroundColor: colors.bg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  customizeBtnText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.cyan,
+  },
 
   // Destinations card
   destinationsCard: {

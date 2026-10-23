@@ -23,6 +23,7 @@ const BILLING_RETURN_PREFIX = 'elmer://billing/return';
 export type SubscriptionStatus = {
   hasAccess: boolean;
   entitlement?: { access: string };
+  onboardingCompleted?: boolean;
   subscription: {
     status: string;
     currentPeriodStart: number | null;

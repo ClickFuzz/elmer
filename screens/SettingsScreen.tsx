@@ -37,7 +37,7 @@ import {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void };
+type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean };
 type JobStats = { total: number; drafts: number };
 
 const CATEGORIES = [
@@ -74,7 +74,7 @@ function showPicker(title: string, options: string[], onSelect: (v: string) => v
   }
 }
 
-export default function SettingsScreen({ onBack, onAuthChange, onManageData, onManageSubscription }: Props) {
+export default function SettingsScreen({ onBack, onAuthChange, onManageData, onManageSubscription, returnToPost }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
@@ -91,6 +91,9 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const passwordRef = useRef<TextInput>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const writingStyleOffsetY = useRef<number>(0);
+  const hasScrolledToWritingStyle = useRef(false);
 
   // ── Google Business Profile state ─────────────────────────────────────────
   type GbpLocation = { id: number; account_name: string; account_id: string; selected: boolean; token_expires_at: number | null };
@@ -842,13 +845,13 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Text style={styles.backBtnText}>← Back</Text>
+          <Text style={styles.backBtnText}>{returnToPost ? '← Back to Post' : '← Back'}</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={styles.backBtn} />
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scrollViewRef} style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
 
         {/* ── Business Details ── */}
         <Text style={styles.groupLabel}>Business Details</Text>
@@ -936,7 +939,16 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         </>}
 
         {/* ── Writing Style ── */}
-        <Text style={styles.groupLabel}>Writing Style</Text>
+        <Text
+          style={styles.groupLabel}
+          onLayout={e => {
+            writingStyleOffsetY.current = e.nativeEvent.layout.y;
+            if (returnToPost && !hasScrolledToWritingStyle.current) {
+              hasScrolledToWritingStyle.current = true;
+              scrollViewRef.current?.scrollTo({ y: e.nativeEvent.layout.y, animated: true });
+            }
+          }}
+        >Writing Style</Text>
         <View style={styles.card}>
           <TouchableOpacity
             style={styles.fieldRow}
