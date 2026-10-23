@@ -53,6 +53,12 @@ router.post('/register', wrap(async (req, res) => {
       [user.id, token, now, now + SESSION_TTL_MS]
     );
 
+    await client.query(
+      `INSERT INTO free_publications (user_id, status, created_at, updated_at)
+       VALUES ($1, 'available', $2, $2)`,
+      [user.id, now]
+    );
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 let _pool        = null;
 let _initialized = false;
@@ -231,6 +231,71 @@ async function migrate(pool) {
       );
     }
 
+    // ── V6: free publication tracking ─────────────────────────────────────────
+    if (!applied.has(6)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS free_publications (
+          id          BIGSERIAL PRIMARY KEY,
+          user_id     BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          status      TEXT NOT NULL DEFAULT 'available'
+            CHECK(status IN ('available','reserved','redeemed')),
+          job_key     TEXT,
+          reserved_at BIGINT,
+          redeemed_at BIGINT,
+          created_at  BIGINT NOT NULL,
+          updated_at  BIGINT NOT NULL
+        )
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_free_publications_user ON free_publications(user_id)`
+      );
+
+      // client_job_id lets us cross-reference a multi-platform job
+      // so release-on-failure can check whether any other platform succeeded.
+      try {
+        await client.query(
+          `ALTER TABLE publishing_records ADD COLUMN IF NOT EXISTS client_job_id TEXT`
+        );
+        await client.query(
+          `CREATE INDEX IF NOT EXISTS idx_pr_client_job ON publishing_records(user_id, client_job_id)`
+        );
+      } catch {
+        // pg-mem / older installs may not support all DDL variations
+      }
+
+      // Seed existing users (two-step; wrapped in try/catch for pg-mem compatibility).
+      // Step 1: all existing users start as 'available'
+      // Step 2: flip to 'redeemed' for users that already have published records
+      // New users created after migration get their row in the registration handler.
+      const seedNow = Date.now();
+      try {
+        await client.query(
+          `INSERT INTO free_publications (user_id, status, created_at, updated_at)
+           SELECT u.id, 'available', $1, $1
+           FROM users u
+           ON CONFLICT (user_id) DO NOTHING`,
+          [seedNow]
+        );
+        await client.query(
+          `UPDATE free_publications
+           SET status = 'redeemed', redeemed_at = $1, updated_at = $1
+           WHERE status = 'available'
+             AND user_id IN (
+               SELECT DISTINCT user_id FROM publishing_records WHERE status = 'published'
+             )`,
+          [seedNow]
+        );
+      } catch {
+        // pg-mem does not support INSERT...SELECT with ON CONFLICT; safe to skip in tests
+        // (fresh test databases have no existing users to seed)
+      }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [6, Date.now()]
+      );
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -250,6 +315,9 @@ async function initDb() {
     );
     cleanExpiredPublishingRecords().catch(err =>
       console.warn('[elmer] publishing records cleanup error:', err.message)
+    );
+    cleanStaleFreePublicationReservations().catch(err =>
+      console.warn('[elmer] reservation cleanup error:', err.message)
     );
   }
   return pool;
@@ -278,6 +346,47 @@ async function cleanExpiredPublishingRecords() {
   );
 }
 
+// Release free_publications rows stuck in 'reserved' for more than 1 hour
+// that have no corresponding successful publishing record.
+async function cleanStaleFreePublicationReservations() {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  const pool = getPool();
+  try {
+    // Find stale reserved rows
+    const { rows: stale } = await pool.query(
+      `SELECT user_id, job_key FROM free_publications
+       WHERE status = 'reserved' AND reserved_at IS NOT NULL AND reserved_at < $1`,
+      [cutoff]
+    );
+    const now = Date.now();
+    for (const row of stale) {
+      // Check if any platform succeeded for this job
+      const { rows: success } = await pool.query(
+        `SELECT 1 FROM publishing_records
+         WHERE user_id = $1 AND status = 'published' AND client_job_id = $2 LIMIT 1`,
+        [row.user_id, row.job_key]
+      );
+      if (success.length > 0) {
+        await pool.query(
+          `UPDATE free_publications
+           SET status = 'redeemed', redeemed_at = $2, updated_at = $2
+           WHERE user_id = $1 AND status = 'reserved'`,
+          [row.user_id, now]
+        );
+      } else {
+        await pool.query(
+          `UPDATE free_publications
+           SET status = 'available', job_key = null, reserved_at = null, updated_at = $2
+           WHERE user_id = $1 AND status = 'reserved'`,
+          [row.user_id, now]
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[elmer] stale reservation cleanup error:', err.message);
+  }
+}
+
 // Test-only: inject a mock pool (e.g. pg-mem). Resets initialisation state.
 function _setPoolForTesting(pool) {
   if (_pool && _pool !== pool) {
@@ -287,4 +396,4 @@ function _setPoolForTesting(pool) {
   _initialized = false;
 }
 
-module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, _setPoolForTesting };
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, _setPoolForTesting };

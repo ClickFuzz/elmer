@@ -60,6 +60,153 @@ async function requireSubscription(req, res, next) {
   }
 }
 
+// ── Free-publication entitlement ──────────────────────────────────────────────
+
+// Returns a structured entitlement for a user, checking subscription first.
+// access values:
+//   'subscription'         — active trial or paid subscription
+//   'free_available'       — no subscription, free publication slot available
+//   'free_reserved'        — free slot is in-flight for a job
+//   'free_redeemed'        — free slot has been used; subscription required
+//   'subscription_required'— no subscription, no free slot
+async function getEntitlement(userId) {
+  const pool = getPool();
+
+  const { rows: subRows } = await pool.query(
+    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    [userId]
+  );
+  if (hasAccess(subRows[0])) return { access: 'subscription' };
+
+  const { rows: fpRows } = await pool.query(
+    'SELECT status, job_key FROM free_publications WHERE user_id = $1',
+    [userId]
+  );
+  if (fpRows.length === 0) return { access: 'free_available' }; // safe default for new users
+
+  switch (fpRows[0].status) {
+    case 'available': return { access: 'free_available' };
+    case 'reserved':  return { access: 'free_reserved', jobKey: fpRows[0].job_key };
+    case 'redeemed':  return { access: 'free_redeemed' };
+    default:          return { access: 'subscription_required' };
+  }
+}
+
+// Atomically reserve the free publication for a job.
+// Returns true if reservation is now held for this jobKey (new or idempotent).
+// Returns false if the user has an active subscription (no reservation needed),
+// the slot is already redeemed, or no slot exists.
+async function tryReserveFreePublication(userId, jobKey) {
+  const pool = getPool();
+
+  // Paying users don't consume the free slot
+  const { rows: subRows } = await pool.query(
+    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    [userId]
+  );
+  if (hasAccess(subRows[0])) return false;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      'SELECT id, status, job_key FROM free_publications WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+    const fp = rows[0];
+    if (!fp) { await client.query('COMMIT'); return false; }
+
+    // Idempotent: already reserved for this exact job
+    if (fp.status === 'reserved' && fp.job_key === jobKey) {
+      await client.query('COMMIT');
+      return true;
+    }
+
+    if (fp.status !== 'available') { await client.query('COMMIT'); return false; }
+
+    const now = Date.now();
+    await client.query(
+      `UPDATE free_publications
+       SET status = 'reserved', job_key = $1, reserved_at = $2, updated_at = $2
+       WHERE user_id = $3`,
+      [jobKey, now, userId]
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Redeem the free publication after a successful publish.
+// Only transitions reserved→redeemed for the matching jobKey.
+async function redeemFreePublication(userId, jobKey) {
+  const now = Date.now();
+  await getPool().query(
+    `UPDATE free_publications
+     SET status = 'redeemed', redeemed_at = $3, updated_at = $3
+     WHERE user_id = $1 AND status = 'reserved' AND job_key = $2`,
+    [userId, jobKey, now]
+  );
+}
+
+// Release the reservation if no platform has published successfully for this job.
+// Uses a transaction to avoid releasing when a concurrent platform just succeeded.
+async function releaseFreePublicationIfNoSuccess(userId, jobKey) {
+  const pool   = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      'SELECT id, status, job_key FROM free_publications WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+    const fp = rows[0];
+    if (!fp || fp.status !== 'reserved' || fp.job_key !== jobKey) {
+      await client.query('COMMIT');
+      return;
+    }
+
+    // Check if any platform succeeded for this job via client_job_id
+    const { rows: successRows } = await client.query(
+      `SELECT 1 FROM publishing_records
+       WHERE user_id = $1 AND status = 'published' AND client_job_id = $2 LIMIT 1`,
+      [userId, jobKey]
+    );
+
+    const now = Date.now();
+    if (successRows.length > 0) {
+      // Another platform succeeded — redeem instead of releasing
+      await client.query(
+        `UPDATE free_publications
+         SET status = 'redeemed', redeemed_at = $2, updated_at = $2
+         WHERE user_id = $1`,
+        [userId, now]
+      );
+    } else {
+      // All platforms failed — release back to available
+      await client.query(
+        `UPDATE free_publications
+         SET status = 'available', job_key = null, reserved_at = null, updated_at = $2
+         WHERE user_id = $1`,
+        [userId, now]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Stripe helpers ────────────────────────────────────────────────────────────
 
 function getStripe() {
@@ -227,9 +374,11 @@ function createBillingRouter() {
          FROM subscriptions WHERE user_id = $1`,
         [req.userId]
       );
-      const sub = rows[0] ?? null;
+      const sub        = rows[0] ?? null;
+      const entitlement = await getEntitlement(req.userId);
       res.json({
         hasAccess: hasAccess(sub),
+        entitlement,
         subscription: sub ? {
           status:             sub.status,
           currentPeriodStart: sub.current_period_start,
@@ -245,6 +394,17 @@ function createBillingRouter() {
     } catch (err) {
       console.error('[billing] subscription status error:', err);
       res.status(500).json({ error: 'Failed to load subscription status' });
+    }
+  });
+
+  // GET /billing/entitlement — lightweight entitlement check for authenticated user
+  router.get('/entitlement', requireAuth, async (req, res) => {
+    try {
+      const entitlement = await getEntitlement(req.userId);
+      res.json(entitlement);
+    } catch (err) {
+      console.error('[billing] entitlement error:', err);
+      res.status(500).json({ error: 'Failed to load entitlement' });
     }
   });
 
@@ -382,4 +542,12 @@ function createBillingRouter() {
   return router;
 }
 
-module.exports = { createBillingRouter, requireSubscription, hasAccess };
+module.exports = {
+  createBillingRouter,
+  requireSubscription,
+  hasAccess,
+  getEntitlement,
+  tryReserveFreePublication,
+  redeemFreePublication,
+  releaseFreePublicationIfNoSuccess,
+};

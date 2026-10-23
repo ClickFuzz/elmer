@@ -8,6 +8,7 @@ const multer          = require('multer');
 const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
+const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess } = require('./billing');
 const { orderWithFeaturedFirst } = require('./media-utils');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -411,6 +412,9 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    // Track free publication usage — non-blocking; enforcement added in a later phase
+    const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
+
     const pool      = getPool();
     const now       = Date.now();
     const serverUrl = process.env.SERVER_URL ?? '';
@@ -520,9 +524,9 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         }
 
         const { rows: [record] } = await pool.query(
-          `INSERT INTO publishing_records (user_id, platform, job_ref, status, created_at, updated_at)
-           VALUES ($1, 'google', $2, 'pending', $3, $4) RETURNING id`,
-          [req.userId, jobRef, now, now]
+          `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
+           VALUES ($1, 'google', $2, $3, 'pending', $4, $5) RETURNING id`,
+          [req.userId, jobRef, job_id, now, now]
         );
         recordId = record.id;
 
@@ -612,6 +616,12 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     cleanup();
 
     const anyOk = results.some(r => r.ok);
+
+    if (freePubReserved) {
+      if (anyOk) await redeemFreePublication(req.userId, job_id).catch(() => {});
+      else await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
+    }
+
     return res.status(200).json({ ok: anyOk, results });
   });
 

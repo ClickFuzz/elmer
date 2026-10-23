@@ -8,6 +8,7 @@ const multer     = require('multer');
 
 const { getPool }          = require('../db');
 const { requireAuth }      = require('../auth');
+const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess } = require('./billing');
 const { encrypt, decrypt } = require('../crypto');
 const {
   orderWithFeaturedFirst,
@@ -324,6 +325,9 @@ function createThreadsRouter({
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    // Track free publication usage — non-blocking; enforcement added in a later phase
+    const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
+
     const featuredIndex   = parseInt(req.body.featured_index ?? '0', 10) || 0;
     const classifications = parseIntArray(req.body.classifications) ?? [];
 
@@ -409,9 +413,9 @@ function createThreadsRouter({
     // Insert pending publishing record
     const { rows: [record] } = await pool.query(
       `INSERT INTO publishing_records
-         (user_id, platform, job_ref, status, created_at, updated_at)
-       VALUES ($1, 'threads', $2, 'pending', $3, $4) RETURNING id`,
-      [req.userId, jobRef, now, now]
+         (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
+       VALUES ($1, 'threads', $2, $3, 'pending', $4, $5) RETURNING id`,
+      [req.userId, jobRef, job_id, now, now]
     );
     const recordId = record.id;
 
@@ -706,6 +710,7 @@ function createThreadsRouter({
       );
 
       cleanup();
+      if (freePubReserved) await redeemFreePublication(req.userId, job_id).catch(() => {});
       return res.json({ ok: true, accountId: thUserId, accountName: thAccount.account_name, postId, postUrl });
 
     } catch (err) {
@@ -713,6 +718,7 @@ function createThreadsRouter({
       await markFailed(err.message);
       cleanupMedia();
       cleanup();
+      if (freePubReserved) await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
       return res.json({
         ok: false, accountId: thUserId, accountName: thAccount.account_name,
         error: err.message, reconnect_required: err.isRevoked ?? false,

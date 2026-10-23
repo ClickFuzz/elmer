@@ -8,6 +8,7 @@ const multer     = require('multer');
 
 const { getPool }          = require('../db');
 const { requireAuth }      = require('../auth');
+const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess } = require('./billing');
 const { encrypt, decrypt } = require('../crypto');
 const { orderWithFeaturedFirst } = require('./media-utils');
 
@@ -428,6 +429,10 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       cleanup();
       return res.status(400).json({ error: 'job_id is required' });
     }
+
+    // Track free publication usage — non-blocking; enforcement added in a later phase
+    const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
+
     if (!wp_site_id) {
       cleanup();
       return res.status(400).json({ error: 'wp_site_id is required' });
@@ -508,9 +513,9 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
     // Insert pending record
     const { rows: [record] } = await pool.query(
       `INSERT INTO publishing_records
-         (user_id, platform, job_ref, status, created_at, updated_at)
-       VALUES ($1, 'wordpress', $2, 'pending', $3, $4) RETURNING id`,
-      [req.userId, jobRef, now, now]
+         (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
+       VALUES ($1, 'wordpress', $2, $3, 'pending', $4, $5) RETURNING id`,
+      [req.userId, jobRef, job_id, now, now]
     );
     const recordId = record.id;
 
@@ -602,6 +607,7 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       );
 
       cleanup();
+      if (freePubReserved) await redeemFreePublication(req.userId, job_id).catch(() => {});
       console.log('[wp] published post id=', postId, 'url=', postUrl, 'site=', siteUrl);
       return res.json({ ok: true, siteId, siteName: site.account_name, postId, postUrl });
 
@@ -609,6 +615,7 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       console.error('[wp] publish error:', err.message);
       await markFailed(err.message);
       cleanup();
+      if (freePubReserved) await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
       return res.json({ ok: false, siteId, siteName: site.account_name, error: err.message });
     }
   });
