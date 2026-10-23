@@ -7,7 +7,8 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionUserId, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
+import { Analytics } from './services/analytics';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ManageDataScreen from './screens/ManageDataScreen';
@@ -99,10 +100,12 @@ function AppShell() {
       }
       setIsAuthed(true);
       setAuthToken(tok);
-      const [status, localFlag] = await Promise.all([
+      const [status, localFlag, storedUserId] = await Promise.all([
         fetchSubscriptionStatus(tok),
         getSetting('onboarding_completed'),
+        getSessionUserId(),
       ]);
+      if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
       const serverOnboarded = (status as SubscriptionStatus | false)
         ? (status as SubscriptionStatus).onboardingCompleted === true
@@ -121,10 +124,12 @@ function AppShell() {
       const tok = await getSessionToken();
       if (tok) {
         setAuthToken(tok);
-        const [status, localFlag] = await Promise.all([
+        const [status, localFlag, storedUserId] = await Promise.all([
           fetchSubscriptionStatus(tok),
           getSetting('onboarding_completed'),
+          getSessionUserId(),
         ]);
+        if (storedUserId) Analytics.identify(storedUserId);
         const serverOnboarded = (status as SubscriptionStatus | false)
           ? (status as SubscriptionStatus).onboardingCompleted === true
           : false;
@@ -133,6 +138,7 @@ function AppShell() {
       }
       setScreen('home');
     } else {
+      Analytics.reset();
       setAuthToken(null);
       setSubscriptionStatus(null);
       setIsOnboarded(null);
@@ -174,6 +180,7 @@ function AppShell() {
         headers: { Authorization: `Bearer ${tok}` },
       }).catch(() => {});
     }
+    Analytics.reset();
     await clearSession();
     setIsAuthed(false);
     setAuthToken(null);
@@ -184,9 +191,10 @@ function AppShell() {
     setPendingGenerationAfterSubscription(false);
   };
 
-  const handleOnboardingComplete = async () => {
+  const handleOnboardingComplete = async (platformConnectionsCount?: number) => {
     // Persist locally so the wizard is bypassed even if the server call fails
     await setSetting('onboarding_completed', '1');
+    Analytics.onboarding_completed(platformConnectionsCount ?? 0);
     setIsOnboarded(true);
     setScreen('home');
     // Best-effort server persist (fire and forget)

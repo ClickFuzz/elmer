@@ -14,7 +14,8 @@
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.getelmer.com"
+        "EXPO_PUBLIC_API_URL": "https://api.getelmer.com",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
       }
     }
   },

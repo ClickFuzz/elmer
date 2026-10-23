@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { colors } from '../constants/colors';
 import { getSessionToken } from '../storage/database';
+import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -55,6 +56,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   const [pollingMessage, setPollingMessage] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAttemptsRef = useRef(0);
+  const paywallTrackedRef = useRef(false);
 
   // ── Fetch subscription status from server ──────────────────────────────────
 
@@ -84,6 +86,19 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   useEffect(() => {
     if (status?.hasAccess) onSubscribed();
   }, [status, onSubscribed]);
+
+  // Track paywall_viewed once when the screen mounts without access
+  useEffect(() => {
+    if (!loading && !status?.hasAccess && !paywallTrackedRef.current) {
+      paywallTrackedRef.current = true;
+      const access = (status as SubscriptionStatus | null)?.entitlement?.access ?? 'none';
+      Analytics.paywall_viewed(
+        'second_preview',
+        access === 'free_redeemed',
+        (status as SubscriptionStatus | null)?.subscription?.status ?? 'none'
+      );
+    }
+  }, [loading, status]);
 
   // ── Poll for subscription activation after checkout ────────────────────────
 
@@ -156,6 +171,8 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       if (returnStatus === 'success') {
         setCheckoutLoading(true);
         pollForActivation();
+      } else if (returnStatus === 'cancel') {
+        Analytics.checkout_cancelled();
       } else if (returnStatus === 'portal_return') {
         // Refresh subscription status after portal visit
         fetchStatus().then(s => {
@@ -215,6 +232,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
         throw new Error(data.error ?? 'Failed to start checkout');
       }
 
+      Analytics.checkout_started(data.trialEligible === true);
       setCheckoutStarted(true);
       await Linking.openURL(data.checkoutUrl);
       // Activation is confirmed via AppState / Linking listener above

@@ -10,6 +10,13 @@ const {
   processQueuedDeviceUpdate,
   isDeviceCheckConfigured,
 } = require('./device');
+const {
+  trackTrialStarted,
+  trackTrialConverted,
+  trackSubscriptionRenewed,
+  trackSubscriptionCancelled,
+  trackPaymentFailed,
+} = require('../services/analytics');
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -247,12 +254,13 @@ async function tryReserveFreePublication(userId, jobKey) {
 //   If the Apple update fails, the obligation is queued for retry on next request.
 async function redeemFreePublication(userId, jobKey, deviceToken = null) {
   const now = Date.now();
-  await getPool().query(
+  const result = await getPool().query(
     `UPDATE free_publications
      SET status = 'redeemed', redeemed_at = $3, updated_at = $3
      WHERE user_id = $1 AND status = 'reserved' AND job_key = $2`,
     [userId, jobKey, now]
   );
+  const wasFirst = result.rowCount > 0;
 
   // Update Apple DeviceCheck bit0 — fire-and-forget so a slow/failing Apple API
   // never delays the publish response.
@@ -262,6 +270,8 @@ async function redeemFreePublication(userId, jobKey, deviceToken = null) {
       await queueDeviceUpdate(userId, jobKey).catch(() => {});
     });
   }
+
+  return wasFirst;
 }
 
 // Returns true if the user's free slot is redeemed for the given jobKey (same job retry).
@@ -424,6 +434,14 @@ async function upsertSubscriptionFromStripe(stripeSub) {
 
 // ── Webhook event handler ─────────────────────────────────────────────────────
 
+async function getUserIdByCustomer(customerId) {
+  const { rows } = await getPool().query(
+    'SELECT user_id FROM stripe_customers WHERE customer_id = $1',
+    [customerId]
+  );
+  return rows.length > 0 ? rows[0].user_id : null;
+}
+
 async function handleWebhookEvent(event) {
   switch (event.type) {
     case 'checkout.session.completed': {
@@ -450,14 +468,27 @@ async function handleWebhookEvent(event) {
       // Fetch fresh subscription state from Stripe (not stale event snapshot)
       const sub = await getStripe().subscriptions.retrieve(session.subscription);
       await upsertSubscriptionFromStripe(sub);
+
+      // Fire trial_started when new subscription begins in trialing status
+      if (sub.status === 'trialing') {
+        const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
+        if (userId) trackTrialStarted(userId, { trial_end_ms: sub.trial_end ? sub.trial_end * 1000 : null });
+      }
       break;
     }
 
     case 'customer.subscription.created':
     case 'customer.subscription.updated': {
+      const prevStatus = event.data.previous_attributes?.status;
       // Always re-fetch to avoid out-of-order event data
       const sub = await getStripe().subscriptions.retrieve(event.data.object.id);
       await upsertSubscriptionFromStripe(sub);
+
+      // Detect trial → active conversion
+      if (prevStatus === 'trialing' && sub.status === 'active') {
+        const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
+        if (userId) trackTrialConverted(userId, {});
+      }
       break;
     }
 
@@ -470,15 +501,32 @@ async function handleWebhookEvent(event) {
          WHERE stripe_subscription_id = $1`,
         [sub.id, sub.canceled_at ? sub.canceled_at * 1000 : now, now]
       );
+      const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
+      if (userId) trackSubscriptionCancelled(userId, {});
       break;
     }
 
-    case 'invoice.paid':
+    case 'invoice.paid': {
+      const invoice = event.data.object;
+      if (invoice.subscription) {
+        const sub = await getStripe().subscriptions.retrieve(invoice.subscription);
+        await upsertSubscriptionFromStripe(sub);
+        // Only fire renewal for active (non-trial) paid invoices
+        if (sub.status === 'active' && invoice.billing_reason === 'subscription_cycle') {
+          const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
+          if (userId) trackSubscriptionRenewed(userId, {});
+        }
+      }
+      break;
+    }
+
     case 'invoice.payment_failed': {
       const invoice = event.data.object;
       if (invoice.subscription) {
         const sub = await getStripe().subscriptions.retrieve(invoice.subscription);
         await upsertSubscriptionFromStripe(sub);
+        const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
+        if (userId) trackPaymentFailed(userId, { attempt_count: invoice.attempt_count ?? null });
       }
       break;
     }

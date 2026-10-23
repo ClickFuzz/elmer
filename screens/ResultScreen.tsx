@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
 import { getDeviceCheckToken } from '../storage/deviceCheck';
+import { Analytics } from '../services/analytics';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
@@ -120,10 +121,12 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   // Google post is generated server-side and saved to DB but not surfaced in this UI
   const googlePostRef = useRef('');
 
-  const generate = async () => {
+  const generate = async (isRegeneration = false) => {
     if (isGenerating.current) return;
     isGenerating.current = true;
     setState({ status: 'loading' });
+    const generationStartMs = Date.now();
+    if (!isRegeneration) Analytics.post_creation_started();
 
     // Load channels — prefer server-side (real OAuth connections) when signed in
     let channels: ConnectedChannel[] = [];
@@ -144,6 +147,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       ...(channels.some(ch => ch.platform === 'google')    ? ['google']    : []),
       ...(channels.some(ch => ch.platform === 'wordpress') ? ['wordpress'] : []),
     ];
+
+    Analytics.preview_generation_started(
+      isRegeneration ? 'regeneration' : 'first_preview',
+      platforms.length
+    );
 
     // Generate device token once — valid ~5 minutes, reused across retries.
     // Null on Android, simulator, or any DeviceCheck failure (server fails-open).
@@ -196,6 +204,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           ));
           if (result.status === 402) {
             isGenerating.current = false;
+            Analytics.second_preview_attempted(true, 'subscription_required');
             onShowSubscription?.();
             return;
           }
@@ -226,6 +235,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           }));
           if (response.status === 402) {
             isGenerating.current = false;
+            Analytics.second_preview_attempted(true, 'subscription_required');
             onShowSubscription?.();
             return;
           }
@@ -258,6 +268,12 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         setEditedWordpressTitle(data.seoMetadata?.seoTitle ?? extractMarkdownTitle(data.webContent ?? ''));
         setEditedLocation(loc);
 
+        Analytics.preview_generation_succeeded(
+          isRegeneration ? 'regeneration' : 'first_preview',
+          platforms.length,
+          Date.now() - generationStartMs
+        );
+
         saveJob({
           audioSourceUri: payload.audioUri,
           transcription: data.transcription ?? '',
@@ -278,6 +294,14 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           // continue to next attempt
         } else {
           const msg = err instanceof Error ? err.message : 'Unknown error';
+          const errorCategory = msg.includes('timed out') ? 'timeout'
+            : msg.includes('Network') ? 'network_error'
+            : msg.includes('Server error 5') ? 'server_error'
+            : 'unknown';
+          Analytics.preview_generation_failed(
+            isRegeneration ? 'regeneration' : 'first_preview',
+            errorCategory
+          );
           setState({ status: 'error', message: msg });
         }
       }
@@ -903,7 +927,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             <Text style={styles.errorIcon}>⚠️</Text>
             <Text style={styles.errorTitle}>Something went wrong</Text>
             <Text style={styles.errorMessage}>{state.message}</Text>
-            <TouchableOpacity style={styles.retryBtn} onPress={generate} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => generate()} activeOpacity={0.8}>
               <Text style={styles.retryBtnText}>Try Again</Text>
             </TouchableOpacity>
           </View>
@@ -1228,7 +1252,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               <Text style={styles.postEverywhereSubtext}>Connect channels in Settings</Text>
             )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.regenBtn} onPress={generate} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.regenBtn} onPress={() => generate(true)} activeOpacity={0.8}>
             <Text style={styles.regenBtnText}>Regenerate</Text>
           </TouchableOpacity>
         </View>

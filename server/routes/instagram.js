@@ -9,6 +9,7 @@ const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
+const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const {
   prepareForInstagram,
   prepareCarouselForInstagram,
@@ -599,7 +600,11 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       );
 
       cleanup();
-      if (freePubReserved) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
+      if (freePubReserved) {
+        const wasFirst = await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => false);
+        if (wasFirst) trackFreePublicationCompleted(req.userId, { platform: 'instagram' });
+      }
+      trackPublicationResult(req.userId, [{ ok: true }], 'instagram');
       return res.json({
         ok:          true,
         accountId:   igUserId,
@@ -613,6 +618,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       await markFailed(err.message);
       cleanup();
       if (freePubReserved) await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
+      trackPublicationResult(req.userId, [{ ok: false }], 'instagram');
       return res.json({
         ok:          false,
         accountId:   igUserId,

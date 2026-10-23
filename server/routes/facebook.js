@@ -10,6 +10,7 @@ const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
 const { orderWithFeaturedFirst } = require('./media-utils');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
+const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -536,9 +537,14 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
     const anyOk = results.some(r => r.ok);
 
     if (freePubReserved) {
-      if (anyOk) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
-      else await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
+      if (anyOk) {
+        const wasFirst = await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => false);
+        if (wasFirst) trackFreePublicationCompleted(req.userId, { platform: 'facebook' });
+      } else {
+        await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
+      }
     }
+    trackPublicationResult(req.userId, results, 'facebook');
 
     return res.status(200).json({ ok: anyOk, results });
   });

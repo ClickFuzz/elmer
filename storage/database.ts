@@ -228,9 +228,17 @@ export async function getSessionEmail(): Promise<string | null> {
   return getSetting('session_email');
 }
 
-export async function setSession(token: string, email: string): Promise<void> {
+export async function getSessionUserId(): Promise<number | null> {
+  const raw = await getSetting('session_user_id');
+  if (!raw) return null;
+  const id = parseInt(raw, 10);
+  return isNaN(id) ? null : id;
+}
+
+export async function setSession(token: string, email: string, userId?: number): Promise<void> {
   await SecureStore.setItemAsync(SECURE_TOKEN_KEY, token);
   await setSetting('session_email', email);
+  if (userId != null) await setSetting('session_user_id', String(userId));
   // Remove any legacy plaintext token that may exist from a prior install.
   const db = await getDb();
   await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
@@ -239,7 +247,7 @@ export async function setSession(token: string, email: string): Promise<void> {
 export async function clearSession(): Promise<void> {
   await SecureStore.deleteItemAsync(SECURE_TOKEN_KEY);
   const db = await getDb();
-  await db.runAsync(`DELETE FROM settings WHERE key IN ('session_token', 'session_email')`);
+  await db.runAsync(`DELETE FROM settings WHERE key IN ('session_token', 'session_email', 'session_user_id')`);
 }
 
 // ── Connected channels ────────────────────────────────────────────────────────

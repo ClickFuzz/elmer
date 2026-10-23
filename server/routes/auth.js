@@ -39,6 +39,7 @@ router.post('/register', wrap(async (req, res) => {
   const now   = Date.now();
   const token = randomBytes(32).toString('hex');
 
+  let newUserId;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -47,6 +48,7 @@ router.post('/register', wrap(async (req, res) => {
       'INSERT INTO users (email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4) RETURNING id',
       [normalizedEmail, hash, now, now]
     );
+    newUserId = user.id;
 
     await client.query(
       'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES ($1, $2, $3, $4)',
@@ -67,7 +69,7 @@ router.post('/register', wrap(async (req, res) => {
     client.release();
   }
 
-  return res.status(201).json({ token, expiresAt: now + SESSION_TTL_MS });
+  return res.status(201).json({ token, expiresAt: now + SESSION_TTL_MS, userId: newUserId });
 }));
 
 // ── POST /auth/login ───────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ router.post('/login', wrap(async (req, res) => {
     [user.id, token, now, now + SESSION_TTL_MS]
   );
 
-  return res.json({ token, expiresAt: now + SESSION_TTL_MS });
+  return res.json({ token, expiresAt: now + SESSION_TTL_MS, userId: user.id });
 }));
 
 // ── POST /auth/logout ──────────────────────────────────────────────────────

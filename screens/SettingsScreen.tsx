@@ -34,6 +34,7 @@ import {
   setInstagramExplanationShown,
   calculateStorageUsage,
 } from '../storage/database';
+import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -232,7 +233,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const handleSaveStyle = () => {
     Keyboard.dismiss();
     saveBusinessProfile(profile)
-      .then(() => { setSavedStyle(true); setTimeout(() => setSavedStyle(false), 2000); })
+      .then(() => {
+        setSavedStyle(true);
+        setTimeout(() => setSavedStyle(false), 2000);
+        Analytics.writing_style_updated();
+        if (profile.writingSamples?.trim()) Analytics.writing_examples_updated();
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         Alert.alert('Save failed', msg);
@@ -319,6 +325,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     }
 
     setGbpConnecting(true);
+    Analytics.platform_connection_started('google');
     try {
       const res = await fetch(`${API_URL}/google/connect-url`, {
         method: 'POST',
@@ -326,6 +333,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed('google', 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not start Google authorization.');
         return;
       }
@@ -339,6 +347,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         const error = params.get('error');
 
         if (error) {
+          Analytics.platform_connection_failed('google', 'oauth_error');
           if (error === 'no_business_accounts') {
             Alert.alert('No business accounts found', 'No Google Business accounts were found for your Google account. Make sure you have a verified Google Business Profile.');
             return;
@@ -352,6 +361,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         }
 
         if (params.get('success') === 'true') {
+          Analytics.platform_connection_succeeded('google');
           const count = parseInt(params.get('location_count') ?? '1', 10);
           await refreshGbpLocations(sessionToken);
           Alert.alert(
@@ -360,10 +370,13 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             [{ text: 'OK' }]
           );
         }
+      } else {
+        Analytics.platform_connection_failed('google', 'user_cancelled');
       }
 
       await refreshGbpLocations(sessionToken);
     } catch (err) {
+      Analytics.platform_connection_failed('google', 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setGbpConnecting(false);
@@ -425,6 +438,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     }
 
     setFbConnecting(true);
+    Analytics.platform_connection_started('facebook');
     try {
       const res = await fetch(`${API_URL}/facebook/connect-url`, {
         method: 'POST',
@@ -432,6 +446,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed('facebook', 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not start Facebook authorization.');
         return;
       }
@@ -445,6 +460,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         const error = params.get('error');
 
         if (error) {
+          Analytics.platform_connection_failed('facebook', 'oauth_error');
           if (error === 'no_manageable_pages' || error === 'insufficient_permissions') {
             Alert.alert(
               'No Facebook Pages found',
@@ -461,6 +477,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         }
 
         if (params.get('success') === 'true') {
+          Analytics.platform_connection_succeeded('facebook');
           const count = parseInt(params.get('page_count') ?? '1', 10);
           if (count > 1) {
             const warned = await getMultiPageWarningShown();
@@ -479,10 +496,13 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             [{ text: 'OK' }]
           );
         }
+      } else {
+        Analytics.platform_connection_failed('facebook', 'user_cancelled');
       }
 
       await refreshFbPages(sessionToken);
     } catch (err) {
+      Analytics.platform_connection_failed('facebook', 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setFbConnecting(false);
@@ -570,6 +590,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     }
 
     setIgConnecting(true);
+    Analytics.platform_connection_started('instagram');
     try {
       const res = await fetch(`${API_URL}/instagram/connect-url`, {
         method: 'POST',
@@ -577,6 +598,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed('instagram', 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not start Instagram authorization.');
         return;
       }
@@ -590,6 +612,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         const error = params.get('error');
 
         if (error) {
+          Analytics.platform_connection_failed('instagram', 'oauth_error');
           if (error === 'personal_account_not_supported') {
             Alert.alert(
               'Professional Instagram Account Required',
@@ -613,6 +636,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         }
 
         if (params.get('success') === 'true') {
+          Analytics.platform_connection_succeeded('instagram');
           await refreshIgAccount(sessionToken);
           const shown = await getInstagramExplanationShown();
           if (!shown) {
@@ -626,10 +650,13 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             Alert.alert('Instagram connected!', 'Your Instagram account has been connected.', [{ text: 'OK' }]);
           }
         }
+      } else {
+        Analytics.platform_connection_failed('instagram', 'user_cancelled');
       }
 
       await refreshIgAccount(sessionToken);
     } catch (err) {
+      Analytics.platform_connection_failed('instagram', 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setIgConnecting(false);
@@ -672,6 +699,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     }
 
     setThConnecting(true);
+    Analytics.platform_connection_started('threads');
     try {
       const res = await fetch(`${API_URL}/threads/connect-url`, {
         method: 'POST',
@@ -679,6 +707,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed('threads', 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not start Threads authorization.');
         return;
       }
@@ -692,18 +721,23 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         const error = params.get('error');
 
         if (error) {
+          Analytics.platform_connection_failed('threads', 'oauth_error');
           Alert.alert('Connection failed', `Threads returned: ${error}`);
           return;
         }
 
         if (params.get('success') === 'true') {
+          Analytics.platform_connection_succeeded('threads');
           await refreshThAccount(sessionToken);
           Alert.alert('Threads connected!', 'Your Threads account has been connected.', [{ text: 'OK' }]);
         }
+      } else {
+        Analytics.platform_connection_failed('threads', 'user_cancelled');
       }
 
       await refreshThAccount(sessionToken);
     } catch (err) {
+      Analytics.platform_connection_failed('threads', 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setThConnecting(false);
@@ -750,6 +784,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     }
 
     setWpConnecting(true);
+    Analytics.platform_connection_started('wordpress');
     try {
       const res = await fetch(`${API_URL}/wordpress/connect-url`, {
         method:  'POST',
@@ -758,6 +793,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed('wordpress', 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not reach your WordPress site.');
         return;
       }
@@ -770,23 +806,29 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         const error  = params.get('error');
         if (error) {
           if (error === 'rejected') {
+            Analytics.platform_connection_failed('wordpress', 'user_cancelled');
             Alert.alert('Authorization cancelled', 'You cancelled the WordPress authorization. Try again when ready.', [{ text: 'OK' }]);
           } else {
+            Analytics.platform_connection_failed('wordpress', 'oauth_error');
             Alert.alert('Connection failed', `WordPress returned: ${error}`);
           }
           return;
         }
         if (params.get('success') === 'true') {
+          Analytics.platform_connection_succeeded('wordpress');
           const siteName = params.get('site_name') ?? url;
           await refreshWpSites(sessionToken);
           setWpUrl('');
           setWpConnectOpen(false);
           Alert.alert('WordPress connected!', `"${siteName}" has been connected.`, [{ text: 'OK' }]);
         }
+      } else {
+        Analytics.platform_connection_failed('wordpress', 'user_cancelled');
       }
 
       await refreshWpSites(sessionToken);
     } catch (err) {
+      Analytics.platform_connection_failed('wordpress', 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setWpConnecting(false);

@@ -18,6 +18,7 @@ import {
   getBusinessProfile,
   saveBusinessProfile,
 } from '../storage/database';
+import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -74,7 +75,7 @@ function PlatformRow({
 
 type Props = {
   sessionToken: string | null;
-  onComplete: () => void;
+  onComplete: (platformConnectionsCount?: number) => void;
 };
 
 export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
@@ -103,6 +104,15 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
 
   // Step 3: completing
   const [completing, setCompleting] = useState(false);
+
+  // Fire onboarding_started once when wizard first mounts
+  const startedRef = useRef(false);
+  useEffect(() => {
+    if (!startedRef.current) {
+      startedRef.current = true;
+      Analytics.onboarding_started();
+    }
+  }, []);
 
   // Pre-populate from saved business profile
   useEffect(() => {
@@ -152,6 +162,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       categoryCustom: businessType.trim() || current.categoryCustom,
       location:      businessLocation.trim() || current.location,
     });
+    Analytics.onboarding_step_completed(1, 'business_info');
     setStep(2);
   };
 
@@ -165,6 +176,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   ) => {
     if (!sessionToken || !platform) return;
     setConnecting(platform);
+    Analytics.platform_connection_started(platform);
     try {
       const res  = await fetch(`${API_URL}${connectUrlPath}`, {
         method: 'POST',
@@ -172,6 +184,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       });
       const data = await res.json();
       if (!res.ok) {
+        Analytics.platform_connection_failed(platform, 'server_error');
         Alert.alert('Connection failed', data.error ?? 'Could not start authorization.');
         return;
       }
@@ -181,8 +194,11 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         const error  = params.get('error');
         if (error) { errorFn(error); return; }
         successFn(params);
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Analytics.platform_connection_failed(platform, 'user_cancelled');
       }
     } catch (err) {
+      Analytics.platform_connection_failed(platform, 'unexpected_error');
       Alert.alert('Connection failed', err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setConnecting(null);
@@ -192,7 +208,10 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const handleConnectFacebook = () =>
     openOAuth('facebook', '/facebook/connect-url',
       (params) => {
-        if (params.get('success') === 'true') setConnected(c => ({ ...c, facebook: true }));
+        if (params.get('success') === 'true') {
+          setConnected(c => ({ ...c, facebook: true }));
+          Analytics.platform_connection_succeeded('facebook');
+        }
       },
       (error) => {
         if (error === 'no_manageable_pages' || error === 'insufficient_permissions') {
@@ -213,7 +232,10 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const handleConnectInstagram = () =>
     openOAuth('instagram', '/instagram/connect-url',
       (params) => {
-        if (params.get('success') === 'true') setConnected(c => ({ ...c, instagram: true }));
+        if (params.get('success') === 'true') {
+          setConnected(c => ({ ...c, instagram: true }));
+          Analytics.platform_connection_succeeded('instagram');
+        }
       },
       (error) => {
         if (error === 'personal_account_not_supported') {
@@ -234,7 +256,10 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const handleConnectThreads = () =>
     openOAuth('threads', '/threads/connect-url',
       (params) => {
-        if (params.get('success') === 'true') setConnected(c => ({ ...c, threads: true }));
+        if (params.get('success') === 'true') {
+          setConnected(c => ({ ...c, threads: true }));
+          Analytics.platform_connection_succeeded('threads');
+        }
       },
       (error) => Alert.alert('Connection failed', `Threads returned: ${error}`)
     );
@@ -242,7 +267,10 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const handleConnectGoogle = () =>
     openOAuth('google', '/google/connect-url',
       (params) => {
-        if (params.get('success') === 'true') setConnected(c => ({ ...c, google: true }));
+        if (params.get('success') === 'true') {
+          setConnected(c => ({ ...c, google: true }));
+          Analytics.platform_connection_succeeded('google');
+        }
       },
       (error) => {
         if (error === 'no_business_accounts') {
@@ -288,6 +316,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         }
         if (params.get('success') === 'true') {
           setConnected(c => ({ ...c, wordpress: true }));
+          Analytics.platform_connection_succeeded('wordpress');
           setWpUrl('');
           setWpFormOpen(false);
         }
@@ -303,7 +332,8 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
 
   const handleFinish = async () => {
     setCompleting(true);
-    onComplete(); // App.tsx handles local save + server call
+    Analytics.onboarding_step_completed(3, 'create_first_post');
+    onComplete(connectedCount); // App.tsx handles local save + server call
   };
 
   const connectedCount = Object.values(connected).filter(Boolean).length;
@@ -470,12 +500,12 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
               )}
             </View>
 
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => setStep(3)} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => { Analytics.onboarding_step_completed(2, 'platform_connections'); setStep(3); }} activeOpacity={0.8}>
               <Text style={styles.primaryBtnText}>Continue</Text>
             </TouchableOpacity>
 
             {connectedCount === 0 && (
-              <TouchableOpacity style={styles.skipBtn} onPress={() => setStep(3)} activeOpacity={0.8}>
+              <TouchableOpacity style={styles.skipBtn} onPress={() => { Analytics.onboarding_step_completed(2, 'platform_connections'); setStep(3); }} activeOpacity={0.8}>
                 <Text style={styles.skipBtnText}>{"I'll Connect Later"}</Text>
               </TouchableOpacity>
             )}

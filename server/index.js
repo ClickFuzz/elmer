@@ -15,6 +15,7 @@ if (process.env.NODE_ENV === 'production' && !process.env.CREDENTIAL_ENCRYPTION_
 const { createApp } = require('./app');
 const { initDb, closeDb } = require('./db');
 const { logPendingDeviceUpdates, isDeviceCheckConfigured } = require('./routes/device');
+const { shutdown: analyticsShutdown } = require('./services/analytics');
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -33,6 +34,7 @@ async function start() {
 
   async function shutdown() {
     server.close(async () => {
+      await analyticsShutdown();
       await closeDb();
       process.exit(0);
     });

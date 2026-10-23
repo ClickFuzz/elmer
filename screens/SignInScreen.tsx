@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { colors } from '../constants/colors';
 import { setSession } from '../storage/database';
+import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -47,7 +48,11 @@ export default function SignInScreen({ onSignIn }: Props) {
         setError(data.error ?? 'Sign-in failed. Check your credentials and try again.');
         return;
       }
-      await setSession(data.token, emailTrimmed);
+      await setSession(data.token, emailTrimmed, data.userId ?? undefined);
+      if (data.userId) Analytics.identify(data.userId);
+      if (mode === 'register') {
+        Analytics.signup_completed({ signup_method: 'email', platform: 'mobile' });
+      }
       onSignIn();
     } catch {
       setError('Could not reach the server. Check your connection.');

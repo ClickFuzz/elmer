@@ -9,6 +9,7 @@ const multer     = require('multer');
 const { getPool }          = require('../db');
 const { requireAuth }      = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
+const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { encrypt, decrypt } = require('../crypto');
 const { orderWithFeaturedFirst } = require('./media-utils');
 
@@ -639,7 +640,11 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       );
 
       cleanup();
-      if (freePubReserved) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
+      if (freePubReserved) {
+        const wasFirst = await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => false);
+        if (wasFirst) trackFreePublicationCompleted(req.userId, { platform: 'wordpress' });
+      }
+      trackPublicationResult(req.userId, [{ ok: true }], 'wordpress');
       console.log('[wp] published post id=', postId, 'url=', postUrl, 'site=', siteUrl);
       return res.json({ ok: true, siteId, siteName: site.account_name, postId, postUrl });
 
@@ -648,6 +653,7 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       await markFailed(err.message);
       cleanup();
       if (freePubReserved) await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
+      trackPublicationResult(req.userId, [{ ok: false }], 'wordpress');
       return res.json({ ok: false, siteId, siteName: site.account_name, error: err.message });
     }
   });
