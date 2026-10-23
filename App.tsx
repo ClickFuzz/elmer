@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, getJobPhotos, getSessionToken, getSessionUserId, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, deleteSetting, getJobPhotos, getSessionToken, getSessionUserId, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
 import { Analytics } from './services/analytics';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -100,10 +100,12 @@ function AppShell() {
       }
       setIsAuthed(true);
       setAuthToken(tok);
-      const [status, localFlag, storedUserId] = await Promise.all([
+      const [status, localFlag, storedUserId, pendingGen, pendingState] = await Promise.all([
         fetchSubscriptionStatus(tok),
         getSetting('onboarding_completed'),
         getSessionUserId(),
+        getPendingGenerationFlag(),
+        getPendingHomeState(),
       ]);
       if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
@@ -111,10 +113,17 @@ function AppShell() {
         ? (status as SubscriptionStatus).onboardingCompleted === true
         : false;
       setIsOnboarded(localFlag === '1' || serverOnboarded);
+
+      // Restore pending generation intent (survives app termination during Stripe checkout).
+      // Reconstruct the payload from the persisted home state so ResultScreen can re-generate.
+      if (pendingState) {
+        setSavedHomeState(pendingState as HomeState);
+        if (pendingGen) {
+          setPendingGenerationAfterSubscription(true);
+          setPayload({ photos: (pendingState as HomeState).photos, audioUri: (pendingState as HomeState).audioUri });
+        }
+      }
     })();
-    getPendingHomeState().then(state => {
-      if (state) setSavedHomeState(state as HomeState);
-    });
     runAutoCleanup().catch(() => {});
   }, []);
 
@@ -144,6 +153,10 @@ function AppShell() {
       setIsOnboarded(null);
       setSavedHomeState(null);
       savePendingHomeState(null);
+      savePendingGenerationFlag(false).catch(() => {});
+      setPendingGenerationAfterSubscription(false);
+      // Clear account-specific local flags so the next account starts clean.
+      deleteSetting('onboarding_completed').catch(() => {});
     }
   };
 
@@ -161,6 +174,8 @@ function AppShell() {
         setSubscriptionStatus(status);
         setIsOnboarded(localFlag === '1' || serverOnboarded);
       }
+      // Clear the persisted flag regardless of outcome
+      savePendingGenerationFlag(false).catch(() => {});
       // If the user was paywalled mid-generation, return to result screen so it auto-generates.
       if (pendingGenerationAfterSubscription && payload) {
         setPendingGenerationAfterSubscription(false);
@@ -188,6 +203,8 @@ function AppShell() {
     setIsOnboarded(null);
     setSavedHomeState(null);
     savePendingHomeState(null);
+    savePendingGenerationFlag(false).catch(() => {});
+    deleteSetting('onboarding_completed').catch(() => {});
     setPendingGenerationAfterSubscription(false);
   };
 
@@ -216,6 +233,7 @@ function AppShell() {
     setPayload(data);
     // Fresh generation replaces any prior pending intent from a paywalled attempt.
     setPendingGenerationAfterSubscription(false);
+    savePendingGenerationFlag(false).catch(() => {});
     setScreen('result');
   };
 
@@ -317,6 +335,7 @@ function AppShell() {
             onShowSettings={() => { setSettingsReturnToResult(true); setScreen('settings'); }}
             onShowSubscription={() => {
               setPendingGenerationAfterSubscription(true);
+              savePendingGenerationFlag(true).catch(() => {});
               setScreen('subscription');
             }}
             hasFreePublicationAvailable={hasFreePublicationAvailable}

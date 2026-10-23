@@ -431,6 +431,8 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    const contentHash = crypto.createHash('sha256').update(title + '\n' + content).digest('hex');
+
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
       const isRetry = req.publishIsFreeRetry
@@ -522,19 +524,29 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       return res.status(500).json({ error: 'Database error', detail: err.message });
     }
 
-    // Retry authorization: for free-slot retries, this site must have a prior failed record.
+    // Retry authorization: for free-slot retries, this site must have a prior attempt record
+    // (failed or stuck-pending from a crash), and the content must not have changed.
     if (req.publishIsFreeRetry) {
       try {
-        const { rows: priorFailed } = await pool.query(
-          `SELECT 1 FROM publishing_records
-           WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+        const { rows: priorRecord } = await pool.query(
+          `SELECT content_hash FROM publishing_records
+           WHERE user_id = $1 AND job_ref = $2 AND status IN ('failed', 'pending')
+           ORDER BY created_at DESC LIMIT 1`,
           [req.userId, jobRef]
         );
-        if (priorFailed.length === 0) {
+        if (priorRecord.length === 0) {
           cleanup();
           return res.status(402).json({
             error: 'SUBSCRIPTION_REQUIRED',
             message: 'This site was not part of the original post.',
+          });
+        }
+        const storedHash = priorRecord[0].content_hash;
+        if (storedHash && storedHash !== contentHash) {
+          cleanup();
+          return res.status(422).json({
+            error: 'content_mismatch',
+            message: 'Post content has changed since the original attempt.',
           });
         }
       } catch (err) {
@@ -546,9 +558,9 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
     // Insert pending record
     const { rows: [record] } = await pool.query(
       `INSERT INTO publishing_records
-         (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
-       VALUES ($1, 'wordpress', $2, $3, 'pending', $4, $5) RETURNING id`,
-      [req.userId, jobRef, job_id, now, now]
+         (user_id, platform, job_ref, client_job_id, content_hash, status, created_at, updated_at)
+       VALUES ($1, 'wordpress', $2, $3, $4, 'pending', $5, $6) RETURNING id`,
+      [req.userId, jobRef, job_id, contentHash, now, now]
     );
     const recordId = record.id;
 

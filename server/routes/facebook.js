@@ -1,7 +1,7 @@
 'use strict';
 
 const { Router }      = require('express');
-const { randomBytes } = require('crypto');
+const { randomBytes, createHash } = require('crypto');
 const fs              = require('fs');
 const path            = require('path');
 const multer          = require('multer');
@@ -280,6 +280,8 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    const contentHash = createHash('sha256').update(message).digest('hex');
+
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
       // Allow retry if the free slot was already redeemed for this exact job
@@ -378,21 +380,32 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         continue;
       }
 
-      // Retry authorization: for free-slot retries, this page must have a prior failed record.
-      // Prevents adding new destinations to an already-redeemed publishing job.
+      // Retry authorization: for free-slot retries, this page must have a prior attempt record
+      // (failed or stuck-pending from a crash), and the content must not have changed.
       if (req.publishIsFreeRetry) {
         try {
-          const { rows: priorFailed } = await pool.query(
-            `SELECT 1 FROM publishing_records
-             WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+          const { rows: priorRecord } = await pool.query(
+            `SELECT content_hash FROM publishing_records
+             WHERE user_id = $1 AND job_ref = $2 AND status IN ('failed', 'pending')
+             ORDER BY created_at DESC LIMIT 1`,
             [req.userId, jobRef]
           );
-          if (priorFailed.length === 0) {
+          if (priorRecord.length === 0) {
             results.push({
               pageId: pageRow.account_id,
               pageName: pageRow.account_name,
               ok: false,
               error: 'This page was not part of the original post.',
+            });
+            continue;
+          }
+          const storedHash = priorRecord[0].content_hash;
+          if (storedHash && storedHash !== contentHash) {
+            results.push({
+              pageId: pageRow.account_id,
+              pageName: pageRow.account_name,
+              ok: false,
+              error: 'Post content has changed since the original attempt.',
             });
             continue;
           }
@@ -427,9 +440,9 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       try {
         const { rows: [record] } = await pool.query(
           `INSERT INTO publishing_records
-             (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
-           VALUES ($1, 'facebook', $2, $3, 'pending', $4, $5) RETURNING id`,
-          [req.userId, jobRef, job_id, now, now]
+             (user_id, platform, job_ref, client_job_id, content_hash, status, created_at, updated_at)
+           VALUES ($1, 'facebook', $2, $3, $4, 'pending', $5, $6) RETURNING id`,
+          [req.userId, jobRef, job_id, contentHash, now, now]
         );
         recordId = record.id;
 

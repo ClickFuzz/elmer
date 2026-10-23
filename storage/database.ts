@@ -205,6 +205,11 @@ export async function setSetting(key: string, value: string): Promise<void> {
   );
 }
 
+export async function deleteSetting(key: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM settings WHERE key = ?`, [key]);
+}
+
 // ── Session token (Elmer account) ─────────────────────────────────────────────
 // Token is stored in SecureStore (Keychain/Keystore); email stays in SQLite.
 
@@ -338,6 +343,23 @@ export async function savePendingHomeState(state: PendingHomeState | null): Prom
     return;
   }
   await setSetting('pending_home_state', JSON.stringify(state));
+}
+
+// Persists the pending-generation-after-subscription intent across app termination.
+// Set to '1' when the user is paywalled mid-generation and sent to SubscriptionScreen.
+// Cleared on sign-out, on successful subscription return, or when a new generation starts.
+export async function savePendingGenerationFlag(value: boolean): Promise<void> {
+  if (!value) {
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM settings WHERE key = 'pending_generation_after_subscription'`);
+    return;
+  }
+  await setSetting('pending_generation_after_subscription', '1');
+}
+
+export async function getPendingGenerationFlag(): Promise<boolean> {
+  const raw = await getSetting('pending_generation_after_subscription');
+  return raw === '1';
 }
 
 export async function getConnectedChannels(): Promise<ConnectedChannel[]> {

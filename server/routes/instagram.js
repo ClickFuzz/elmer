@@ -1,7 +1,7 @@
 'use strict';
 
 const { Router }      = require('express');
-const { randomBytes } = require('crypto');
+const { randomBytes, createHash } = require('crypto');
 const fs              = require('fs');
 const path            = require('path');
 const multer          = require('multer');
@@ -290,6 +290,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    const contentHash = createHash('sha256').update(caption).digest('hex');
+
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
       const isRetry = req.publishIsFreeRetry
@@ -429,19 +431,29 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       return res.status(500).json({ error: 'Database error', detail: err.message });
     }
 
-    // Retry authorization: for free-slot retries, this destination must have a prior failed record.
+    // Retry authorization: for free-slot retries, this destination must have a prior attempt record
+    // (failed or stuck-pending from a crash), and the content must not have changed.
     if (req.publishIsFreeRetry) {
       try {
-        const { rows: priorFailed } = await getPool().query(
-          `SELECT 1 FROM publishing_records
-           WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+        const { rows: priorRecord } = await getPool().query(
+          `SELECT content_hash FROM publishing_records
+           WHERE user_id = $1 AND job_ref = $2 AND status IN ('failed', 'pending')
+           ORDER BY created_at DESC LIMIT 1`,
           [req.userId, jobRef]
         );
-        if (priorFailed.length === 0) {
+        if (priorRecord.length === 0) {
           cleanup();
           return res.status(402).json({
             error: 'SUBSCRIPTION_REQUIRED',
             message: 'This destination was not part of the original post.',
+          });
+        }
+        const storedHash = priorRecord[0].content_hash;
+        if (storedHash && storedHash !== contentHash) {
+          cleanup();
+          return res.status(422).json({
+            error: 'content_mismatch',
+            message: 'Post content has changed since the original attempt.',
           });
         }
       } catch (err) {
@@ -492,9 +504,9 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
     // Insert pending publishing record
     const { rows: [record] } = await pool.query(
       `INSERT INTO publishing_records
-         (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
-       VALUES ($1, 'instagram', $2, $3, 'pending', $4, $5) RETURNING id`,
-      [req.userId, jobRef, job_id, now, now]
+         (user_id, platform, job_ref, client_job_id, content_hash, status, created_at, updated_at)
+       VALUES ($1, 'instagram', $2, $3, $4, 'pending', $5, $6) RETURNING id`,
+      [req.userId, jobRef, job_id, contentHash, now, now]
     );
     const recordId = record.id;
 

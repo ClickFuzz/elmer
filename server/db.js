@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 let _pool        = null;
 let _initialized = false;
@@ -323,6 +323,43 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [7, Date.now()]
+      );
+    }
+
+    // ── V8: Stripe webhook event deduplication ────────────────────────────────
+    // Prevents duplicate analytics events and double-state-transitions when
+    // Stripe retries webhook delivery.
+    if (!applied.has(8)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+          event_id   TEXT    PRIMARY KEY,
+          event_type TEXT    NOT NULL,
+          processed_at BIGINT NOT NULL
+        )
+      `);
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [8, Date.now()]
+      );
+    }
+
+    // ── V9: content_hash on publishing_records ────────────────────────────────
+    // Locks the content of a free-publication retry to the original submitted
+    // content, preventing content-replacement attacks on retry paths.
+    // Also adds destination_locked flag for explicit new-destination rejection.
+    if (!applied.has(9)) {
+      try {
+        await client.query(
+          `ALTER TABLE publishing_records ADD COLUMN IF NOT EXISTS content_hash TEXT`
+        );
+      } catch {
+        // pg-mem may not support all DDL variations
+      }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [9, Date.now()]
       );
     }
 

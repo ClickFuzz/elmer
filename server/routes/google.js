@@ -1,7 +1,7 @@
 'use strict';
 
 const { Router }      = require('express');
-const { randomBytes } = require('crypto');
+const { randomBytes, createHash } = require('crypto');
 const fs              = require('fs');
 const path            = require('path');
 const multer          = require('multer');
@@ -413,6 +413,8 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       return res.status(400).json({ error: 'job_id is required' });
     }
 
+    const contentHash = createHash('sha256').update(message).digest('hex');
+
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
       const isRetry = req.publishIsFreeRetry
@@ -513,20 +515,32 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         continue;
       }
 
-      // Retry authorization: for free-slot retries, this location must have a prior failed record.
+      // Retry authorization: for free-slot retries, this location must have a prior attempt record
+      // (failed or stuck-pending from a crash), and the content must not have changed.
       if (req.publishIsFreeRetry) {
         try {
-          const { rows: priorFailed } = await pool.query(
-            `SELECT 1 FROM publishing_records
-             WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+          const { rows: priorRecord } = await pool.query(
+            `SELECT content_hash FROM publishing_records
+             WHERE user_id = $1 AND job_ref = $2 AND status IN ('failed', 'pending')
+             ORDER BY created_at DESC LIMIT 1`,
             [req.userId, jobRef]
           );
-          if (priorFailed.length === 0) {
+          if (priorRecord.length === 0) {
             results.push({
               locationId: locRow.account_id,
               locationName: locRow.account_name,
               ok: false,
               error: 'This location was not part of the original post.',
+            });
+            continue;
+          }
+          const storedHash = priorRecord[0].content_hash;
+          if (storedHash && storedHash !== contentHash) {
+            results.push({
+              locationId: locRow.account_id,
+              locationName: locRow.account_name,
+              ok: false,
+              error: 'Post content has changed since the original attempt.',
             });
             continue;
           }
@@ -559,9 +573,9 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         }
 
         const { rows: [record] } = await pool.query(
-          `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
-           VALUES ($1, 'google', $2, $3, 'pending', $4, $5) RETURNING id`,
-          [req.userId, jobRef, job_id, now, now]
+          `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, content_hash, status, created_at, updated_at)
+           VALUES ($1, 'google', $2, $3, $4, 'pending', $5, $6) RETURNING id`,
+          [req.userId, jobRef, job_id, contentHash, now, now]
         );
         recordId = record.id;
 

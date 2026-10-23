@@ -443,6 +443,29 @@ async function getUserIdByCustomer(customerId) {
 }
 
 async function handleWebhookEvent(event) {
+  // Idempotency: ignore events already processed (Stripe retries on non-2xx responses).
+  if (event.id) {
+    const pool = getPool();
+    try {
+      const now = Date.now();
+      const result = await pool.query(
+        `INSERT INTO stripe_webhook_events (event_id, event_type, processed_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (event_id) DO NOTHING`,
+        [event.id, event.type, now]
+      );
+      if (result.rowCount === 0) {
+        // Already processed — safe to skip
+        console.log(`[billing] webhook duplicate ignored: ${event.id} (${event.type})`);
+        return;
+      }
+    } catch (err) {
+      // If the table doesn't exist yet (migration pending), proceed without dedup
+      // rather than blocking all webhook processing.
+      console.warn(`[billing] webhook dedup check failed (proceeding): ${err.message}`);
+    }
+  }
+
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object;
@@ -761,4 +784,5 @@ module.exports = {
   redeemFreePublication,
   releaseFreePublicationIfNoSuccess,
   checkFreeRetryAllowed,
+  handleWebhookEvent,
 };

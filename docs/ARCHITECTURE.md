@@ -143,7 +143,7 @@ CREATE TABLE settings (
 ## Server-Side Database Schema (PostgreSQL)
 
 **Connection:** `DATABASE_URL` environment variable (Railway provides this automatically)  
-**Schema version: 2** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
+**Schema version: 9** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
 
 ```sql
 CREATE TABLE users (
@@ -821,6 +821,16 @@ Mobile                          Elmer Server                  Google OAuth
 - **33 automated tests** (connect-url, callback state validation, callback success, locations list, selection, media serving, publish — including idempotency, cross-user isolation, reconnect on 401) — all passing (`server/test/google.test.js`).
 - **341 total automated tests** — all passing.
 
+### Implemented (Phase 10 — Production readiness, security fixes)
+
+- **Stripe webhook deduplication** (`server/routes/billing.js`, V8 migration in `server/db.js`): New `stripe_webhook_events` table (`event_id TEXT PRIMARY KEY`). `handleWebhookEvent` inserts the event ID via `INSERT ... ON CONFLICT DO NOTHING` at the top of every handled event; if `rowCount === 0` the event was already processed — returns early without re-applying side-effects. Fail-open: table-access errors are logged and processing continues.
+- **Free-publication content hash** (`server/routes/{facebook,instagram,threads,wordpress,google}.js`, V9 migration): Added `content_hash TEXT` column to `publishing_records`. Each publish route computes SHA-256 of its primary content field and stores it at INSERT time. On a free retry (`req.publishIsFreeRetry`), if the stored hash exists and differs from the incoming request, the retry is rejected with 409.
+- **Destination locking improvement** (all 5 publish routes): Free-retry validation query changed from `status = 'failed'` to `status IN ('failed', 'pending')` so stuck-pending records caused by server crashes mid-publish also satisfy the prior-attempt requirement. This prevents new destinations from being silently added to a retry.
+- **Draft persistence across app termination** (`storage/database.ts`, `App.tsx`): Added `savePendingGenerationFlag` / `getPendingGenerationFlag` / `deleteSetting` to the SQLite layer. When the user taps Generate while unsubscribed, the intent is written to SQLite as `pending_generation_after_subscription = '1'`. On startup, if both the flag and `pending_home_state` are present, `payload` is reconstructed from the saved state and `pendingGenerationAfterSubscription` is set — so ResultScreen auto-generates immediately after returning from a Stripe checkout that terminated the app process.
+- **Onboarding cross-account leakage fix** (`App.tsx`): `deleteSetting('onboarding_completed')` is now called in both sign-out paths (`handleAuthChange(false)` and `handleSubscriptionSignOut`). Previously, the onboarding-completed flag was never cleared on sign-out, so a second user on the same device would inherit the first user's completed onboarding state.
+- **10 targeted security tests** (`server/test/security.test.js`): Stripe webhook deduplication (3 tests), content hash storage and validation (2 tests), destination locking (3 tests), HTTP webhook endpoint deduplication (2 tests). All passing.
+- **436 total automated tests** — all passing.
+
 ### Requires live credentials before functional testing
 
 - Facebook OAuth callback requires `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI` in `server/.env`.
@@ -840,7 +850,7 @@ Mobile                          Elmer Server                  Google OAuth
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
