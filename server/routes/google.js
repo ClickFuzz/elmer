@@ -412,8 +412,14 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       return res.status(400).json({ error: 'job_id is required' });
     }
 
-    // Track free publication usage — non-blocking; enforcement added in a later phase
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
+    if (!req.publishIsSubscribed && !freePubReserved) {
+      cleanup();
+      return res.status(402).json({
+        error: 'SUBSCRIPTION_REQUIRED',
+        message: 'Your free post has been used. Start a trial to keep posting.',
+      });
+    }
 
     const pool      = getPool();
     const now       = Date.now();

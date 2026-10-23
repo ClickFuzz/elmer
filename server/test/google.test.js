@@ -408,16 +408,23 @@ describe('POST /google/publish', () => {
     assert.equal(res.status, 401);
   });
 
-  it('returns 402 without active subscription', async () => {
+  it('returns 402 SUBSCRIPTION_REQUIRED when free publication is redeemed and no subscription', async () => {
     app = createApp();
     const email = 'nosub_gbp@example.com';
     await request(app).post('/auth/register').send({ email, password: 'password123' });
     const login = await request(app).post('/auth/login').send({ email, password: 'password123' });
+    // Mark free publication as redeemed to simulate a user who already used their free post
+    const { rows } = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [rows[0].id, Date.now()]
+    );
     const res = await request(app)
       .post('/google/publish')
       .set('Authorization', `Bearer ${login.body.token}`)
       .send({ message: 'hi', job_id: '1' });
     assert.equal(res.status, 402);
+    assert.equal(res.body.error, 'SUBSCRIPTION_REQUIRED');
   });
 
   it('returns 422 when no locations are selected', async () => {

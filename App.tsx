@@ -39,6 +39,9 @@ export type HomeState = {
 
 export type AppScreen = 'home' | 'result' | 'settings' | 'history' | 'managedata' | 'subscription';
 
+// Entitlement access values that grant app use without a subscription
+const FREE_ACCESS_VALUES = new Set(['free_available', 'free_reserved']);
+
 type NavItemProps = {
   iconActive: React.ComponentProps<typeof Ionicons>['name'];
   iconInactive: React.ComponentProps<typeof Ionicons>['name'];
@@ -185,9 +188,11 @@ function AppShell() {
   }
 
   // Subscription gate: show offer / management screen when user has no access
+  // Users with a free publication available or reserved can use the app without a subscription.
   const subStatus = subscriptionStatus as SubscriptionStatus | false;
   const hasSubscriptionAccess = subStatus && subStatus.hasAccess;
-  if (!hasSubscriptionAccess || screen === 'subscription') {
+  const hasFreeAccess = subStatus && FREE_ACCESS_VALUES.has((subStatus as any).entitlement?.access);
+  if ((!hasSubscriptionAccess && !hasFreeAccess) || screen === 'subscription') {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
         <StatusBar style="light" />
@@ -217,6 +222,7 @@ function AppShell() {
             onBack={() => { setDraftJob(null); setScreen(draftJob ? 'history' : 'home'); }}
             onPublishComplete={handlePublishComplete}
             onShowSettings={() => setScreen('settings')}
+            onShowSubscription={() => setScreen('subscription')}
           />
         )}
         {screen === 'settings' && (

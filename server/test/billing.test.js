@@ -343,17 +343,19 @@ describe('POST /billing/webhook', () => {
   });
 });
 
-// ── requireSubscription middleware ────────────────────────────────────────────
+// ── Generation entitlement (requireGenerationAccess) ─────────────────────────
 
-describe('requireSubscription (via /api/generate)', () => {
-  it('returns 402 for authenticated user without subscription', async () => {
+describe('requireGenerationAccess (via /api/generate)', () => {
+  it('allows generate for new user with free_available', async () => {
+    // A freshly registered user has free_available — no subscription required
     const token = await register();
     const res   = await request(app)
       .post('/api/generate')
       .set('Authorization', `Bearer ${token}`)
       .send({ photoCount: '0' });
-    assert.strictEqual(res.status, 402);
-    assert.strictEqual(res.body.error, 'subscription_required');
+    // With no OPENAI_API_KEY, server returns the mock response (200)
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.mock, true);
   });
 
   it('allows generate for user with active subscription', async () => {
@@ -366,20 +368,93 @@ describe('requireSubscription (via /api/generate)', () => {
       .post('/api/generate')
       .set('Authorization', `Bearer ${token}`)
       .send({ photoCount: '0' });
-    // With no OPENAI_API_KEY, server returns the mock response (200)
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.mock, true);
   });
 
-  it('returns 402 for publish endpoints without subscription', async () => {
+  it('returns 402 SUBSCRIPTION_REQUIRED for user whose free publication is redeemed', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    // Simulate the free publication having been redeemed
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+
+    const res = await request(app)
+      .post('/api/generate')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ photoCount: '0' });
+    assert.strictEqual(res.status, 402);
+    assert.strictEqual(res.body.error, 'SUBSCRIPTION_REQUIRED');
+  });
+
+  it('allows generate for user with free_reserved (same job in-flight)', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    // Simulate a free publication reserved for job "42"
+    await getPool().query(
+      `UPDATE free_publications SET status = 'reserved', job_key = '42', reserved_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+
+    const res = await request(app)
+      .post('/api/generate')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ photoCount: '0' });
+    // free_reserved passes generation entitlement check
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.mock, true);
+  });
+});
+
+// ── Publish entitlement (requirePublishPreliminaryAccess) ─────────────────────
+
+describe('requirePublishPreliminaryAccess (publish endpoints)', () => {
+  it('passes through a new user with free_available (receives 400 for missing fields, not 402)', async () => {
     const token = await register();
 
-    // Facebook publish — subscription check fires before router auth
+    // A user with free_available passes the preliminary check and reaches the handler
+    // (which returns 400 for missing required fields — not 402)
+    const fbRes = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.notStrictEqual(fbRes.status, 402);
+
+    const igRes = await request(app)
+      .post('/instagram/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.notStrictEqual(igRes.status, 402);
+
+    const thRes = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.notStrictEqual(thRes.status, 402);
+
+    const wpRes = await request(app)
+      .post('/wordpress/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.notStrictEqual(wpRes.status, 402);
+  });
+
+  it('returns 402 SUBSCRIPTION_REQUIRED for user with redeemed free publication', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+
     const fbRes = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
       .send({});
     assert.strictEqual(fbRes.status, 402);
+    assert.strictEqual(fbRes.body.error, 'SUBSCRIPTION_REQUIRED');
 
     const igRes = await request(app)
       .post('/instagram/publish')
@@ -398,6 +473,20 @@ describe('requireSubscription (via /api/generate)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({});
     assert.strictEqual(wpRes.status, 402);
+  });
+
+  it('allows publish endpoints for user with active subscription', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    const custId = await seedStripeCustomer(userId);
+    await seedSubscription(userId, custId, { status: 'trialing' });
+
+    // Reaches the handler (returns 400 for missing fields, not 402)
+    const fbRes = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    assert.notStrictEqual(fbRes.status, 402);
   });
 });
 

@@ -60,6 +60,48 @@ async function requireSubscription(req, res, next) {
   }
 }
 
+// Middleware: allow generation for subscribers OR users with an unused free publication.
+// Sets nothing on req — generation does not reserve the free slot.
+async function requireGenerationAccess(req, res, next) {
+  if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
+  try {
+    const { access } = await getEntitlement(req.userId);
+    if (access === 'subscription' || access === 'free_available' || access === 'free_reserved') {
+      return next();
+    }
+    return res.status(402).json({
+      error: 'SUBSCRIPTION_REQUIRED',
+      message: 'Your free post has been used. Start a trial to keep posting.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Middleware: preliminary access check for publish endpoints (fires before multer).
+// Sets req.publishIsSubscribed = true for paying users, false for free-publication users.
+// Blocked users (free slot redeemed, no subscription) receive 402 immediately.
+async function requirePublishPreliminaryAccess(req, res, next) {
+  if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
+  try {
+    const { access } = await getEntitlement(req.userId);
+    if (access === 'subscription') {
+      req.publishIsSubscribed = true;
+      return next();
+    }
+    if (access === 'free_available' || access === 'free_reserved') {
+      req.publishIsSubscribed = false;
+      return next();
+    }
+    return res.status(402).json({
+      error: 'SUBSCRIPTION_REQUIRED',
+      message: 'Your free post has been used. Start a trial to keep posting.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Free-publication entitlement ──────────────────────────────────────────────
 
 // Returns a structured entitlement for a user, checking subscription first.
@@ -545,6 +587,8 @@ function createBillingRouter() {
 module.exports = {
   createBillingRouter,
   requireSubscription,
+  requireGenerationAccess,
+  requirePublishPreliminaryAccess,
   hasAccess,
   getEntitlement,
   tryReserveFreePublication,

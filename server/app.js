@@ -9,7 +9,7 @@ const rateLimit = require('express-rate-limit');
 
 // db initialisation happens in index.js (initDb) before createApp is called
 const { requireAuth, optionalAuth }           = require('./auth');
-const { createBillingRouter, requireSubscription } = require('./routes/billing');
+const { createBillingRouter, requireGenerationAccess, requirePublishPreliminaryAccess } = require('./routes/billing');
 const authRoutes                              = require('./routes/auth');
 const platformRoutes                          = require('./routes/platforms');
 const { createFacebookRouter }                = require('./routes/facebook');
@@ -52,8 +52,12 @@ if (DISABLE_AUTH && process.env.NODE_ENV === 'production') {
 }
 
 const generateAuth = DISABLE_AUTH ? optionalAuth : requireAuth;
-// When auth is disabled (local dev), skip subscription checks too
-const subscriptionGuard = DISABLE_AUTH ? (_req, _res, next) => next() : requireSubscription;
+// Generation: allow subscribers OR users with an unused free publication
+const generationGuard   = DISABLE_AUTH ? (_req, _res, next) => next() : requireGenerationAccess;
+// Publish preliminary: same entitlement check; also sets req.publishIsSubscribed
+const publishGuard      = DISABLE_AUTH
+  ? (req, _res, next) => { req.publishIsSubscribed = true; next(); }
+  : requirePublishPreliminaryAccess;
 
 if (DISABLE_AUTH) {
   console.warn('[elmer] DISABLE_AUTH=true — /api/generate accepts unauthenticated requests');
@@ -258,13 +262,14 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
   app.use('/platforms', platformRoutes);
   app.use('/billing',   billingRouter ?? createBillingRouter());
 
-  // Subscription entitlement guards for platform publish endpoints.
+  // Entitlement guards for platform publish endpoints.
   // MUST be registered before the platform routers so they fire first.
-  app.post('/facebook/publish',  requireAuth, subscriptionGuard, (_req, _res, next) => next());
-  app.post('/instagram/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
-  app.post('/threads/publish',   requireAuth, subscriptionGuard, (_req, _res, next) => next());
-  app.post('/wordpress/publish', requireAuth, subscriptionGuard, (_req, _res, next) => next());
-  app.post('/google/publish',    requireAuth, subscriptionGuard, (_req, _res, next) => next());
+  // publishGuard sets req.publishIsSubscribed for use inside platform handlers.
+  app.post('/facebook/publish',  requireAuth, publishGuard, (_req, _res, next) => next());
+  app.post('/instagram/publish', requireAuth, publishGuard, (_req, _res, next) => next());
+  app.post('/threads/publish',   requireAuth, publishGuard, (_req, _res, next) => next());
+  app.post('/wordpress/publish', requireAuth, publishGuard, (_req, _res, next) => next());
+  app.post('/google/publish',    requireAuth, publishGuard, (_req, _res, next) => next());
 
   app.use('/facebook',  facebookRouter   ?? createFacebookRouter());
   app.use('/instagram', instagramRouter  ?? createInstagramRouter());
@@ -278,7 +283,7 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
 
   // ── POST /api/generate ─────────────────────────────────────────────────────
 
-  app.post('/api/generate', generateRateLimit, generateAuth, subscriptionGuard, optionalAudioUpload, async (req, res) => {
+  app.post('/api/generate', generateRateLimit, generateAuth, generationGuard, optionalAudioUpload, async (req, res) => {
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     const photoCount     = parseInt(req.body.photoCount ?? '0', 10);
     const audioFile      = req.file ?? null;

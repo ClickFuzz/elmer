@@ -22,6 +22,7 @@ const BILLING_RETURN_PREFIX = 'elmer://billing/return';
 
 export type SubscriptionStatus = {
   hasAccess: boolean;
+  entitlement?: { access: string };
   subscription: {
     status: string;
     currentPeriodStart: number | null;
@@ -261,11 +262,12 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   }
 
   const sub = status?.subscription ?? null;
-  const isSubscribed = sub !== null;
-  const isTrialing   = sub?.status === 'trialing';
-  const isActive     = sub?.status === 'active';
-  const isCanceled   = sub?.status === 'canceled' || sub?.status === 'unpaid' || sub?.status === 'paused';
-  const trialUsed    = sub?.trialUsed ?? false;
+  const isSubscribed   = sub !== null;
+  const isTrialing     = sub?.status === 'trialing';
+  const isActive       = sub?.status === 'active';
+  const isCanceled     = sub?.status === 'canceled' || sub?.status === 'unpaid' || sub?.status === 'paused';
+  const trialUsed      = sub?.trialUsed ?? false;
+  const freePostUsed   = status?.entitlement?.access === 'free_redeemed';
 
   const formatDate = (ms: number | null) => {
     if (!ms) return '';
@@ -298,10 +300,12 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       {!isSubscribed || isCanceled ? (
         <View style={styles.offerCard}>
           <Text style={styles.offerHeadline}>
-            14 days free, then $19/month.
+            {freePostUsed ? 'Keep posting with Elmer.' : '14 days free, then $19/month.'}
           </Text>
           <Text style={styles.offerBody}>
-            Create and publish content across your connected platforms. All features included. Cancel anytime.
+            {freePostUsed
+              ? 'Your first post was free. Start your 14-day free trial to keep sharing your updates.'
+              : 'Create and publish content across your connected platforms. All features included. Cancel anytime.'}
           </Text>
 
           {checkoutLoading ? (
@@ -318,7 +322,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
               activeOpacity={0.85}
             >
               <Text style={styles.ctaBtnText}>
-                {trialUsed ? 'Subscribe — $19/month' : 'Start 14-Day Free Trial'}
+                {trialUsed ? 'Subscribe — $19/month' : 'Start My Free Trial'}
               </Text>
             </TouchableOpacity>
           )}

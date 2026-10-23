@@ -48,6 +48,7 @@ type Props = {
   onBack: () => void;
   onPublishComplete?: () => void;
   onShowSettings: () => void;
+  onShowSubscription?: () => void;
 };
 
 type SuccessData = {
@@ -95,7 +96,7 @@ type PublishState =
   | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
-export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings }: Props) {
+export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings, onShowSubscription }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedThreads, setEditedThreads] = useState('');
@@ -183,6 +184,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               },
             }
           ));
+          if (result.status === 402) {
+            isGenerating.current = false;
+            onShowSubscription?.();
+            return;
+          }
           if (result.status < 200 || result.status >= 300) {
             throw new Error(`Server error ${result.status}: ${result.body}`);
           }
@@ -207,6 +213,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               platforms,
             }),
           }));
+          if (response.status === 402) {
+            isGenerating.current = false;
+            onShowSubscription?.();
+            return;
+          }
           if (!response.ok) {
             const text = await response.text();
             throw new Error(`Server error ${response.status}: ${text}`);
