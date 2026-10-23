@@ -9,7 +9,7 @@ const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
 const { orderWithFeaturedFirst } = require('./media-utils');
-const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess } = require('./billing');
+const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -281,11 +281,17 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
-      cleanup();
-      return res.status(402).json({
-        error: 'SUBSCRIPTION_REQUIRED',
-        message: 'Your free post has been used. Start a trial to keep posting.',
-      });
+      // Allow retry if the free slot was already redeemed for this exact job
+      const isRetry = req.publishIsFreeRetry
+        ? await checkFreeRetryAllowed(req.userId, job_id).catch(() => false)
+        : false;
+      if (!isRetry) {
+        cleanup();
+        return res.status(402).json({
+          error: 'SUBSCRIPTION_REQUIRED',
+          message: 'Your free post has been used. Start a trial to keep posting.',
+        });
+      }
     }
 
     const pool = getPool();

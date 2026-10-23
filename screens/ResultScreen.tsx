@@ -47,6 +47,7 @@ type Props = {
   draftJob?: Job | null;
   onBack: () => void;
   onPublishComplete?: () => void;
+  onPublishSuccess?: () => void;
   onShowSettings: () => void;
   onShowSubscription?: () => void;
   hasFreePublicationAvailable?: boolean;
@@ -97,7 +98,7 @@ type PublishState =
   | { status: 'success'; results: PageResult[] }
   | { status: 'error'; message: string };
 
-export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onShowSettings, onShowSubscription, hasFreePublicationAvailable }: Props) {
+export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onPublishSuccess, onShowSettings, onShowSubscription, hasFreePublicationAvailable }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [editedSocial, setEditedSocial] = useState('');
   const [editedThreads, setEditedThreads] = useState('');
@@ -114,6 +115,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [savedJobId, setSavedJobId] = useState<number | null>(draftJob?.id ?? null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isGenerating = useRef(false);
+  const wasFirstFreePost = useRef(false);
   // Google post is generated server-side and saved to DB but not surfaced in this UI
   const googlePostRef = useRef('');
 
@@ -690,6 +692,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       `Post to: ${channelList}`,
       [
         { text: 'Post', onPress: async () => {
+          wasFirstFreePost.current = hasFreePublicationAvailable === true;
           setPublishState({ status: 'publishing' });
           try {
             const tasks: Promise<PageResult[]>[] = [];
@@ -708,6 +711,8 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                 allResults.push({ pageId: 'unknown', pageName: 'Unknown', platform: 'unknown', ok: false, error: s.reason?.message ?? 'Publishing failed' });
               }
             }
+            const anySuccess = allResults.some(r => r.ok);
+            if (anySuccess) onPublishSuccess?.();
             setPublishState({ status: 'success', results: allResults });
 
             if (savedJobId != null) {
@@ -747,7 +752,32 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
   // Full-screen confirmation after a successful publish
   if (publishState.status === 'success') {
-    const anyOk = publishState.results.some(r => r.ok);
+    const anyOk      = publishState.results.some(r => r.ok);
+    const anyFailed  = publishState.results.some(r => !r.ok);
+    const isFirstFreePost = wasFirstFreePost.current && anyOk;
+
+    const heading = isFirstFreePost
+      ? 'Your first post is live!'
+      : anyOk ? 'Your post was published!' : 'Publishing finished';
+
+    const subText = isFirstFreePost
+      ? 'Your first post was free. Whenever you’re ready to share another update, Elmer will be here to help.'
+      : anyOk ? 'That was easy.' : 'Some posts could not be published.';
+
+    const handleRetryFailed = () => {
+      const succeededIds = new Set(
+        publishState.results
+          .filter(r => r.ok)
+          .map(r => {
+            const ch = connectedChannels.find(c => c.platform === r.platform);
+            return ch?.id ?? '';
+          })
+          .filter(Boolean)
+      );
+      setExcludedPlatforms(succeededIds);
+      setPublishState({ status: 'idle' });
+    };
+
     return (
       <View style={styles.container}>
         <ScrollView
@@ -755,13 +785,9 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           contentContainerStyle={styles.confirmedContent}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.confirmedEmoji}>{anyOk ? '🎉' : '⚠️'}</Text>
-          <Text style={styles.confirmedHeading}>
-            {anyOk ? 'Your post was published!' : 'Publishing finished'}
-          </Text>
-          <Text style={styles.confirmedSub}>
-            {anyOk ? "That was easy." : 'Some posts could not be published.'}
-          </Text>
+          <Text style={styles.confirmedEmoji}>{anyOk ? (isFirstFreePost ? '✨' : '🎉') : '⚠️'}</Text>
+          <Text style={styles.confirmedHeading}>{heading}</Text>
+          <Text style={styles.confirmedSub}>{subText}</Text>
 
           <View style={styles.confirmedButtons}>
             {publishState.results.map((r, i) => {
@@ -785,7 +811,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                     <Text style={[styles.viewOnLabel, { color: r.ok ? cfg.iconColor : undefined }, !r.ok && styles.viewOnLabelDim]}>
                       {r.ok
                         ? (r.duplicate ? `Already posted · ${platformDisplayName(r.platform)}` : `View on ${platformDisplayName(r.platform)}`)
-                        : `Failed · ${platformDisplayName(r.platform)}`}
+                        : `Couldn’t publish to ${platformDisplayName(r.platform)}`}
                     </Text>
                     {platformDisplayName(r.platform) !== r.pageName && (
                       <Text style={[styles.viewOnPageName, r.ok && { color: cfg.iconColor, opacity: 0.55 }]}>{r.pageName}</Text>
@@ -801,6 +827,16 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               );
             })}
           </View>
+
+          {anyFailed && (
+            <TouchableOpacity
+              style={styles.retryFailedBtn}
+              onPress={handleRetryFailed}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryFailedBtnText}>Try Again for Failed Destinations</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.confirmedDoneBtn}
@@ -1159,6 +1195,9 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             </View>
           )}
 
+          {hasFreePublicationAvailable && (
+            <Text style={styles.freePostNote}>Your first post is free · No credit card required</Text>
+          )}
           <TouchableOpacity
             style={[
               styles.postEverywhereBtn,
@@ -1708,4 +1747,24 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   confirmedDoneBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
+
+  retryFailedBtn: {
+    width: '100%',
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: 10,
+  },
+  retryFailedBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
+
+  freePostNote: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: 6,
+    fontFamily: 'Inter_400Regular',
+  },
 });

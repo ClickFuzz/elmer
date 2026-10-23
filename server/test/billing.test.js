@@ -13,7 +13,7 @@ const request = require('supertest');
 const { setupFreshTestDb } = require('./helpers');
 const { getPool, closeDb } = require('../db');
 const { createApp }        = require('../app');
-const { hasAccess }        = require('../routes/billing');
+const { hasAccess, checkFreeRetryAllowed } = require('../routes/billing');
 
 let app;
 
@@ -441,38 +441,81 @@ describe('requirePublishPreliminaryAccess (publish endpoints)', () => {
     assert.notStrictEqual(wpRes.status, 402);
   });
 
-  it('returns 402 SUBSCRIPTION_REQUIRED for user with redeemed free publication', async () => {
+  it('returns 402 SUBSCRIPTION_REQUIRED for user with redeemed free publication and a different job_id', async () => {
     const token  = await register();
     const userId = await getUserId();
+    // Redeem the free slot for job 'original-job'
     await getPool().query(
-      `UPDATE free_publications SET status = 'redeemed', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      `UPDATE free_publications SET status = 'redeemed', job_key = 'original-job', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
       [userId, Date.now()]
     );
 
+    // Sending a different job_id must still be blocked (not a valid retry)
     const fbRes = await request(app)
       .post('/facebook/publish')
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ message: 'test post', job_id: 'unrelated-job' });
     assert.strictEqual(fbRes.status, 402);
     assert.strictEqual(fbRes.body.error, 'SUBSCRIPTION_REQUIRED');
 
     const igRes = await request(app)
       .post('/instagram/publish')
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ caption: 'test', job_id: 'unrelated-job' });
     assert.strictEqual(igRes.status, 402);
 
     const thRes = await request(app)
       .post('/threads/publish')
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ text: 'test', job_id: 'unrelated-job' });
     assert.strictEqual(thRes.status, 402);
 
     const wpRes = await request(app)
       .post('/wordpress/publish')
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({ title: 'test', content: 'body', job_id: 'unrelated-job' });
     assert.strictEqual(wpRes.status, 402);
+  });
+
+  it('allows retry publish for user with redeemed free publication and the same job_id', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    const now    = Date.now();
+    // Redeem the free slot and record one successful publish for this job
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = 'job-123', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, now]
+    );
+
+    // Retry on facebook with the same job_id passes the preliminary check and gets past 402.
+    // With no pages connected it receives 422 (no_pages_selected) — not 402.
+    const fbRes = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ message: 'retry post', job_id: 'job-123' });
+    // 402 would mean blocked; any other status means the retry was allowed through
+    assert.notStrictEqual(fbRes.status, 402, 'retry with matching job_id should not return 402');
+
+    // Same for instagram
+    const igRes = await request(app)
+      .post('/instagram/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ caption: 'retry', job_id: 'job-123' });
+    assert.notStrictEqual(igRes.status, 402);
+
+    // Same for threads
+    const thRes = await request(app)
+      .post('/threads/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ text: 'retry', job_id: 'job-123' });
+    assert.notStrictEqual(thRes.status, 402);
+
+    // Same for wordpress
+    const wpRes = await request(app)
+      .post('/wordpress/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ title: 'retry', content: 'body', job_id: 'job-123' });
+    assert.notStrictEqual(wpRes.status, 402);
   });
 
   it('allows publish endpoints for user with active subscription', async () => {
@@ -522,5 +565,104 @@ describe('trial_used persistence', () => {
       [userId]
     );
     assert.strictEqual(rows[0]?.trial_used, true, 'trial_used should remain true');
+  });
+});
+
+// ── checkFreeRetryAllowed unit tests ──────────────────────────────────────────
+
+describe('checkFreeRetryAllowed()', () => {
+  it('returns true when the redeemed job_key matches', async () => {
+    await register();
+    const userId = await getUserId();
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = 'job-abc', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+    const result = await checkFreeRetryAllowed(userId, 'job-abc');
+    assert.strictEqual(result, true);
+  });
+
+  it('returns false when the job_key does not match', async () => {
+    await register();
+    const userId = await getUserId();
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = 'job-abc', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+    const result = await checkFreeRetryAllowed(userId, 'different-job');
+    assert.strictEqual(result, false);
+  });
+
+  it('returns false when the slot is available (not yet redeemed)', async () => {
+    await register();
+    const userId = await getUserId();
+    // free_publications starts as 'available' for new users
+    const result = await checkFreeRetryAllowed(userId, 'any-job');
+    assert.strictEqual(result, false);
+  });
+
+  it('returns false when the slot is reserved (not yet redeemed)', async () => {
+    await register();
+    const userId = await getUserId();
+    await getPool().query(
+      `UPDATE free_publications SET status = 'reserved', job_key = 'job-xyz', reserved_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+    const result = await checkFreeRetryAllowed(userId, 'job-xyz');
+    assert.strictEqual(result, false);
+  });
+});
+
+// ── GET /billing/entitlement ──────────────────────────────────────────────────
+
+describe('GET /billing/entitlement', () => {
+  it('returns 401 when unauthenticated', async () => {
+    const res = await request(app).get('/billing/entitlement');
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('returns free_available for new user', async () => {
+    const token = await register();
+    const res   = await request(app)
+      .get('/billing/entitlement')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.access, 'free_available');
+  });
+
+  it('returns subscription for trialing user', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    const custId = await seedStripeCustomer(userId);
+    await seedSubscription(userId, custId, { status: 'trialing' });
+    const res = await request(app)
+      .get('/billing/entitlement')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.access, 'subscription');
+  });
+
+  it('returns free_redeemed after the slot is redeemed', async () => {
+    const token  = await register();
+    const userId = await getUserId();
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = 'j1', redeemed_at = $2, updated_at = $2 WHERE user_id = $1`,
+      [userId, Date.now()]
+    );
+    const res = await request(app)
+      .get('/billing/entitlement')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.access, 'free_redeemed');
+  });
+
+  it('GET /billing/subscription includes entitlement field', async () => {
+    const token = await register();
+    const res   = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.entitlement, 'entitlement field should be present');
+    assert.strictEqual(res.body.entitlement.access, 'free_available');
   });
 });

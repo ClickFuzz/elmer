@@ -8,7 +8,7 @@ const multer          = require('multer');
 const { getPool }     = require('../db');
 const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
-const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess } = require('./billing');
+const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const {
   prepareForInstagram,
   prepareCarouselForInstagram,
@@ -291,11 +291,16 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
     const freePubReserved = await tryReserveFreePublication(req.userId, job_id).catch(() => false);
     if (!req.publishIsSubscribed && !freePubReserved) {
-      cleanup();
-      return res.status(402).json({
-        error: 'SUBSCRIPTION_REQUIRED',
-        message: 'Your free post has been used. Start a trial to keep posting.',
-      });
+      const isRetry = req.publishIsFreeRetry
+        ? await checkFreeRetryAllowed(req.userId, job_id).catch(() => false)
+        : false;
+      if (!isRetry) {
+        cleanup();
+        return res.status(402).json({
+          error: 'SUBSCRIPTION_REQUIRED',
+          message: 'Your free post has been used. Start a trial to keep posting.',
+        });
+      }
     }
 
     const featuredIndex   = parseInt(req.body.featured_index ?? '0', 10) || 0;

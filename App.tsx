@@ -206,6 +206,15 @@ function AppShell() {
     setSavedHomeState(null);
   };
 
+  const handlePublishSuccess = () => {
+    // Refresh entitlement so hasFreePublicationAvailable reflects the redeemed state.
+    if (authToken) {
+      fetchSubscriptionStatus(authToken).then(status => {
+        if (status) setSubscriptionStatus(status);
+      }).catch(() => {});
+    }
+  };
+
   const handlePublishDraft = async (job: Job) => {
     const photos = await getJobPhotos(job.id);
     const syntheticPayload: GeneratePayload = {
@@ -283,6 +292,7 @@ function AppShell() {
             draftJob={draftJob}
             onBack={() => { setDraftJob(null); setScreen(draftJob ? 'history' : 'home'); }}
             onPublishComplete={handlePublishComplete}
+            onPublishSuccess={handlePublishSuccess}
             onShowSettings={() => { setSettingsReturnToResult(true); setScreen('settings'); }}
             onShowSubscription={() => setScreen('subscription')}
             hasFreePublicationAvailable={hasFreePublicationAvailable}

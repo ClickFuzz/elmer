@@ -80,7 +80,8 @@ async function requireGenerationAccess(req, res, next) {
 
 // Middleware: preliminary access check for publish endpoints (fires before multer).
 // Sets req.publishIsSubscribed = true for paying users, false for free-publication users.
-// Blocked users (free slot redeemed, no subscription) receive 402 immediately.
+// free_redeemed users are passed through to a secondary per-route job_id check.
+// Blocked users (no subscription, no free slot, not a valid retry) receive 402.
 async function requirePublishPreliminaryAccess(req, res, next) {
   if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
   try {
@@ -91,6 +92,12 @@ async function requirePublishPreliminaryAccess(req, res, next) {
     }
     if (access === 'free_available' || access === 'free_reserved') {
       req.publishIsSubscribed = false;
+      return next();
+    }
+    if (access === 'free_redeemed') {
+      // Allow through — each publish route validates job_id against job_key after parsing body.
+      req.publishIsSubscribed = false;
+      req.publishIsFreeRetry  = true;
       return next();
     }
     return res.status(402).json({
@@ -194,6 +201,16 @@ async function redeemFreePublication(userId, jobKey) {
      WHERE user_id = $1 AND status = 'reserved' AND job_key = $2`,
     [userId, jobKey, now]
   );
+}
+
+// Returns true if the user's free slot is redeemed for the given jobKey (same job retry).
+// Used by publish routes to allow partial-failure retries after the slot is redeemed.
+async function checkFreeRetryAllowed(userId, jobKey) {
+  const { rows } = await getPool().query(
+    "SELECT job_key FROM free_publications WHERE user_id = $1 AND status = 'redeemed'",
+    [userId]
+  );
+  return rows.length > 0 && rows[0].job_key === jobKey;
 }
 
 // Release the reservation if no platform has published successfully for this job.
@@ -624,4 +641,5 @@ module.exports = {
   tryReserveFreePublication,
   redeemFreePublication,
   releaseFreePublicationIfNoSuccess,
+  checkFreeRetryAllowed,
 };
