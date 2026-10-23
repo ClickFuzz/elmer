@@ -3,6 +3,13 @@
 const express = require('express');
 const { getPool } = require('../db');
 const { requireAuth } = require('../auth');
+const {
+  checkDeviceEligibility,
+  updateDeviceBit0,
+  queueDeviceUpdate,
+  processQueuedDeviceUpdate,
+  isDeviceCheckConfigured,
+} = require('./device');
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -62,12 +69,17 @@ async function requireSubscription(req, res, next) {
 
 // Middleware: allow generation for subscribers OR users with an unused free publication.
 // Sets nothing on req — generation does not reserve the free slot.
+// For free-publication users, also enforces iOS DeviceCheck eligibility when a
+// token is present (fail-open on Apple API errors to protect legitimate users).
 async function requireGenerationAccess(req, res, next) {
   if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
   try {
     const { access } = await getEntitlement(req.userId);
-    if (access === 'subscription' || access === 'free_available' || access === 'free_reserved') {
-      return next();
+    if (access === 'subscription') return next();
+
+    if (access === 'free_available' || access === 'free_reserved') {
+      await _enforceDeviceCheck(req, res, next, 'generation');
+      return;
     }
     return res.status(402).json({
       error: 'SUBSCRIPTION_REQUIRED',
@@ -82,6 +94,8 @@ async function requireGenerationAccess(req, res, next) {
 // Sets req.publishIsSubscribed = true for paying users, false for free-publication users.
 // free_redeemed users are passed through to a secondary per-route job_id check.
 // Blocked users (no subscription, no free slot, not a valid retry) receive 402.
+// For free-publication users, also enforces iOS DeviceCheck eligibility when a
+// token is present (fail-open on Apple API errors).
 async function requirePublishPreliminaryAccess(req, res, next) {
   if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
   try {
@@ -92,7 +106,8 @@ async function requirePublishPreliminaryAccess(req, res, next) {
     }
     if (access === 'free_available' || access === 'free_reserved') {
       req.publishIsSubscribed = false;
-      return next();
+      await _enforceDeviceCheck(req, res, next, 'publish');
+      return;
     }
     if (access === 'free_redeemed') {
       // Allow through — each publish route validates job_id against job_key after parsing body.
@@ -107,6 +122,41 @@ async function requirePublishPreliminaryAccess(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+// ── Device eligibility helper ─────────────────────────────────────────────────
+
+// Called by requireGenerationAccess / requirePublishPreliminaryAccess for the
+// free-publication path.  Checks the iOS DeviceCheck token in the
+// X-DeviceCheck-Token header, then calls next() or returns a 402.
+//
+// Failure policy:
+//   confirmed redeemed (bit0=1)  → 402 SUBSCRIPTION_REQUIRED
+//   Apple API error / no config  → fail-open, allow (don't block legitimate users)
+//   missing token / Android      → fail-open, allow
+async function _enforceDeviceCheck(req, res, next, _context) {
+  const deviceToken = req.headers['x-devicecheck-token'];
+
+  if (deviceToken && isDeviceCheckConfigured()) {
+    try {
+      // Process any queued obligation from a previous failed update.
+      processQueuedDeviceUpdate(req.userId, deviceToken).catch(() => {});
+
+      const result = await checkDeviceEligibility(deviceToken);
+      if (!result.eligible) {
+        return res.status(402).json({
+          error: 'SUBSCRIPTION_REQUIRED',
+          message: 'Your free post has been used. Start a trial to keep posting.',
+          detail: 'DEVICE_REDEEMED',
+        });
+      }
+    } catch (err) {
+      // Fail-open: transient Apple API errors must not block legitimate new users.
+      console.warn(`[elmer] DeviceCheck eligibility check failed (fail-open): ${err.message}`);
+    }
+  }
+
+  return next();
 }
 
 // ── Free-publication entitlement ──────────────────────────────────────────────
@@ -193,7 +243,9 @@ async function tryReserveFreePublication(userId, jobKey) {
 
 // Redeem the free publication after a successful publish.
 // Only transitions reserved→redeemed for the matching jobKey.
-async function redeemFreePublication(userId, jobKey) {
+// deviceToken (optional): fresh iOS DeviceCheck token to update Apple's bit0.
+//   If the Apple update fails, the obligation is queued for retry on next request.
+async function redeemFreePublication(userId, jobKey, deviceToken = null) {
   const now = Date.now();
   await getPool().query(
     `UPDATE free_publications
@@ -201,6 +253,15 @@ async function redeemFreePublication(userId, jobKey) {
      WHERE user_id = $1 AND status = 'reserved' AND job_key = $2`,
     [userId, jobKey, now]
   );
+
+  // Update Apple DeviceCheck bit0 — fire-and-forget so a slow/failing Apple API
+  // never delays the publish response.
+  if (deviceToken && isDeviceCheckConfigured()) {
+    updateDeviceBit0(deviceToken).catch(async (err) => {
+      console.warn(`[elmer] DeviceCheck update failed after redemption, queuing: ${err.message}`);
+      await queueDeviceUpdate(userId, jobKey).catch(() => {});
+    });
+  }
 }
 
 // Returns true if the user's free slot is redeemed for the given jobKey (same job retry).
@@ -231,10 +292,18 @@ async function releaseFreePublicationIfNoSuccess(userId, jobKey) {
       return;
     }
 
-    // Check if any platform succeeded for this job via client_job_id
+    // Check if any platform has already succeeded for this job.
     const { rows: successRows } = await client.query(
       `SELECT 1 FROM publishing_records
        WHERE user_id = $1 AND status = 'published' AND client_job_id = $2 LIMIT 1`,
+      [userId, jobKey]
+    );
+
+    // Check if any platform is still in-flight (pending) for this job.
+    // Do not release the reservation while another platform may still succeed.
+    const { rows: pendingRows } = await client.query(
+      `SELECT 1 FROM publishing_records
+       WHERE user_id = $1 AND status = 'pending' AND client_job_id = $2 LIMIT 1`,
       [userId, jobKey]
     );
 
@@ -247,8 +316,10 @@ async function releaseFreePublicationIfNoSuccess(userId, jobKey) {
          WHERE user_id = $1`,
         [userId, now]
       );
+    } else if (pendingRows.length > 0) {
+      // Another platform is still in-flight — do nothing; let it complete and redeem itself
     } else {
-      // All platforms failed — release back to available
+      // All platforms have definitively failed — release back to available
       await client.query(
         `UPDATE free_publications
          SET status = 'available', job_key = null, reserved_at = null, updated_at = $2

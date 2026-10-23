@@ -14,18 +14,21 @@ if (process.env.NODE_ENV === 'production' && !process.env.CREDENTIAL_ENCRYPTION_
 
 const { createApp } = require('./app');
 const { initDb, closeDb } = require('./db');
+const { logPendingDeviceUpdates, isDeviceCheckConfigured } = require('./routes/device');
 
 const PORT = process.env.PORT ?? 3001;
 
 async function start() {
   await initDb();
+  logPendingDeviceUpdates().catch(() => {});
 
   const app    = createApp();
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Elmer server running on port ${PORT}`);
-    console.log(`AI mode:   ${process.env.OPENAI_API_KEY ? 'REAL (OpenAI)' : 'MOCK (no API key)'}`);
-    console.log(`Auth mode: ${process.env.DISABLE_AUTH === 'true' ? 'OPEN (DISABLE_AUTH=true)' : 'REQUIRED'}`);
-    console.log(`DB:        PostgreSQL`);
+    console.log(`AI mode:      ${process.env.OPENAI_API_KEY ? 'REAL (OpenAI)' : 'MOCK (no API key)'}`);
+    console.log(`Auth mode:    ${process.env.DISABLE_AUTH === 'true' ? 'OPEN (DISABLE_AUTH=true)' : 'REQUIRED'}`);
+    console.log(`DeviceCheck:  ${isDeviceCheckConfigured() ? 'ENABLED (iOS device protection active)' : 'DISABLED (set APPLE_DEVICECHECK_* vars to enable)'}`);
+    console.log(`DB:           PostgreSQL`);
   });
 
   async function shutdown() {

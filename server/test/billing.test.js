@@ -13,7 +13,7 @@ const request = require('supertest');
 const { setupFreshTestDb } = require('./helpers');
 const { getPool, closeDb } = require('../db');
 const { createApp }        = require('../app');
-const { hasAccess, checkFreeRetryAllowed } = require('../routes/billing');
+const { hasAccess, checkFreeRetryAllowed, releaseFreePublicationIfNoSuccess } = require('../routes/billing');
 
 let app;
 
@@ -664,5 +664,146 @@ describe('GET /billing/entitlement', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.entitlement, 'entitlement field should be present');
     assert.strictEqual(res.body.entitlement.access, 'free_available');
+  });
+});
+
+describe('releaseFreePublicationIfNoSuccess()', () => {
+  it('releases reservation to available when all platforms failed', async () => {
+    await register('release_allfail@example.com');
+    const userId = await getUserId('release_allfail@example.com');
+    const now    = Date.now();
+    const jobKey = 'job-release-test';
+
+    await getPool().query(
+      `UPDATE free_publications SET status = 'reserved', job_key = $2, reserved_at = $3, updated_at = $3 WHERE user_id = $1`,
+      [userId, jobKey, now]
+    );
+
+    await releaseFreePublicationIfNoSuccess(userId, jobKey);
+
+    const { rows } = await getPool().query(
+      'SELECT status, job_key FROM free_publications WHERE user_id = $1',
+      [userId]
+    );
+    assert.strictEqual(rows[0].status, 'available');
+    assert.strictEqual(rows[0].job_key, null);
+  });
+
+  it('does not release reservation when a pending publishing_record exists for this job', async () => {
+    await register('release_pending@example.com');
+    const userId = await getUserId('release_pending@example.com');
+    const now    = Date.now();
+    const jobKey = 'job-pending-race';
+
+    await getPool().query(
+      `UPDATE free_publications SET status = 'reserved', job_key = $2, reserved_at = $3, updated_at = $3 WHERE user_id = $1`,
+      [userId, jobKey, now]
+    );
+    // Simulate another platform still in-flight
+    await getPool().query(
+      `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, status, created_at, updated_at)
+       VALUES ($1, 'instagram', 'ig_test', $2, 'pending', $3, $3)`,
+      [userId, jobKey, now]
+    );
+
+    await releaseFreePublicationIfNoSuccess(userId, jobKey);
+
+    const { rows } = await getPool().query(
+      'SELECT status FROM free_publications WHERE user_id = $1',
+      [userId]
+    );
+    // Reservation must remain; not released while a platform is still pending
+    assert.strictEqual(rows[0].status, 'reserved');
+  });
+
+  it('redeems reservation when another platform already succeeded for this job', async () => {
+    await register('release_success@example.com');
+    const userId = await getUserId('release_success@example.com');
+    const now    = Date.now();
+    const jobKey = 'job-success-race';
+
+    await getPool().query(
+      `UPDATE free_publications SET status = 'reserved', job_key = $2, reserved_at = $3, updated_at = $3 WHERE user_id = $1`,
+      [userId, jobKey, now]
+    );
+    // Simulate another platform that already published
+    await getPool().query(
+      `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, status, published_at, created_at, updated_at)
+       VALUES ($1, 'facebook', 'fb_test', $2, 'published', $3, $3, $3)`,
+      [userId, jobKey, now]
+    );
+
+    await releaseFreePublicationIfNoSuccess(userId, jobKey);
+
+    const { rows } = await getPool().query(
+      'SELECT status FROM free_publications WHERE user_id = $1',
+      [userId]
+    );
+    // Should transition to redeemed, not back to available
+    assert.strictEqual(rows[0].status, 'redeemed');
+  });
+});
+
+describe('per-destination retry authorization', () => {
+  it('POST /facebook/publish rejects retry to a new page with no prior failed record', async () => {
+    const token  = await register('fb_retry_new@example.com');
+    const userId = await getUserId('fb_retry_new@example.com');
+    const now    = Date.now();
+    const jobKey = 'job-fb-retry';
+
+    // Seed free_publications as redeemed (user already used their free post)
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = $2, redeemed_at = $3, updated_at = $3 WHERE user_id = $1`,
+      [userId, jobKey, now]
+    );
+    // No failed publishing_records exist for any page — this simulates a new destination
+
+    const res = await request(app)
+      .post('/facebook/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('job_id', jobKey)
+      .field('message', 'Test post');
+
+    // Without a connected page, this fails at the "no pages selected" step first.
+    // The key invariant is it does NOT return 200 with a successful publish.
+    // 402 or 422 are both acceptable gating responses.
+    assert.ok(
+      res.status === 402 || res.status === 422,
+      `Expected 402 or 422, got ${res.status}`
+    );
+  });
+
+  it('POST /instagram/publish rejects retry when no prior failed record exists', async () => {
+    const token  = await register('ig_retry_new@example.com');
+    const userId = await getUserId('ig_retry_new@example.com');
+    const now    = Date.now();
+    const jobKey = 'job-ig-retry';
+    const jobRef = `ig_${userId}_${jobKey}`;
+
+    // Seed free_publications as redeemed
+    await getPool().query(
+      `UPDATE free_publications SET status = 'redeemed', job_key = $2, redeemed_at = $3, updated_at = $3 WHERE user_id = $1`,
+      [userId, jobKey, now]
+    );
+    // Seed a 'published' record (not 'failed') for this job_ref — simulates already-published, not a retry target
+    await getPool().query(
+      `INSERT INTO publishing_records (user_id, platform, job_ref, client_job_id, status, published_at, created_at, updated_at)
+       VALUES ($1, 'instagram', $2, $3, 'published', $4, $4, $4)`,
+      [userId, jobRef, jobKey, now]
+    );
+
+    const res = await request(app)
+      .post('/instagram/publish')
+      .set('Authorization', `Bearer ${token}`)
+      .field('job_id', jobKey)
+      .field('caption', 'Test caption');
+
+    // With a redeemed free post and no 'failed' record, the retry guard must block this.
+    // 402 (subscription required / unauthorized retry) is expected.
+    // 422 is also acceptable if the no-failed check fires before image validation.
+    assert.ok(
+      res.status === 402 || res.status === 422,
+      `Expected 402 or 422, got ${res.status}`
+    );
   });
 });

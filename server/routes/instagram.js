@@ -428,6 +428,27 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       return res.status(500).json({ error: 'Database error', detail: err.message });
     }
 
+    // Retry authorization: for free-slot retries, this destination must have a prior failed record.
+    if (req.publishIsFreeRetry) {
+      try {
+        const { rows: priorFailed } = await getPool().query(
+          `SELECT 1 FROM publishing_records
+           WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+          [req.userId, jobRef]
+        );
+        if (priorFailed.length === 0) {
+          cleanup();
+          return res.status(402).json({
+            error: 'SUBSCRIPTION_REQUIRED',
+            message: 'This destination was not part of the original post.',
+          });
+        }
+      } catch (err) {
+        cleanup();
+        return res.status(500).json({ error: 'Database error', detail: err.message });
+      }
+    }
+
     // Prepare images for Instagram (aspect ratio, JPEG, orientation).
     // Falls back to original files if processing fails (e.g., stub files in tests).
     let preparedPaths;
@@ -578,7 +599,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       );
 
       cleanup();
-      if (freePubReserved) await redeemFreePublication(req.userId, job_id).catch(() => {});
+      if (freePubReserved) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
       return res.json({
         ok:          true,
         accountId:   igUserId,

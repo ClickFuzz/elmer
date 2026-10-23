@@ -1,0 +1,14 @@
+{
+  "name": "expo-device-check",
+  "version": "1.0.0",
+  "description": "Minimal Expo module for Apple DeviceCheck token generation",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*"
+  }
+}

@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
+import { getDeviceCheckToken } from '../storage/deviceCheck';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
@@ -95,7 +96,7 @@ type PageResult = {
 type PublishState =
   | { status: 'idle' }
   | { status: 'publishing' }
-  | { status: 'success'; results: PageResult[] }
+  | { status: 'success'; results: PageResult[]; isFirstFreePost: boolean }
   | { status: 'error'; message: string };
 
 export default function ResultScreen({ payload, draftJob, onBack, onPublishComplete, onPublishSuccess, onShowSettings, onShowSubscription, hasFreePublicationAvailable }: Props) {
@@ -144,6 +145,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       ...(channels.some(ch => ch.platform === 'wordpress') ? ['wordpress'] : []),
     ];
 
+    // Generate device token once — valid ~5 minutes, reused across retries.
+    // Null on Android, simulator, or any DeviceCheck failure (server fails-open).
+    const dcToken = await getDeviceCheckToken();
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const classifications = payload.photos.map(p => p.classification);
@@ -156,9 +161,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
         let data: any;
 
-        const authHeader: Record<string, string> = sessionToken
-          ? { Authorization: `Bearer ${sessionToken}` }
-          : {};
+        const authHeader: Record<string, string> = {
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+          ...(dcToken       ? { 'X-DeviceCheck-Token': dcToken }         : {}),
+        };
 
         if (payload.audioUri) {
           const result = await raceTimeout(FileSystem.uploadAsync(
@@ -347,6 +353,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const runFacebookPublish = async (sessionToken: string): Promise<PageResult[]> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const deviceToken = await getDeviceCheckToken();
 
     const formData = new FormData();
     formData.append('message', editedSocial);
@@ -368,6 +375,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_URL}/facebook/publish`);
       xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      if (deviceToken) xhr.setRequestHeader('X-DeviceCheck-Token', deviceToken);
       xhr.timeout = TIMEOUT_MS;
       xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
       xhr.onerror = () => reject(new Error('Network error'));
@@ -405,6 +413,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const runGooglePublish = async (sessionToken: string): Promise<PageResult[]> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const deviceToken = await getDeviceCheckToken();
 
     const profile = await getBusinessProfile();
     const businessUrl = profile.inquiryUrl || profile.website || '';
@@ -428,6 +437,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_URL}/google/publish`);
       xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      if (deviceToken) xhr.setRequestHeader('X-DeviceCheck-Token', deviceToken);
       xhr.timeout = TIMEOUT_MS;
       xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
       xhr.onerror = () => reject(new Error('Network error'));
@@ -475,6 +485,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const deviceToken = await getDeviceCheckToken();
 
     const formData = new FormData();
     formData.append('caption', editedSocial);
@@ -494,6 +505,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_URL}/instagram/publish`);
       xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      if (deviceToken) xhr.setRequestHeader('X-DeviceCheck-Token', deviceToken);
       xhr.timeout = TIMEOUT_MS;
       xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
       xhr.onerror = () => reject(new Error('Network error'));
@@ -525,6 +537,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const runThreadsPublish = async (sessionToken: string): Promise<PageResult> => {
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const deviceToken = await getDeviceCheckToken();
 
     const formData = new FormData();
     if (editedThreads.length > 500) {
@@ -547,6 +560,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_URL}/threads/publish`);
       xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+      if (deviceToken) xhr.setRequestHeader('X-DeviceCheck-Token', deviceToken);
       xhr.timeout = TIMEOUT_MS;
       xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
       xhr.onerror = () => reject(new Error('Network error'));
@@ -588,6 +602,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const runWordpressPublish = async (sessionToken: string, wpChannels: ConnectedChannel[]): Promise<PageResult[]> => {
     const jobId        = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
+    const deviceToken  = await getDeviceCheckToken();
     const seoState     = state.status === 'success' ? state.seoMetadata : null;
 
     const results: PageResult[] = [];
@@ -616,6 +631,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           const xhr = new XMLHttpRequest();
           xhr.open('POST', `${API_URL}/wordpress/publish`);
           xhr.setRequestHeader('Authorization', `Bearer ${sessionToken}`);
+          if (deviceToken) xhr.setRequestHeader('X-DeviceCheck-Token', deviceToken);
           xhr.timeout = TIMEOUT_MS;
           xhr.onload  = () => resolve({ status: xhr.status, body: xhr.responseText });
           xhr.onerror = () => reject(new Error('Network error'));
@@ -713,7 +729,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             }
             const anySuccess = allResults.some(r => r.ok);
             if (anySuccess) onPublishSuccess?.();
-            setPublishState({ status: 'success', results: allResults });
+            setPublishState({ status: 'success', results: allResults, isFirstFreePost: wasFirstFreePost.current });
 
             if (savedJobId != null) {
               const platformsRecord: Record<string, JobPlatformResult> = {};
@@ -754,7 +770,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   if (publishState.status === 'success') {
     const anyOk      = publishState.results.some(r => r.ok);
     const anyFailed  = publishState.results.some(r => !r.ok);
-    const isFirstFreePost = wasFirstFreePost.current && anyOk;
+    const isFirstFreePost = publishState.isFirstFreePost && anyOk;
 
     const heading = isFirstFreePost
       ? 'Your first post is live!'

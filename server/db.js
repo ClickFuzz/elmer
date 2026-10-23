@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 let _pool        = null;
 let _initialized = false;
@@ -293,6 +293,36 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [6, Date.now()]
+      );
+    }
+
+    // ── V7: device update retry queue ──────────────────────────────────────────
+    // Tracks Apple DeviceCheck bit-update obligations that failed after a
+    // successful free publication. The device token that triggered the obligation
+    // has already expired, so each row records the USER and JOB — not the token.
+    // The next request from this user that includes a fresh device token will
+    // fulfil the obligation and remove the row.
+    if (!applied.has(7)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS device_update_queue (
+          id            BIGSERIAL PRIMARY KEY,
+          user_id       BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          job_key       TEXT    NOT NULL,
+          platform      TEXT    NOT NULL DEFAULT 'ios',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error    TEXT,
+          created_at    BIGINT  NOT NULL,
+          updated_at    BIGINT  NOT NULL,
+          UNIQUE(user_id, job_key)
+        )
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_device_update_queue_user ON device_update_queue(user_id)`
+      );
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [7, Date.now()]
       );
     }
 

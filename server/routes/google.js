@@ -512,6 +512,29 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         continue;
       }
 
+      // Retry authorization: for free-slot retries, this location must have a prior failed record.
+      if (req.publishIsFreeRetry) {
+        try {
+          const { rows: priorFailed } = await pool.query(
+            `SELECT 1 FROM publishing_records
+             WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+            [req.userId, jobRef]
+          );
+          if (priorFailed.length === 0) {
+            results.push({
+              locationId: locRow.account_id,
+              locationName: locRow.account_name,
+              ok: false,
+              error: 'This location was not part of the original post.',
+            });
+            continue;
+          }
+        } catch (err) {
+          results.push({ locationId: locRow.account_id, locationName: locRow.account_name, ok: false, error: err.message });
+          continue;
+        }
+      }
+
       let recordId = null;
       const markFailed = async (msg) => {
         if (!recordId) return;
@@ -629,7 +652,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     const anyOk = results.some(r => r.ok);
 
     if (freePubReserved) {
-      if (anyOk) await redeemFreePublication(req.userId, job_id).catch(() => {});
+      if (anyOk) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
       else await releaseFreePublicationIfNoSuccess(req.userId, job_id).catch(() => {});
     }
 

@@ -421,6 +421,27 @@ function createThreadsRouter({
       return res.status(500).json({ error: 'Database error', detail: err.message });
     }
 
+    // Retry authorization: for free-slot retries, this destination must have a prior failed record.
+    if (req.publishIsFreeRetry) {
+      try {
+        const { rows: priorFailed } = await pool.query(
+          `SELECT 1 FROM publishing_records
+           WHERE user_id = $1 AND job_ref = $2 AND status = 'failed' LIMIT 1`,
+          [req.userId, jobRef]
+        );
+        if (priorFailed.length === 0) {
+          cleanup();
+          return res.status(402).json({
+            error: 'SUBSCRIPTION_REQUIRED',
+            message: 'This destination was not part of the original post.',
+          });
+        }
+      } catch (err) {
+        cleanup();
+        return res.status(500).json({ error: 'Database error', detail: err.message });
+      }
+    }
+
     // Insert pending publishing record
     const { rows: [record] } = await pool.query(
       `INSERT INTO publishing_records
@@ -721,7 +742,7 @@ function createThreadsRouter({
       );
 
       cleanup();
-      if (freePubReserved) await redeemFreePublication(req.userId, job_id).catch(() => {});
+      if (freePubReserved) await redeemFreePublication(req.userId, job_id, req.headers['x-devicecheck-token']).catch(() => {});
       return res.json({ ok: true, accountId: thUserId, accountName: thAccount.account_name, postId, postUrl });
 
     } catch (err) {

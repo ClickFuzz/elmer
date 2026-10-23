@@ -73,6 +73,9 @@ function AppShell() {
   // null = loading; true/false = resolved
   const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
   const [settingsReturnToResult, setSettingsReturnToResult] = useState(false);
+  // True when ResultScreen received a 402 and the user needs to subscribe before generation can proceed.
+  // handleSubscribed navigates back to 'result' (with the existing payload) instead of 'home'.
+  const [pendingGenerationAfterSubscription, setPendingGenerationAfterSubscription] = useState(false);
 
   const fetchSubscriptionStatus = async (token: string): Promise<SubscriptionStatus | false> => {
     try {
@@ -152,7 +155,14 @@ function AppShell() {
         setSubscriptionStatus(status);
         setIsOnboarded(localFlag === '1' || serverOnboarded);
       }
-      setScreen('home');
+      // If the user was paywalled mid-generation, return to result screen so it auto-generates.
+      if (pendingGenerationAfterSubscription && payload) {
+        setPendingGenerationAfterSubscription(false);
+        setScreen('result');
+      } else {
+        setPendingGenerationAfterSubscription(false);
+        setScreen('home');
+      }
     });
   };
 
@@ -171,6 +181,7 @@ function AppShell() {
     setIsOnboarded(null);
     setSavedHomeState(null);
     savePendingHomeState(null);
+    setPendingGenerationAfterSubscription(false);
   };
 
   const handleOnboardingComplete = async () => {
@@ -195,6 +206,8 @@ function AppShell() {
     savePendingHomeState(newState);
     setDraftJob(null);
     setPayload(data);
+    // Fresh generation replaces any prior pending intent from a paywalled attempt.
+    setPendingGenerationAfterSubscription(false);
     setScreen('result');
   };
 
@@ -294,7 +307,10 @@ function AppShell() {
             onPublishComplete={handlePublishComplete}
             onPublishSuccess={handlePublishSuccess}
             onShowSettings={() => { setSettingsReturnToResult(true); setScreen('settings'); }}
-            onShowSubscription={() => setScreen('subscription')}
+            onShowSubscription={() => {
+              setPendingGenerationAfterSubscription(true);
+              setScreen('subscription');
+            }}
             hasFreePublicationAvailable={hasFreePublicationAvailable}
           />
         )}
