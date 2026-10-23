@@ -215,21 +215,25 @@ function buildCtaBlock({ extracted, businessInquiryUrl, businessWebsite, busines
 // Injected as a system message into all content generation calls.
 // Sets the model's editorial persona, factual accuracy expectations,
 // structural variety mandate, and CTA optionality — once, cleanly.
-const EDITORIAL_SYSTEM_PROMPT = `You are an experienced content writer. Your job is to transform voice recordings from business owners into polished, authentic posts ready to publish.
+const EDITORIAL_SYSTEM_PROMPT = `You are an experienced content writer and editor. Your job is to transform voice recordings from business owners into polished, authentic posts ready to publish.
 
 Your primary obligation is to the user's intended message. The user has already decided what they want to say — your job is to help them say it better, not to find a more compelling angle or reframe the update around a different story. The ultimate test: the user should read the output and think "That's exactly what I was trying to say, just written better."
 
 Follow the user's emphasis. Pay attention to what they spend more time on, repeat, or express enthusiasm about — that is the center of the post. If they emphasize the customer, center the customer. If they emphasize a technical challenge, center the challenge. If it's a simple project update, write a simple project update. Do not substitute your own judgment about what would make a stronger marketing hook.
 
-You may: fix grammar and flow, remove verbal filler and stumbles, reorganize slightly for clarity, improve the opening and closing, adapt length and format to the platform. You should not: change the main focus, introduce a new angle, exaggerate achievements, invent customer experiences, or replace meaningful details with generic marketing language.
+You may: fix grammar and flow, remove verbal filler and stumbles, reorganize slightly for clarity, improve the opening and closing, adapt length and format to the platform.
 
-Structural variety emerges from the recordings themselves. Different transcripts naturally produce different posts — do not impose a template or manufacture an angle.
+You should not: change the main focus, introduce a new angle, exaggerate achievements, invent customer experiences, replace meaningful details with generic marketing language, add promotional hooks the user did not express, pad a short update to make it longer, or turn a simple factual update into an elaborate story.
 
-Factual accuracy is non-negotiable. Copy every proper noun exactly as it appears in the transcript — business names, customer names, cities, product names, brand names. Do not substitute a similar-sounding alternative. If a name is unclear, omit it or handle it conservatively rather than guessing.
+Natural voice over marketing copy. Write like a real person, not like an AI writing marketing content. Avoid habitual AI writing patterns ("We're excited to share...", "It was an absolute pleasure...", "We're thrilled to announce...", "Don't hesitate to reach out...", "We take pride in..."). These phrases are not banned — but using them by default makes every post sound the same. Write something specific to this recording.
 
-Avoid habitual AI writing patterns ("We're excited to share...", "It was an absolute pleasure...", "We're thrilled to announce...", "Don't hesitate to reach out..."). Not banned — but using them by default makes every post sound the same. Write something specific to this update.
+Structural variety emerges from the recordings themselves. Different transcripts naturally produce different posts — a brief update stays brief, a detailed story gets developed, a technical explanation stays technical. Do not impose a template or manufacture structure the content doesn't need.
 
-CTAs are editorial decisions, not required elements. Include one when it fits naturally. End without one — with a short observation, a thank-you, or nothing at all — when that reads better.`;
+Factual accuracy is non-negotiable. Copy every proper noun exactly as it appears in the transcript — business names, customer names, cities, product names, brand names. Do not substitute a similar-sounding alternative. If a name is unclear, omit it rather than guessing.
+
+CTAs are editorial decisions, not required elements. Include one when it fits naturally. End without one when a short observation, a thank-you, or simply stopping reads better.
+
+Default stylistic preferences (these apply unless overridden by the user's custom instructions): avoid unnecessary emojis, avoid excessive exclamation points, avoid hashtag overload, avoid generic sales language. If the user's custom instructions request any of these, follow those instructions.`;
 
 // ── App factory ──────────────────────────────────────────────────────────────
 
@@ -305,6 +309,7 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
     const businessDescription        = req.body.businessDescription        || '';
     const writingStyle               = req.body.writingStyle               || 'Casual / Professional';
     const customWritingInstructions  = req.body.customWritingInstructions  || '';
+    const writingSamples             = req.body.writingSamples             || '';
     let businessServices = [];
     let serviceAreasList = [];
     try {
@@ -426,7 +431,11 @@ Rules:
       : '- Do NOT mention before/after comparisons, transformations, or any before/after narrative — no Before/After photos were provided';
 
     const customStyleCtx = customWritingInstructions.trim()
-      ? `\nCustom style instructions from the business owner (follow these precisely):\n${customWritingInstructions.trim()}`
+      ? `\nCustom writing instructions from the business owner (these override default stylistic preferences — follow them):\n${customWritingInstructions.trim()}`
+      : '';
+
+    const writingSamplesCtx = writingSamples.trim()
+      ? `\nWRITING STYLE REFERENCE — the owner's own writing examples (use for voice, tone, sentence length, and personality only):\n${writingSamples.trim()}\nIMPORTANT: The examples above are style reference only. Do not import any names, locations, clients, projects, services, claims, or other factual details from these samples into the current post. Treat them as a guide to how the person writes, not as factual sources.`
       : '';
 
     const bizLines = [
@@ -482,6 +491,7 @@ Rules:
       '',
             'WRITING:',
       `- Style: ${tone}${customStyleCtx}`,
+      writingSamplesCtx,
       `- Write from ${speakerCtx} perspective`,
       `- ${beforeAfterRule}`,
       '- Follow the user\'s emphasis — communicate what they actually wanted to say, with the same focus and priorities they expressed',
@@ -515,6 +525,7 @@ Rules:
       '',
             'WRITING:',
       `- Style: ${tone}${customStyleCtx}`,
+      writingSamplesCtx,
       `- ${beforeAfterRule}`,
       '- Communicate what the user actually wanted to highlight — follow their emphasis, not a predetermined structure',
       '- Describe what happened and why it matters to potential customers, drawn from the transcript',
@@ -545,6 +556,7 @@ Rules:
       '',
             'WRITING:',
       `- Style: ${tone}${customStyleCtx}`,
+      writingSamplesCtx,
       `- ${beforeAfterRule}`,
       '- Follow the user\'s emphasis — the article structure and focus should reflect what they actually wanted to communicate',
       '- Choose an article format appropriate to the content: project showcase, case study, product announcement, event recap, educational piece, client spotlight, or other — inferred from the transcript, not imposed',

@@ -265,6 +265,7 @@ export type BusinessProfile = {
   description: string;
   writingStyle: string;
   customWritingInstructions: string;
+  writingSamples: string;
 };
 
 export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
@@ -279,6 +280,7 @@ export const DEFAULT_BUSINESS_PROFILE: BusinessProfile = {
   description: '',
   writingStyle: 'Casual / Professional',
   customWritingInstructions: '',
+  writingSamples: '',
 };
 
 export async function getBusinessProfile(): Promise<BusinessProfile> {

@@ -951,12 +951,28 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
           </TouchableOpacity>
           <View style={styles.divider} />
           <View style={styles.fieldBlock}>
-            <Text style={styles.fieldLabelAbove}>Custom Instructions</Text>
+            <Text style={styles.fieldLabelAbove}>Custom Writing Instructions</Text>
+            <Text style={styles.fieldNote}>Tell Elmer how you'd like your posts written.</Text>
             <TextInput
               style={styles.descInput}
               value={profile.customWritingInstructions}
               onChangeText={customWritingInstructions => update({ customWritingInstructions })}
-              placeholder={"No emojis. Avoid exclamation points. Write in a grounded, confident tone — like a tradesperson who takes pride in the work, not a marketer. Here's an example of how I write: \"Came in, assessed the situation, did what needed doing. Customer was happy. That's the job.\""}
+              placeholder={"Keep my posts short and conversational. Avoid sales pitches. Use simple language and write like I'm talking to a customer."}
+              placeholderTextColor={colors.textMuted}
+              multiline
+              textAlignVertical="top"
+              autoCorrect
+            />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.fieldBlock}>
+            <Text style={styles.fieldLabelAbove}>Your Writing Examples</Text>
+            <Text style={styles.fieldNote}>Paste something you've written before. Elmer will use it to learn your writing style.</Text>
+            <TextInput
+              style={styles.descInput}
+              value={profile.writingSamples}
+              onChangeText={writingSamples => update({ writingSamples })}
+              placeholder={"Just wrapped up a kitchen remodel in Westwood. Took about three weeks but the results speak for themselves. Homeowner was thrilled — couldn't believe the transformation."}
               placeholderTextColor={colors.textMuted}
               multiline
               textAlignVertical="top"
@@ -968,7 +984,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
           <Text style={styles.saveBtnText}>{savedStyle ? 'Saved!' : 'Save Writing Style'}</Text>
         </TouchableOpacity>
         <Text style={styles.groupNote}>
-          These instructions are sent to the AI every time you generate a post. Be specific — the more detail you provide, the better the output.
+          Your writing preferences are sent to the AI every time you generate a post. Be specific — the more detail you provide, the better the output.
         </Text>
 
         {/* ── Connected Accounts ── */}
@@ -1555,7 +1571,8 @@ const styles = StyleSheet.create({
   fieldBlock: { paddingHorizontal: 16, paddingVertical: 13 },
   fieldLabel: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, flexShrink: 0 },
   fieldSubLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  fieldLabelAbove: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  fieldLabelAbove: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 4 },
+  fieldNote: { fontSize: 12, color: colors.textMuted, marginBottom: 8 },
   fieldInput: { flex: 1, fontSize: 14, color: colors.textSecondary, textAlign: 'right' },
   placeholder: { color: colors.textMuted },
   selectorRight: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, justifyContent: 'flex-end' },
