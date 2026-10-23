@@ -19,6 +19,8 @@ import {
   getJobStats,
   getBusinessProfile,
   saveBusinessProfile,
+  getSettingsVersion,
+  saveSettingsVersion,
   DEFAULT_BUSINESS_PROFILE,
   BusinessProfile,
   getSessionToken,
@@ -220,10 +222,45 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const update = (patch: Partial<BusinessProfile>) =>
     setProfile(prev => ({ ...prev, ...patch }));
 
+  // Fire-and-forget PATCH to server.  On version conflict (409), accept the server
+  // version and retry with the current profile so the user's edit wins after one conflict.
+  const patchSettingsToServer = async (updatedProfile: BusinessProfile, token: string) => {
+    try {
+      const version = await getSettingsVersion();
+      const res = await fetch(`${API_URL}/auth/settings`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body:    JSON.stringify({ settings: updatedProfile, version }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await saveSettingsVersion(data.version ?? version + 1);
+      } else if (res.status === 409) {
+        const data = await res.json();
+        const serverVersion: number = data.current?.version ?? version;
+        await saveSettingsVersion(serverVersion);
+        // Retry once with the now-correct version number
+        const retry = await fetch(`${API_URL}/auth/settings`, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body:    JSON.stringify({ settings: updatedProfile, version: serverVersion }),
+        });
+        if (retry.ok) {
+          const retryData = await retry.json();
+          await saveSettingsVersion(retryData.version ?? serverVersion + 1);
+        }
+      }
+    } catch { /* ignore — local save already succeeded */ }
+  };
+
   const handleSave = () => {
     Keyboard.dismiss();
     saveBusinessProfile(profile)
-      .then(() => { setSaved(true); setTimeout(() => setSaved(false), 2000); })
+      .then(async () => {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        if (sessionToken) patchSettingsToServer(profile, sessionToken).catch(() => {});
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         Alert.alert('Save failed', msg);
@@ -233,11 +270,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const handleSaveStyle = () => {
     Keyboard.dismiss();
     saveBusinessProfile(profile)
-      .then(() => {
+      .then(async () => {
         setSavedStyle(true);
         setTimeout(() => setSavedStyle(false), 2000);
         Analytics.writing_style_updated();
         if (profile.writingSamples?.trim()) Analytics.writing_examples_updated();
+        if (sessionToken) patchSettingsToServer(profile, sessionToken).catch(() => {});
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);

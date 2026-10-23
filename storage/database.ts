@@ -316,6 +316,23 @@ export async function saveBusinessProfile(profile: BusinessProfile): Promise<voi
   await setSetting(key, JSON.stringify(profile));
 }
 
+// Server-assigned settings version for optimistic concurrency on PATCH /auth/settings.
+// Stored per email so different accounts on the same device don't share a version.
+export async function getSettingsVersion(): Promise<number> {
+  const email = await getSessionEmail();
+  const key = email ? `settings_version_${email}` : 'settings_version';
+  const raw = await getSetting(key);
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+export async function saveSettingsVersion(version: number): Promise<void> {
+  const email = await getSessionEmail();
+  const key = email ? `settings_version_${email}` : 'settings_version';
+  await setSetting(key, String(version));
+}
+
 // ── Pending home state (draft before generate) ────────────────────────────────
 
 export type PendingPhoto = {

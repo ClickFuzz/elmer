@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 let _pool        = null;
 let _initialized = false;
@@ -411,6 +411,25 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [10, Date.now()]
+      );
+    }
+
+    // ── V11: settings versioning ──────────────────────────────────────────────
+    // Adds a monotonically-increasing version counter to business_settings so
+    // devices can detect and safely resolve concurrent settings updates without
+    // silently overwriting newer data from another device.
+    if (!applied.has(11)) {
+      try {
+        await client.query(
+          `ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS settings_version INTEGER NOT NULL DEFAULT 0`
+        );
+      } catch {
+        // pg-mem may not support all DDL variations
+      }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [11, Date.now()]
       );
     }
 

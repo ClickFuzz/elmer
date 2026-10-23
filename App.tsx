@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
-import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, deleteSetting, getJobPhotos, getSessionToken, getSessionUserId, getSetting, setSetting, runAutoCleanup, Job, clearSession } from './storage/database';
+import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, getJobPhotos, getSessionToken, getSessionUserId, getBusinessProfile, saveBusinessProfile, saveSettingsVersion, runAutoCleanup, Job, clearSession } from './storage/database';
 import { Analytics } from './services/analytics';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -90,6 +90,37 @@ function AppShell() {
     }
   };
 
+  // Fetch business settings from the server and sync them to the local cache.
+  // Returns true if a non-empty business name was found (= onboarding completed).
+  // Fail-open: network failures leave the local cache intact.
+  const syncServerSettings = async (token: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_URL}/auth/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      const serverSettings = data.settings ?? {};
+      const version: number = data.version ?? 0;
+      if (serverSettings && typeof serverSettings === 'object') {
+        // Only overwrite local if server has a business name — preserve a fresh
+        // install's empty state rather than writing an empty object on top of
+        // anything the user may have entered before going online.
+        if ((serverSettings.name ?? '').trim()) {
+          const current = await getBusinessProfile();
+          await saveBusinessProfile({ ...current, ...serverSettings });
+          await saveSettingsVersion(version);
+          return true;
+        }
+        // No server name yet; still persist the version so future PATCHes are versioned.
+        await saveSettingsVersion(version);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
   useEffect(() => {
     (async () => {
       const tok = await getSessionToken();
@@ -100,22 +131,28 @@ function AppShell() {
       }
       setIsAuthed(true);
       setAuthToken(tok);
-      const [status, localFlag, storedUserId, pendingGen, pendingState] = await Promise.all([
+
+      // Fetch subscription status, sync server settings, and load local state in parallel.
+      // syncServerSettings must complete before we derive isOnboarded so a new-device
+      // login gets the server's business name before we decide whether to show onboarding.
+      const [status, serverHasName, storedUserId, pendingGen, pendingState] = await Promise.all([
         fetchSubscriptionStatus(tok),
-        getSetting('onboarding_completed'),
+        syncServerSettings(tok),
         getSessionUserId(),
         getPendingGenerationFlag(),
         getPendingHomeState(),
       ]);
+
       if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
-      const serverOnboarded = (status as SubscriptionStatus | false)
-        ? (status as SubscriptionStatus).onboardingCompleted === true
-        : false;
-      setIsOnboarded(localFlag === '1' || serverOnboarded);
+
+      // Derive onboarding state from the business name (server-authoritative via sync,
+      // local cache as fallback when offline).
+      const localProfile = await getBusinessProfile();
+      const hasName = !!(localProfile.name ?? '').trim() || serverHasName;
+      setIsOnboarded(hasName);
 
       // Restore pending generation intent (survives app termination during Stripe checkout).
-      // Reconstruct the payload from the persisted home state so ResultScreen can re-generate.
       if (pendingState) {
         setSavedHomeState(pendingState as HomeState);
         if (pendingGen) {
@@ -133,17 +170,16 @@ function AppShell() {
       const tok = await getSessionToken();
       if (tok) {
         setAuthToken(tok);
-        const [status, localFlag, storedUserId] = await Promise.all([
+        const [status, serverHasName, storedUserId] = await Promise.all([
           fetchSubscriptionStatus(tok),
-          getSetting('onboarding_completed'),
+          syncServerSettings(tok),
           getSessionUserId(),
         ]);
         if (storedUserId) Analytics.identify(storedUserId);
-        const serverOnboarded = (status as SubscriptionStatus | false)
-          ? (status as SubscriptionStatus).onboardingCompleted === true
-          : false;
         setSubscriptionStatus(status);
-        setIsOnboarded(localFlag === '1' || serverOnboarded);
+        const localProfile = await getBusinessProfile();
+        const hasName = !!(localProfile.name ?? '').trim() || serverHasName;
+        setIsOnboarded(hasName);
       }
       setScreen('home');
     } else {
@@ -155,8 +191,6 @@ function AppShell() {
       savePendingHomeState(null);
       savePendingGenerationFlag(false).catch(() => {});
       setPendingGenerationAfterSubscription(false);
-      // Clear account-specific local flags so the next account starts clean.
-      deleteSetting('onboarding_completed').catch(() => {});
     }
   };
 
@@ -164,19 +198,14 @@ function AppShell() {
     getSessionToken().then(async tok => {
       if (tok) {
         setAuthToken(tok);
-        const [status, localFlag] = await Promise.all([
+        const [status] = await Promise.all([
           fetchSubscriptionStatus(tok),
-          getSetting('onboarding_completed'),
         ]);
-        const serverOnboarded = (status as SubscriptionStatus | false)
-          ? (status as SubscriptionStatus).onboardingCompleted === true
-          : false;
         setSubscriptionStatus(status);
-        setIsOnboarded(localFlag === '1' || serverOnboarded);
+        const localProfile = await getBusinessProfile();
+        setIsOnboarded(!!(localProfile.name ?? '').trim());
       }
-      // Clear the persisted flag regardless of outcome
       savePendingGenerationFlag(false).catch(() => {});
-      // If the user was paywalled mid-generation, return to result screen so it auto-generates.
       if (pendingGenerationAfterSubscription && payload) {
         setPendingGenerationAfterSubscription(false);
         setScreen('result');
@@ -204,23 +233,16 @@ function AppShell() {
     setSavedHomeState(null);
     savePendingHomeState(null);
     savePendingGenerationFlag(false).catch(() => {});
-    deleteSetting('onboarding_completed').catch(() => {});
     setPendingGenerationAfterSubscription(false);
   };
 
   const handleOnboardingComplete = async (platformConnectionsCount?: number) => {
-    // Persist locally so the wizard is bypassed even if the server call fails
-    await setSetting('onboarding_completed', '1');
+    // The wizard already PATCH'd the business profile (with the name) to the server.
+    // isOnboarded is derived from the local business name being non-empty, which was
+    // set during the wizard's step 1.  No separate flag is needed.
     Analytics.onboarding_completed(platformConnectionsCount ?? 0);
     setIsOnboarded(true);
     setScreen('home');
-    // Best-effort server persist (fire and forget)
-    if (authToken) {
-      fetch(`${API_URL}/auth/onboarding/complete`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${authToken}` },
-      }).catch(() => {});
-    }
   };
 
   const handleGenerate = (data: GeneratePayload) => {

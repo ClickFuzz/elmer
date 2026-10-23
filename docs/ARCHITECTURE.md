@@ -821,6 +821,19 @@ Mobile                          Elmer Server                  Google OAuth
 - **33 automated tests** (connect-url, callback state validation, callback success, locations list, selection, media serving, publish — including idempotency, cross-user isolation, reconnect on 401) — all passing (`server/test/google.test.js`).
 - **341 total automated tests** — all passing.
 
+### Implemented (Phase 11 — Multi-device sync, server-authoritative settings, test-mode controls)
+
+- **V11 DB migration** (`server/db.js`): Added `settings_version INTEGER NOT NULL DEFAULT 0` column to `business_settings` for optimistic concurrency control on settings updates.
+- **Settings API** (`server/routes/auth.js`):
+  - `GET /auth/settings` — returns the user's business profile JSON and current `version`.
+  - `PATCH /auth/settings` — partial merge update with optimistic locking; body: `{ settings: {...}, version: N }`; 409 with `{ error: 'version_conflict', current: {settings, version} }` on stale version.
+- **Server-authoritative onboarding** (`server/routes/billing.js`, `App.tsx`): Onboarding completion is now derived from whether the user has a non-empty `business_name` in their server settings, replacing the brittle device-local `onboarding_completed` flag. `/billing/subscription` response includes `businessName` for cross-device consistency.
+- **New-device login sync** (`App.tsx`): On startup, `syncServerSettings()` calls `GET /auth/settings`, merges the server profile into the local SQLite cache, and stores the server-assigned version. A new device recovers the business name (and therefore skips onboarding) automatically after login.
+- **Business profile server sync** (`screens/OnboardingWizard.tsx`, `screens/SettingsScreen.tsx`): Step 1 of the onboarding wizard and both "Save" buttons in SettingsScreen now PATCH the business profile to the server (fire-and-forget; local save always wins). Version conflicts auto-retry once with the server's current version.
+- **Test mode DeviceCheck bypass** (`server/routes/billing.js`): When `STRIPE_TEST_MODE=true`, `_enforceDeviceCheck` returns `next()` immediately without querying Apple's API. `redeemFreePublication` skips the `updateDeviceBit0` call so production DeviceCheck bits are never modified during testing. Each new test account gets its own free publication independent of physical-device history.
+- **21 new automated tests** (`server/test/settings.test.js` — 15 tests, `server/test/testmode.test.js` — 6 tests): settings GET/PATCH/versioning/cross-user isolation; test mode bypass with injected Apple API mock; production enforcement of DeviceCheck.
+- **457 total automated tests** — all passing.
+
 ### Implemented (Phase 10 — Production readiness, security fixes)
 
 - **Stripe webhook deduplication** (`server/routes/billing.js`, V8 migration in `server/db.js`): New `stripe_webhook_events` table (`event_id TEXT PRIMARY KEY`). `handleWebhookEvent` inserts the event ID via `INSERT ... ON CONFLICT DO NOTHING` at the top of every handled event; if `rowCount === 0` the event was already processed — returns early without re-applying side-effects. Fail-open: table-access errors are logged and processing continues.
@@ -850,7 +863,7 @@ Mobile                          Elmer Server                  Google OAuth
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.

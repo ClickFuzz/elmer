@@ -17,6 +17,8 @@ import { colors } from '../constants/colors';
 import {
   getBusinessProfile,
   saveBusinessProfile,
+  getSettingsVersion,
+  saveSettingsVersion,
 } from '../storage/database';
 import { Analytics } from '../services/analytics';
 
@@ -153,15 +155,38 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       return;
     }
     setNameError(false);
-    // Save to local profile (category stored as custom if free-text)
     const current = await getBusinessProfile();
-    await saveBusinessProfile({
+    const updatedProfile = {
       ...current,
-      name:          businessName.trim(),
-      category:      businessType.trim() ? 'Other' : current.category,
+      name:           businessName.trim(),
+      category:       businessType.trim() ? 'Other' : current.category,
       categoryCustom: businessType.trim() || current.categoryCustom,
-      location:      businessLocation.trim() || current.location,
-    });
+      location:       businessLocation.trim() || current.location,
+    };
+    await saveBusinessProfile(updatedProfile);
+
+    // Best-effort sync to server so a new device sees the business name on next login.
+    if (sessionToken) {
+      (async () => {
+        try {
+          const version = await getSettingsVersion();
+          const res = await fetch(`${API_URL}/auth/settings`, {
+            method:  'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+            body:    JSON.stringify({ settings: updatedProfile, version }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            await saveSettingsVersion(data.version ?? version + 1);
+          } else if (res.status === 409) {
+            // Server has a newer version; accept it silently (local takes precedence during onboarding)
+            const data = await res.json();
+            await saveSettingsVersion(data.current?.version ?? version);
+          }
+        } catch { /* ignore — local save already succeeded */ }
+      })();
+    }
+
     Analytics.onboarding_step_completed(1, 'business_info');
     setStep(2);
   };

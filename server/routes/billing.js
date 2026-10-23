@@ -142,6 +142,13 @@ async function requirePublishPreliminaryAccess(req, res, next) {
 //   Apple API error / no config  → fail-open, allow (don't block legitimate users)
 //   missing token / Android      → fail-open, allow
 async function _enforceDeviceCheck(req, res, next, _context) {
+  // In test mode: bypass all device-level enforcement so developers can
+  // repeatedly register fresh accounts and test the full free-post flow on one
+  // physical iPhone without consuming or modifying production DeviceCheck bits.
+  if (isTestMode()) {
+    return next();
+  }
+
   const deviceToken = req.headers['x-devicecheck-token'];
 
   if (deviceToken && isDeviceCheckConfigured()) {
@@ -262,9 +269,10 @@ async function redeemFreePublication(userId, jobKey, deviceToken = null) {
   );
   const wasFirst = result.rowCount > 0;
 
-  // Update Apple DeviceCheck bit0 — fire-and-forget so a slow/failing Apple API
-  // never delays the publish response.
-  if (deviceToken && isDeviceCheckConfigured()) {
+  // Update Apple DeviceCheck bit0 — skipped in test mode so production bits are
+  // never modified during development testing.  In production, fire-and-forget so
+  // a slow/failing Apple API never delays the publish response.
+  if (!isTestMode() && deviceToken && isDeviceCheckConfigured()) {
     updateDeviceBit0(deviceToken).catch(async (err) => {
       console.warn(`[elmer] DeviceCheck update failed after redemption, queuing: ${err.message}`);
       await queueDeviceUpdate(userId, jobKey).catch(() => {});
@@ -578,38 +586,42 @@ function createBillingRouter() {
       const sub        = rows[0] ?? null;
       const entitlement = await getEntitlement(req.userId);
 
-      // Onboarding completion check
-      let onboardingCompleted = false;
-      // Backward compat: users who already have a subscription row are established users
-      if (sub !== null) {
-        onboardingCompleted = true;
+      // Load business settings to determine onboarding state and expose businessName.
+      // businessName is the authoritative signal: if the user set a name, they completed
+      // onboarding.  The legacy onboarding_completed flag and subscription/publish-record
+      // heuristics are preserved for backward compatibility with older app versions.
+      const { rows: bsRows } = await getPool().query(
+        'SELECT settings_json FROM business_settings WHERE user_id = $1',
+        [req.userId]
+      );
+      let bsData = {};
+      let businessName = '';
+      if (bsRows.length > 0) {
+        try { bsData = JSON.parse(bsRows[0].settings_json || '{}'); } catch { /* ignore */ }
+        businessName = (bsData.name ?? '').trim();
+      }
+
+      // Onboarding completion check (multi-signal for backward compat)
+      let onboardingCompleted = !!(businessName);
+      if (!onboardingCompleted && sub !== null) {
+        onboardingCompleted = true; // established paying user
       }
       if (!onboardingCompleted) {
-        // Users who have published something are established users
         const { rows: prRows } = await getPool().query(
           'SELECT id FROM publishing_records WHERE user_id = $1 LIMIT 1',
           [req.userId]
         );
         if (prRows.length > 0) onboardingCompleted = true;
       }
-      if (!onboardingCompleted) {
-        // Check explicit flag stored during onboarding completion
-        const { rows: bsRows } = await getPool().query(
-          'SELECT settings_json FROM business_settings WHERE user_id = $1',
-          [req.userId]
-        );
-        if (bsRows.length > 0) {
-          try {
-            const bsData = JSON.parse(bsRows[0].settings_json || '{}');
-            if (bsData.onboarding_completed === true) onboardingCompleted = true;
-          } catch { /* ignore */ }
-        }
+      if (!onboardingCompleted && bsData.onboarding_completed === true) {
+        onboardingCompleted = true; // legacy explicit flag
       }
 
       res.json({
         hasAccess: hasAccess(sub),
         entitlement,
         onboardingCompleted,
+        businessName,
         subscription: sub ? {
           status:             sub.status,
           currentPeriodStart: sub.current_period_start,

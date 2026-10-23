@@ -142,6 +142,91 @@ router.post('/onboarding/complete', requireAuth, wrap(async (req, res) => {
   return res.json({ ok: true });
 }));
 
+// ── GET /auth/settings ─────────────────────────────────────────────────────
+// Returns the caller's business settings (profile fields) and the current
+// settings_version.  The mobile app uses this to sync settings to a new device
+// and to detect concurrent updates before issuing a PATCH.
+router.get('/settings', requireAuth, wrap(async (req, res) => {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    'SELECT settings_json, settings_version FROM business_settings WHERE user_id = $1',
+    [req.userId]
+  );
+  if (rows.length === 0) {
+    return res.json({ settings: {}, version: 0 });
+  }
+  let settings = {};
+  try { settings = JSON.parse(rows[0].settings_json || '{}'); } catch { /* ignore */ }
+  return res.json({ settings, version: rows[0].settings_version ?? 0 });
+}));
+
+// ── PATCH /auth/settings ───────────────────────────────────────────────────
+// Partially updates business settings with optimistic concurrency control.
+// Body: { settings: {...partial fields...}, version: N }
+//   - If version matches (or row doesn't exist yet): merge fields, increment
+//     version, return { settings, version }.
+//   - If version mismatches: 409 with { error: 'version_conflict', current: {settings, version} }.
+// Unrecognised keys in settings are accepted (forward-compat for older servers).
+// Internal-only key "onboarding_completed" is preserved when present.
+router.patch('/settings', requireAuth, wrap(async (req, res) => {
+  const { settings: incoming, version: clientVersion } = req.body ?? {};
+  if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'settings must be an object' });
+  }
+  if (typeof clientVersion !== 'number') {
+    return res.status(400).json({ error: 'version must be a number' });
+  }
+
+  const pool   = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      'SELECT settings_json, settings_version FROM business_settings WHERE user_id = $1 FOR UPDATE',
+      [req.userId]
+    );
+
+    const now            = Date.now();
+    let   existing       = {};
+    let   currentVersion = 0;
+
+    if (rows.length > 0) {
+      try { existing = JSON.parse(rows[0].settings_json || '{}'); } catch { /* ignore */ }
+      currentVersion = rows[0].settings_version ?? 0;
+    }
+
+    if (currentVersion !== clientVersion) {
+      await client.query('COMMIT');
+      return res.status(409).json({
+        error:   'version_conflict',
+        current: { settings: existing, version: currentVersion },
+      });
+    }
+
+    const merged      = { ...existing, ...incoming };
+    const newVersion  = currentVersion + 1;
+
+    await client.query(
+      `INSERT INTO business_settings (user_id, settings_json, settings_version, updated_at)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE
+         SET settings_json    = $2,
+             settings_version = $3,
+             updated_at       = $4`,
+      [req.userId, JSON.stringify(merged), newVersion, now]
+    );
+
+    await client.query('COMMIT');
+    return res.json({ settings: merged, version: newVersion });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}));
+
 // ── DELETE /auth/history ───────────────────────────────────────────────────
 // Deletes the caller's publishing records. Local job data is managed client-side.
 router.delete('/history', requireAuth, wrap(async (req, res) => {
