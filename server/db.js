@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 let _pool        = null;
 let _initialized = false;
@@ -360,6 +360,57 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [9, Date.now()]
+      );
+    }
+
+    // ── V10: reviewer bypass account ─────────────────────────────────────────
+    // Ensures review@clickfuzz.com exists with an active subscription so the
+    // account passes the paywall gate without a Stripe payment.
+    // current_period_end = 2099-01-01T00:00:00Z (4070908800000 ms) keeps it
+    // active indefinitely without any recurring Stripe event.
+    if (!applied.has(10)) {
+      const reviewEmail    = 'review@clickfuzz.com';
+      const reviewPassHash = '$2a$12$oLMXjBAkHvEI7shRvCTEJe2Nh159LkFs8w.qwHTxFfEWefhXCRzf.';
+      const reviewCusId    = 'cus_review_bypass';
+      const reviewSubId    = 'sub_review_bypass';
+      const farFuture      = 4070908800000; // 2099-01-01
+      const now            = Date.now();
+
+      // 1. Create the account if it does not already exist.
+      await client.query(
+        `INSERT INTO users (email, password_hash, created_at, updated_at)
+         VALUES ($1, $2, $3, $3)
+         ON CONFLICT (email) DO NOTHING`,
+        [reviewEmail, reviewPassHash, now]
+      );
+
+      // 2. Ensure a stripe_customers row exists (needed by the subscriptions FK).
+      await client.query(
+        `INSERT INTO stripe_customers (user_id, customer_id, created_at, updated_at)
+         SELECT id, $1, $2::BIGINT, $2::BIGINT FROM users WHERE email = $3
+         ON CONFLICT (user_id) DO NOTHING`,
+        [reviewCusId, now, reviewEmail]
+      );
+
+      // 3. Upsert an active subscription that never expires.
+      await client.query(
+        `INSERT INTO subscriptions
+           (user_id, stripe_subscription_id, stripe_customer_id, status,
+            current_period_start, current_period_end, trial_used, created_at, updated_at)
+         SELECT id, $1, $2, 'active', $3::BIGINT, $4::BIGINT, true, $3::BIGINT, $3::BIGINT
+         FROM users WHERE email = $5
+         ON CONFLICT (user_id) DO UPDATE SET
+           status               = 'active',
+           current_period_end   = $4::BIGINT,
+           cancel_at_period_end = false,
+           canceled_at          = NULL,
+           updated_at           = $3::BIGINT`,
+        [reviewSubId, reviewCusId, now, farFuture, reviewEmail]
+      );
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [10, Date.now()]
       );
     }
 
