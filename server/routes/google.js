@@ -582,13 +582,14 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         // Build local post body
         const summary = message.trim().slice(0, GBP_SUMMARY_MAX);
         const postBody = {
-          languageCode: 'en-US',
           summary,
           topicType: 'STANDARD',
         };
 
         if (businessUrl) {
-          postBody.callToAction = { actionType: 'LEARN_MORE', url: businessUrl };
+          // GBP rejects callToAction URLs that don't start with http:// or https://
+          const normalizedUrl = /^https?:\/\//i.test(businessUrl) ? businessUrl : `https://${businessUrl}`;
+          postBody.callToAction = { actionType: 'LEARN_MORE', url: normalizedUrl };
         }
 
         if (mediaUrls.length > 0) {
@@ -628,6 +629,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
         if (postData.error) {
           const isAuth = postResp.status === 401 || postData.error.status === 'UNAUTHENTICATED';
+          console.error('[google] localPosts error:', JSON.stringify(postData.error));
           throw Object.assign(
             new Error(`GBP: ${postData.error.message ?? JSON.stringify(postData.error)}`),
             { isGbpError: true, isAuthError: isAuth }
