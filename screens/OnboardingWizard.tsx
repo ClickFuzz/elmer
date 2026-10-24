@@ -88,6 +88,8 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const [businessType, setBusinessType] = useState('');
   const [businessLocation, setBusinessLocation] = useState('');
   const [nameError, setNameError] = useState(false);
+  const [step1Saving, setStep1Saving] = useState(false);
+  const [step1SaveError, setStep1SaveError] = useState<string | null>(null);
   const typeRef = useRef<TextInput>(null);
   const locationRef = useRef<TextInput>(null);
 
@@ -155,40 +157,65 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       return;
     }
     setNameError(false);
-    const current = await getBusinessProfile();
-    const updatedProfile = {
-      ...current,
-      name:           businessName.trim(),
-      category:       businessType.trim() ? 'Other' : current.category,
-      categoryCustom: businessType.trim() || current.categoryCustom,
-      location:       businessLocation.trim() || current.location,
-    };
-    await saveBusinessProfile(updatedProfile);
+    setStep1SaveError(null);
+    setStep1Saving(true);
 
-    // Best-effort sync to server so a new device sees the business name on next login.
-    if (sessionToken) {
-      (async () => {
-        try {
-          const version = await getSettingsVersion();
-          const res = await fetch(`${API_URL}/auth/settings`, {
-            method:  'PATCH',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
-            body:    JSON.stringify({ settings: updatedProfile, version }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            await saveSettingsVersion(data.version ?? version + 1);
-          } else if (res.status === 409) {
-            // Server has a newer version; accept it silently (local takes precedence during onboarding)
-            const data = await res.json();
-            await saveSettingsVersion(data.current?.version ?? version);
-          }
-        } catch { /* ignore — local save already succeeded */ }
-      })();
+    try {
+      const current = await getBusinessProfile();
+      const updatedProfile = {
+        ...current,
+        name:           businessName.trim(),
+        category:       businessType.trim() ? 'Other' : current.category,
+        categoryCustom: businessType.trim() || current.categoryCustom,
+        location:       businessLocation.trim() || current.location,
+      };
+      await saveBusinessProfile(updatedProfile);
+
+      // The business name MUST reach Railway before onboarding is considered complete.
+      // Without a server-confirmed name, a second device login would show onboarding again.
+      if (!sessionToken) {
+        setStep1SaveError('Not signed in. Please go back and sign in to continue.');
+        return;
+      }
+
+      let version = await getSettingsVersion();
+      let savedToServer = false;
+
+      for (let attempt = 0; attempt < 2 && !savedToServer; attempt++) {
+        const res = await fetch(`${API_URL}/auth/settings`, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+          body:    JSON.stringify({ settings: updatedProfile, version }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          await saveSettingsVersion(data.version ?? version + 1);
+          savedToServer = true;
+        } else if (res.status === 409) {
+          // Another device set a version — accept the server version and retry once.
+          const data = await res.json();
+          version = data.current?.version ?? version;
+          await saveSettingsVersion(version);
+          // Loop continues for one retry
+        } else {
+          // Non-retryable server error
+          break;
+        }
+      }
+
+      if (!savedToServer) {
+        setStep1SaveError('Could not save to your account. Check your connection and try again.');
+        return;
+      }
+
+      Analytics.onboarding_step_completed(1, 'business_info');
+      setStep(2);
+    } catch {
+      setStep1SaveError('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setStep1Saving(false);
     }
-
-    Analytics.onboarding_step_completed(1, 'business_info');
-    setStep(2);
   };
 
   // ── Step 2 OAuth handlers ────────────────────────────────────────────────
@@ -445,8 +472,19 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.primaryBtn} onPress={handleStep1Continue} activeOpacity={0.8}>
-              <Text style={styles.primaryBtnText}>Continue</Text>
+            {step1SaveError ? (
+              <Text style={styles.saveError}>{step1SaveError}</Text>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.primaryBtn, step1Saving && styles.primaryBtnDisabled]}
+              onPress={handleStep1Continue}
+              disabled={step1Saving}
+              activeOpacity={0.8}
+            >
+              {step1Saving
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={styles.primaryBtnText}>Continue</Text>
+              }
             </TouchableOpacity>
           </View>
         )}
@@ -721,6 +759,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     color: colors.bg,
+  },
+  saveError: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.error,
+    textAlign: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 8,
   },
 
   skipBtn: {

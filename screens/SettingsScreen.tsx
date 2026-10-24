@@ -83,6 +83,10 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
   const [saved, setSaved] = useState(false);
   const [savedStyle, setSavedStyle] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savingStyle, setSavingStyle] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveStyleError, setSaveStyleError] = useState<string | null>(null);
   const [bizExpanded, setBizExpanded] = useState(false);
 
   // ── Auth state ─────────────────────────────────────────────────────────────
@@ -222,9 +226,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
   const update = (patch: Partial<BusinessProfile>) =>
     setProfile(prev => ({ ...prev, ...patch }));
 
-  // Fire-and-forget PATCH to server.  On version conflict (409), accept the server
-  // version and retry with the current profile so the user's edit wins after one conflict.
-  const patchSettingsToServer = async (updatedProfile: BusinessProfile, token: string) => {
+  type PatchResult =
+    | { ok: true; version: number }
+    | { ok: false; conflict: true; serverSettings: Partial<BusinessProfile>; serverVersion: number }
+    | { ok: false; conflict: false; message: string };
+
+  const patchSettingsToServer = async (updatedProfile: BusinessProfile, token: string): Promise<PatchResult> => {
     try {
       const version = await getSettingsVersion();
       const res = await fetch(`${API_URL}/auth/settings`, {
@@ -234,12 +241,16 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       });
       if (res.ok) {
         const data = await res.json();
-        await saveSettingsVersion(data.version ?? version + 1);
-      } else if (res.status === 409) {
+        const newVersion = data.version ?? version + 1;
+        await saveSettingsVersion(newVersion);
+        return { ok: true, version: newVersion };
+      }
+      if (res.status === 409) {
         const data = await res.json();
         const serverVersion: number = data.current?.version ?? version;
+        const serverSettings: Partial<BusinessProfile> = data.current?.settings ?? {};
         await saveSettingsVersion(serverVersion);
-        // Retry once with the now-correct version number
+        // Retry once with the corrected version — succeeds if only the version was stale
         const retry = await fetch(`${API_URL}/auth/settings`, {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -247,40 +258,114 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         });
         if (retry.ok) {
           const retryData = await retry.json();
-          await saveSettingsVersion(retryData.version ?? serverVersion + 1);
+          const retryVersion = retryData.version ?? serverVersion + 1;
+          await saveSettingsVersion(retryVersion);
+          return { ok: true, version: retryVersion };
         }
+        if (retry.status === 409) {
+          const retryData = await retry.json();
+          return {
+            ok: false, conflict: true,
+            serverSettings: retryData.current?.settings ?? serverSettings,
+            serverVersion:  retryData.current?.version ?? serverVersion,
+          };
+        }
+        return { ok: false, conflict: false, message: 'Could not save to your account. Try again.' };
       }
-    } catch { /* ignore — local save already succeeded */ }
+      return { ok: false, conflict: false, message: 'Could not save to your account. Try again.' };
+    } catch {
+      return { ok: false, conflict: false, message: 'Could not reach the server. Check your connection.' };
+    }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     Keyboard.dismiss();
-    saveBusinessProfile(profile)
-      .then(async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await saveBusinessProfile(profile);
+      if (!sessionToken) {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
-        if (sessionToken) patchSettingsToServer(profile, sessionToken).catch(() => {});
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        Alert.alert('Save failed', msg);
-      });
+        return;
+      }
+      const result = await patchSettingsToServer(profile, sessionToken);
+      if (result.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else if (!result.ok && result.conflict) {
+        Alert.alert(
+          'Conflict with another device',
+          "Another device changed the same settings. Which version would you like to keep?",
+          [
+            { text: 'Keep Mine', onPress: async () => {
+              await saveSettingsVersion(result.serverVersion);
+              const forceResult = await patchSettingsToServer(profile, sessionToken!);
+              if (forceResult.ok) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
+              else setSaveError('Could not save. Try again.');
+            }},
+            { text: "Use Other Device's", onPress: async () => {
+              const merged = { ...profile, ...result.serverSettings };
+              setProfile(merged);
+              await saveBusinessProfile(merged);
+              await saveSettingsVersion(result.serverVersion);
+            }},
+          ]
+        );
+      } else {
+        setSaveError(result.message);
+      }
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleSaveStyle = () => {
+  const handleSaveStyle = async () => {
     Keyboard.dismiss();
-    saveBusinessProfile(profile)
-      .then(async () => {
+    setSavingStyle(true);
+    setSaveStyleError(null);
+    try {
+      await saveBusinessProfile(profile);
+      Analytics.writing_style_updated();
+      if (profile.writingSamples?.trim()) Analytics.writing_examples_updated();
+      if (!sessionToken) {
         setSavedStyle(true);
         setTimeout(() => setSavedStyle(false), 2000);
-        Analytics.writing_style_updated();
-        if (profile.writingSamples?.trim()) Analytics.writing_examples_updated();
-        if (sessionToken) patchSettingsToServer(profile, sessionToken).catch(() => {});
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        Alert.alert('Save failed', msg);
-      });
+        return;
+      }
+      const result = await patchSettingsToServer(profile, sessionToken);
+      if (result.ok) {
+        setSavedStyle(true);
+        setTimeout(() => setSavedStyle(false), 2000);
+      } else if (!result.ok && result.conflict) {
+        Alert.alert(
+          'Conflict with another device',
+          "Another device changed the same settings. Which version would you like to keep?",
+          [
+            { text: 'Keep Mine', onPress: async () => {
+              await saveSettingsVersion(result.serverVersion);
+              const forceResult = await patchSettingsToServer(profile, sessionToken!);
+              if (forceResult.ok) { setSavedStyle(true); setTimeout(() => setSavedStyle(false), 2000); }
+              else setSaveStyleError('Could not save. Try again.');
+            }},
+            { text: "Use Other Device's", onPress: async () => {
+              const merged = { ...profile, ...result.serverSettings };
+              setProfile(merged);
+              await saveBusinessProfile(merged);
+              await saveSettingsVersion(result.serverVersion);
+            }},
+          ]
+        );
+      } else {
+        setSaveStyleError(result.message);
+      }
+    } catch (err: unknown) {
+      setSaveStyleError(err instanceof Error ? err.message : 'Save failed.');
+    } finally {
+      setSavingStyle(false);
+    }
   };
 
   // ── Auth handlers ──────────────────────────────────────────────────────────
@@ -1010,11 +1095,16 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         </View>
 
         {bizExpanded && <>
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.8}>
-            <Text style={styles.saveBtnText}>{saved ? 'Saved!' : 'Save Business Details'}</Text>
+          <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={handleSave} disabled={saving} activeOpacity={0.8}>
+            {saving
+              ? <ActivityIndicator color={colors.bg} size="small" />
+              : <Text style={styles.saveBtnText}>{saved ? 'Saved!' : 'Save Business Details'}</Text>}
           </TouchableOpacity>
+          {saveError && <Text style={styles.saveErrorText}>{saveError}</Text>}
           <Text style={styles.groupNote}>
-            Business details are stored on-device and used to write more relevant posts.
+            {sessionToken
+              ? 'Business details are synced to your account and available on all your devices.'
+              : 'Business details are stored on this device. Sign in to sync across devices.'}
           </Text>
         </>}
 
@@ -1072,9 +1162,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             />
           </View>
         </View>
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSaveStyle} activeOpacity={0.8}>
-          <Text style={styles.saveBtnText}>{savedStyle ? 'Saved!' : 'Save Writing Style'}</Text>
+        <TouchableOpacity style={[styles.saveBtn, savingStyle && styles.saveBtnDisabled]} onPress={handleSaveStyle} disabled={savingStyle} activeOpacity={0.8}>
+          {savingStyle
+            ? <ActivityIndicator color={colors.bg} size="small" />
+            : <Text style={styles.saveBtnText}>{savedStyle ? 'Saved!' : 'Save Writing Style'}</Text>}
         </TouchableOpacity>
+        {saveStyleError && <Text style={styles.saveErrorText}>{saveStyleError}</Text>}
         <Text style={styles.groupNote}>
           Your writing preferences are sent to the AI every time you generate a post. Be specific — the more detail you provide, the better the output.
         </Text>
@@ -1675,7 +1768,9 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
 
   saveBtn: { backgroundColor: colors.cyan, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
+  saveBtnDisabled: { opacity: 0.6 },
   saveBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  saveErrorText: { fontSize: 13, color: colors.error, marginTop: 6, marginHorizontal: 4 },
 
   // Auth form
   authError: { fontSize: 13, color: colors.error, paddingHorizontal: 16, paddingBottom: 8 },

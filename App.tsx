@@ -3,8 +3,8 @@ import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-goog
 import { Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppState, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from './constants/colors';
 import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, getJobPhotos, getSessionToken, getSessionUserId, getBusinessProfile, saveBusinessProfile, saveSettingsVersion, runAutoCleanup, Job, clearSession } from './storage/database';
@@ -78,6 +78,10 @@ function AppShell() {
   // handleSubscribed navigates back to 'result' (with the existing payload) instead of 'home'.
   const [pendingGenerationAfterSubscription, setPendingGenerationAfterSubscription] = useState(false);
 
+  // Incremented on every logout so in-flight syncServerSettings calls from a previous
+  // session are discarded and never write into the new account's local cache.
+  const sessionGenRef = useRef(0);
+
   const fetchSubscriptionStatus = async (token: string): Promise<SubscriptionStatus | false> => {
     try {
       const res = await fetch(`${API_URL}/billing/subscription`, {
@@ -94,12 +98,15 @@ function AppShell() {
   // Returns true if a non-empty business name was found (= onboarding completed).
   // Fail-open: network failures leave the local cache intact.
   const syncServerSettings = async (token: string): Promise<boolean> => {
+    const gen = sessionGenRef.current;
     try {
       const res = await fetch(`${API_URL}/auth/settings`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (sessionGenRef.current !== gen) return false; // session changed while awaiting
       if (!res.ok) return false;
       const data = await res.json();
+      if (sessionGenRef.current !== gen) return false;
       const serverSettings = data.settings ?? {};
       const version: number = data.version ?? 0;
       if (serverSettings && typeof serverSettings === 'object') {
@@ -164,6 +171,18 @@ function AppShell() {
     runAutoCleanup().catch(() => {});
   }, []);
 
+  // Re-sync settings from the server whenever the app returns to the foreground,
+  // so edits made on another device are reflected on the current device.
+  useEffect(() => {
+    if (!authToken) return;
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        syncServerSettings(authToken).catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [authToken]);
+
   const handleAuthChange = async (authed: boolean) => {
     setIsAuthed(authed);
     if (authed) {
@@ -183,6 +202,7 @@ function AppShell() {
       }
       setScreen('home');
     } else {
+      sessionGenRef.current += 1;
       Analytics.reset();
       setAuthToken(null);
       setSubscriptionStatus(null);
@@ -224,6 +244,7 @@ function AppShell() {
         headers: { Authorization: `Bearer ${tok}` },
       }).catch(() => {});
     }
+    sessionGenRef.current += 1;
     Analytics.reset();
     await clearSession();
     setIsAuthed(false);
