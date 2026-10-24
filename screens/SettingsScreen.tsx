@@ -3,6 +3,7 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  InputAccessoryView,
   Keyboard,
   Linking,
   Platform,
@@ -39,6 +40,7 @@ import {
 import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+const DONE_BAR_ID = 'settings-kb-done';
 
 type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean };
 type JobStats = { total: number; drafts: number };
@@ -1041,12 +1043,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             <View style={styles.divider} />
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Business Name</Text>
-              <TextInput style={styles.fieldInput} value={profile.name} onChangeText={name => update({ name })} placeholder="Your company name" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" />
+              <TextInput style={styles.fieldInput} value={profile.name} onChangeText={name => update({ name })} placeholder="Your company name" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Website</Text>
-              <TextInput style={styles.fieldInput} value={profile.website} onChangeText={website => update({ website })} placeholder="yoursite.com" placeholderTextColor={colors.textMuted} autoCorrect={false} autoCapitalize="none" keyboardType="url" returnKeyType="next" />
+              <TextInput style={styles.fieldInput} value={profile.website} onChangeText={website => update({ website })} placeholder="yoursite.com" placeholderTextColor={colors.textMuted} autoCorrect={false} autoCapitalize="none" keyboardType="url" returnKeyType="next" inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldRow}>
@@ -1054,12 +1056,12 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                 <Text style={styles.fieldLabel}>Inquiry URL</Text>
                 <Text style={styles.fieldSubLabel}>Quote form, booking page, or contact page</Text>
               </View>
-              <TextInput style={[styles.fieldInput, { flex: 0.55 }]} value={profile.inquiryUrl ?? ''} onChangeText={inquiryUrl => update({ inquiryUrl })} placeholder="optional" placeholderTextColor={colors.textMuted} autoCorrect={false} autoCapitalize="none" keyboardType="url" returnKeyType="next" />
+              <TextInput style={[styles.fieldInput, { flex: 0.55 }]} value={profile.inquiryUrl ?? ''} onChangeText={inquiryUrl => update({ inquiryUrl })} placeholder="optional" placeholderTextColor={colors.textMuted} autoCorrect={false} autoCapitalize="none" keyboardType="url" returnKeyType="next" inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Location</Text>
-              <TextInput style={styles.fieldInput} value={profile.location} onChangeText={location => update({ location })} placeholder="City, State" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" />
+              <TextInput style={styles.fieldInput} value={profile.location} onChangeText={location => update({ location })} placeholder="City, State" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
             </View>
             <View style={styles.divider} />
             <TouchableOpacity style={styles.fieldRow} onPress={() => showPicker('Business Category', CATEGORIES, category => update({ category }))} activeOpacity={0.7}>
@@ -1073,23 +1075,23 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
               <View style={styles.divider} />
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Custom Category</Text>
-                <TextInput style={styles.fieldInput} value={profile.categoryCustom} onChangeText={categoryCustom => update({ categoryCustom })} placeholder="Describe your trade" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" />
+                <TextInput style={styles.fieldInput} value={profile.categoryCustom} onChangeText={categoryCustom => update({ categoryCustom })} placeholder="Describe your trade" placeholderTextColor={colors.textMuted} autoCorrect={false} returnKeyType="next" inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
               </View>
             </>}
             <View style={styles.divider} />
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabelAbove}>Services Offered</Text>
-              <TagInput tags={profile.services} onChange={services => update({ services })} placeholder="e.g. Roof Replacement  —  press Return to add" />
+              <TagInput tags={profile.services} onChange={services => update({ services })} placeholder="e.g. Roof Repair" />
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabelAbove}>Service Areas</Text>
-              <TagInput tags={profile.serviceAreas} onChange={serviceAreas => update({ serviceAreas })} placeholder="e.g. Denver CO  —  press Return to add" />
+              <TagInput tags={profile.serviceAreas} onChange={serviceAreas => update({ serviceAreas })} placeholder="e.g. Denver, CO" />
             </View>
             <View style={styles.divider} />
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabelAbove}>Business Description</Text>
-              <TextInput style={styles.descInput} value={profile.description} onChangeText={description => update({ description })} placeholder="Describe your company, specialties, or what sets you apart…" placeholderTextColor={colors.textMuted} multiline textAlignVertical="top" autoCorrect />
+              <TextInput style={styles.descInput} value={profile.description} onChangeText={description => update({ description })} placeholder="Describe your company, specialties, or what sets you apart…" placeholderTextColor={colors.textMuted} multiline textAlignVertical="top" autoCorrect inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
             </View>
           </>}
         </View>
@@ -1144,6 +1146,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
               multiline
               textAlignVertical="top"
               autoCorrect
+              inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
             />
           </View>
           <View style={styles.divider} />
@@ -1159,6 +1162,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
               multiline
               textAlignVertical="top"
               autoCorrect
+              inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
             />
           </View>
         </View>
@@ -1484,6 +1488,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                   keyboardType="url"
                   returnKeyType="done"
                   onSubmitEditing={handleConnectWordPress}
+                  inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                 />
               </View>
               <View style={styles.managePagesActions}>
@@ -1624,6 +1629,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                     autoCorrect={false}
                     returnKeyType="next"
                     onSubmitEditing={() => passwordRef.current?.focus()}
+                    inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                   />
                 </View>
                 <View style={styles.divider} />
@@ -1639,6 +1645,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                     secureTextEntry
                     returnKeyType="done"
                     onSubmitEditing={() => handleAuth('login')}
+                    inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                   />
                 </View>
                 {authError && <Text style={styles.authError}>{authError}</Text>}
@@ -1676,6 +1683,15 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         </TouchableOpacity>
 
       </ScrollView>
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={DONE_BAR_ID}>
+          <View style={styles.doneBar}>
+            <TouchableOpacity onPress={() => Keyboard.dismiss()}>
+              <Text style={styles.doneBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      )}
     </View>
   );
 }
@@ -1693,6 +1709,7 @@ function TagInput({ tags, onChange, placeholder }: {
     if (t && !tags.includes(t)) onChange([...tags, t]);
     setDraft('');
   };
+  const hasText = draft.trim().length > 0;
   return (
     <View>
       {tags.length > 0 && (
@@ -1707,7 +1724,12 @@ function TagInput({ tags, onChange, placeholder }: {
           ))}
         </View>
       )}
-      <TextInput style={tagStyles.input} value={draft} onChangeText={setDraft} placeholder={placeholder} placeholderTextColor={colors.textMuted} returnKeyType="done" onSubmitEditing={commit} onBlur={commit} blurOnSubmit={false} autoCorrect={false} />
+      <View style={tagStyles.inputRow}>
+        <TextInput style={[tagStyles.input, tagStyles.inputFlex]} value={draft} onChangeText={setDraft} placeholder={placeholder} placeholderTextColor={colors.textMuted} returnKeyType="default" onSubmitEditing={commit} onBlur={commit} blurOnSubmit={false} autoCorrect={false} inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined} />
+        <TouchableOpacity onPress={commit} style={[tagStyles.addBtn, !hasText && tagStyles.addBtnDisabled]} disabled={!hasText}>
+          <Text style={[tagStyles.addBtnText, !hasText && tagStyles.addBtnTextDim]}>+ Add</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -1717,7 +1739,13 @@ const tagStyles = StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, gap: 6 },
   chipText: { fontSize: 13, color: colors.textPrimary },
   chipRemove: { fontSize: 16, color: colors.textMuted, lineHeight: 18 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   input: { fontSize: 14, color: colors.textPrimary, backgroundColor: colors.bg, borderRadius: 8, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 9 },
+  inputFlex: { flex: 1 },
+  addBtn: { backgroundColor: colors.cyan, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 9 },
+  addBtnDisabled: { backgroundColor: colors.border },
+  addBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  addBtnTextDim: { color: colors.textMuted },
 });
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -1849,4 +1877,7 @@ const styles = StyleSheet.create({
   storageVal: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
   supportLink: { alignItems: 'center', paddingVertical: 20, marginBottom: 8 },
   supportLinkText: { fontSize: 13, color: colors.textMuted, textDecorationLine: 'underline' },
+
+  doneBar: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', justifyContent: 'flex-end' },
+  doneBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.cyan, paddingHorizontal: 4, paddingVertical: 2 },
 });
