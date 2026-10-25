@@ -581,10 +581,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
         // Build local post body
         const summary = message.trim().slice(0, GBP_SUMMARY_MAX);
-        const postBody = {
-          summary,
-          topicType: 'STANDARD',
-        };
+        const postBody = { summary };
 
         if (businessUrl) {
           // GBP rejects callToAction URLs that don't start with http:// or https://

@@ -583,9 +583,11 @@ export async function updateJobPublishStatus(
 ): Promise<void> {
   const db = await getDb();
   const email = await getSessionEmail();
+  // Use COALESCE so NULL email in both the record and session still match
   await db.runAsync(
-    `UPDATE jobs SET status = ?, publish_status = ?, updated_at = ? WHERE id = ? AND user_email = ?`,
-    [status, JSON.stringify(publishStatus), Date.now(), jobId, email ?? ''],
+    `UPDATE jobs SET status = ?, publish_status = ?, updated_at = ?
+     WHERE id = ? AND COALESCE(user_email, '') = COALESCE(?, '')`,
+    [status, JSON.stringify(publishStatus), Date.now(), jobId, email],
   );
 }
 

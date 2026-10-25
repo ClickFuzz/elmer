@@ -770,7 +770,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               updateJobPublishStatus(savedJobId, newStatus, {
                 platforms: platformsRecord,
                 results: allResults.map(r => ({ platform: r.platform, pageName: r.pageName, ok: r.ok, postUrl: r.postUrl, error: r.error, duplicate: r.duplicate })),
-              }).catch(() => {});
+              }).catch(err => console.warn('updateJobPublishStatus failed:', err));
             }
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Publishing failed';
