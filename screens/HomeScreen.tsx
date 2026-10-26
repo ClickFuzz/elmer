@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import {
   useAudioRecorder,
@@ -54,10 +55,11 @@ const CLASSIFICATION_COLORS: Record<PhotoClassification, string> = {
 
 type Props = {
   onGenerate: (data: GeneratePayload) => void;
+  onClear?: () => void;
   initialState: HomeState | null;
 };
 
-export default function HomeScreen({ onGenerate, initialState }: Props) {
+export default function HomeScreen({ onGenerate, onClear, initialState }: Props) {
   // useState initializer runs on each mount — restores state after back navigation
   const [photos, setPhotos] = useState<PhotoItem[]>(initialState?.photos ?? []);
   const [audioUri, setAudioUri] = useState<string | null>(initialState?.audioUri ?? null);
@@ -105,9 +107,22 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
     savePendingHomeState({ photos, audioUri }).catch(() => {});
   }, [photos, audioUri]);
 
+  // iOS photo library returns HEIC files which the server can't process.
+  // Convert any picked image to JPEG before storing.
+  const toJpeg = async (uri: string): Promise<string> => {
+    try {
+      const rendered = await ImageManipulator.manipulate(uri).renderAsync();
+      const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.8 });
+      return saved.uri;
+    } catch {
+      return uri;
+    }
+  };
+
   const clearAll = () => {
     setPhotos([]);
     setAudioUri(null);
+    onClear?.();
     if (playerRef.current) {
       playerRef.current.pause();
       playerRef.current.remove();
@@ -168,16 +183,16 @@ export default function HomeScreen({ onGenerate, initialState }: Props) {
               exif: true,
             });
             if (!result.canceled) {
-              setPhotos(prev => {
-                const existingCount = prev.length;
-                const newPhotos: PhotoItem[] = result.assets.map((a, idx) => ({
-                  uri: a.uri,
+              const existingCount = photos.length;
+              const converted = await Promise.all(
+                result.assets.map(async (a, idx) => ({
+                  uri: await toJpeg(a.uri),
                   classification: 'General' as const,
                   isFeatured: existingCount === 0 && idx === 0,
                   gps: extractGpsFromExif(a.exif as Record<string, unknown> | null),
-                }));
-                return [...prev, ...newPhotos].slice(0, MAX_PHOTOS);
-              });
+                }))
+              );
+              setPhotos(prev => [...prev, ...converted].slice(0, MAX_PHOTOS));
             }
           }, 300);
         },

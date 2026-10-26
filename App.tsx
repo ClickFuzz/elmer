@@ -365,6 +365,7 @@ function AppShell() {
         {screen === 'home' && (
           <HomeScreen
             onGenerate={handleGenerate}
+            onClear={() => { setSavedHomeState(null); savePendingHomeState(null); }}
             initialState={savedHomeState}
           />
         )}
