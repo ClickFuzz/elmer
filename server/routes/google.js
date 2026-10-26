@@ -10,7 +10,7 @@ const { encrypt, decrypt } = require('../crypto');
 const { requireAuth } = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
-const { orderWithFeaturedFirst } = require('./media-utils');
+const { orderWithFeaturedFirst, prepareForGbp } = require('./media-utils');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage';
@@ -477,7 +477,9 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         const destName = `gbp_${now}_${i}.jpg`;
         const destPath = path.join(TMP_DIR, destName);
         try {
-          fs.copyFileSync(photoFiles[i].path, destPath);
+          const processed = await prepareForGbp(photoFiles[i].path);
+          fs.copyFileSync(processed, destPath);
+          if (processed !== photoFiles[i].path) fs.unlink(processed, () => {});
           mediaPaths.push(destPath);
           mediaUrls.push(`${serverUrl}/google/media/${destName}`);
         } catch (err) {

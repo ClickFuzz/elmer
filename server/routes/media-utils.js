@@ -186,10 +186,30 @@ function parseIntArray(raw) {
   }
 }
 
+// Prepares a single photo for Google Business Profile.
+// GBP requires: JPEG, EXIF-corrected, max 5 MB, min 250×250 px.
+// Caps longest edge at 2048 px and encodes at 85% JPEG quality.
+async function prepareForGbp(inputPath) {
+  const sharp = getSharp();
+  const out = inputPath + '_gbp.jpg';
+  try {
+    await sharp(inputPath)
+      .rotate()                             // EXIF auto-rotation
+      .resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toFile(out);
+    return out;
+  } catch (err) {
+    console.warn('[media-utils] prepareForGbp failed, using original:', err.message);
+    return inputPath;
+  }
+}
+
 module.exports = {
   getEffectiveDimensions,
   prepareForInstagram,
   prepareCarouselForInstagram,
+  prepareForGbp,
   generateBeforeAfterComposite,
   orderWithFeaturedFirst,
   parseIntArray,
