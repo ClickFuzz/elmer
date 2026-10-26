@@ -583,9 +583,10 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         const summary = message.trim().slice(0, GBP_SUMMARY_MAX);
         const postBody = { summary };
 
-        if (businessUrl) {
+        const trimmedUrl = businessUrl.trim();
+        if (trimmedUrl) {
           // GBP rejects callToAction URLs that don't start with http:// or https://
-          const normalizedUrl = /^https?:\/\//i.test(businessUrl) ? businessUrl : `https://${businessUrl}`;
+          const normalizedUrl = /^https?:\/\//i.test(trimmedUrl) ? trimmedUrl : `https://${trimmedUrl}`;
           postBody.callToAction = { actionType: 'LEARN_MORE', url: normalizedUrl };
         }
 
@@ -595,6 +596,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
         const locationPath = locRow.account_id; // accounts/{X}/locations/{Y}
         const apiUrl = `${LOCAL_POSTS_API}/${locationPath}/localPosts`;
+        console.log('[google] localPosts request body:', JSON.stringify(postBody));
 
         let postResp = await apiFetch(apiUrl, {
           method: 'POST',
