@@ -581,7 +581,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
         // Build local post body
         const summary = message.trim().slice(0, GBP_SUMMARY_MAX);
-        const postBody = { summary };
+        const postBody = { summary, topicType: 'STANDARD' };
 
         const trimmedUrl = businessUrl.trim();
         if (trimmedUrl) {
@@ -596,8 +596,6 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
         const locationPath = locRow.account_id; // accounts/{X}/locations/{Y}
         const apiUrl = `${LOCAL_POSTS_API}/${locationPath}/localPosts`;
-        console.log('[google] localPosts request body:', JSON.stringify(postBody));
-
         let postResp = await apiFetch(apiUrl, {
           method: 'POST',
           headers: {
