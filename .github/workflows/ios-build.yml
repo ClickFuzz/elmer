@@ -23,18 +23,29 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Xcode diagnostics
-        run: |
-          echo "--- Available Xcode installs ---"
-          ls /Applications/ | grep Xcode || echo "none"
-          echo "--- Current xcode-select ---"
-          xcode-select -p || true
-          xcodebuild -version || true
-
-      - name: Select Xcode 16
+      - name: Select Xcode (>= 16.1 required)
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16'
+          xcode-version: 'latest'
+
+      - name: Verify Xcode version >= 16.1
+        run: |
+          echo "=== Xcode diagnostics ==="
+          echo "--- Available Xcode installations ---"
+          ls /Applications/ | grep -i xcode || echo "none found"
+          echo "--- Active Xcode path ---"
+          xcode-select -p
+          echo "--- Xcode version ---"
+          xcodebuild -version
+          XCODE_VERSION=$(xcodebuild -version | head -1 | grep -oE '[0-9]+\.[0-9]+')
+          XCODE_MAJOR=$(echo "$XCODE_VERSION" | cut -d. -f1)
+          XCODE_MINOR=$(echo "$XCODE_VERSION" | cut -d. -f2)
+          echo "Parsed version: major=$XCODE_MAJOR minor=$XCODE_MINOR"
+          if [ "$XCODE_MAJOR" -lt 16 ] || { [ "$XCODE_MAJOR" -eq 16 ] && [ "$XCODE_MINOR" -lt 1 ]; }; then
+            echo "ERROR: Xcode $XCODE_VERSION is below the minimum required version 16.1"
+            exit 1
+          fi
+          echo "✓ Xcode $XCODE_VERSION satisfies >= 16.1"
 
       - name: Install dependencies
         run: npm ci
@@ -42,15 +53,24 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli@latest
 
-      - name: Build iOS app (EAS cloud)
+      - name: Build iOS app locally
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           eas build \
+            --local \
             --platform ios \
             --profile github \
             --non-interactive \
-            --wait
+            --output ./elmer.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: elmer-ios-${{ github.run_number }}
+          path: ./elmer.ipa
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Submit to TestFlight
         env:
@@ -59,5 +79,5 @@ jobs:
           eas submit \
             --platform ios \
             --profile production \
-            --latest \
+            --path ./elmer.ipa \
             --non-interactive
