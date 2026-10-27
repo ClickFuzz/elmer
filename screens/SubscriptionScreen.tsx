@@ -25,6 +25,7 @@ export type SubscriptionStatus = {
   hasAccess: boolean;
   entitlement?: { access: string };
   onboardingCompleted?: boolean;
+  testMode?: boolean;
   subscription: {
     status: string;
     currentPeriodStart: number | null;
@@ -45,9 +46,11 @@ type Props = {
   onSignOut: () => void;
   /** Pre-loaded subscription data (avoids an extra fetch on first render) */
   initialStatus?: SubscriptionStatus | null;
+  /** Called when the user dismisses the screen without subscribing (only passed when the user still has app access) */
+  onDismiss?: () => void;
 };
 
-export default function SubscriptionScreen({ onSubscribed, onSignOut, initialStatus }: Props) {
+export default function SubscriptionScreen({ onSubscribed, onSignOut, initialStatus, onDismiss }: Props) {
   const [status, setStatus] = useState<SubscriptionStatus | null>(initialStatus ?? null);
   const [loading, setLoading] = useState(!initialStatus);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -397,6 +400,12 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
         <Text style={styles.signOutText}>Sign Out</Text>
       </TouchableOpacity>
+
+      {onDismiss && (
+        <TouchableOpacity style={styles.dismissBtn} onPress={onDismiss} activeOpacity={0.7}>
+          <Text style={styles.dismissText}>Maybe later</Text>
+        </TouchableOpacity>
+      )}
     </ScrollView>
   );
 }
@@ -562,5 +571,15 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     color: colors.textMuted,
     textDecorationLine: 'underline',
+  },
+
+  dismissBtn: {
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  dismissText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
   },
 });

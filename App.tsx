@@ -42,7 +42,7 @@ export type HomeState = {
 export type AppScreen = 'home' | 'result' | 'settings' | 'history' | 'managedata' | 'subscription';
 
 // Entitlement access values that grant app use without a subscription
-const FREE_ACCESS_VALUES = new Set(['free_available', 'free_reserved']);
+const FREE_ACCESS_VALUES = new Set(['free_available', 'free_reserved', 'free_redeemed']);
 
 type NavItemProps = {
   iconActive: React.ComponentProps<typeof Ionicons>['name'];
@@ -236,6 +236,12 @@ function AppShell() {
     });
   };
 
+  const handleSubscriptionDismiss = () => {
+    setPendingGenerationAfterSubscription(false);
+    savePendingGenerationFlag(false).catch(() => {});
+    setScreen('home');
+  };
+
   const handleSubscriptionSignOut = async () => {
     const tok = await getSessionToken();
     if (tok) {
@@ -333,6 +339,7 @@ function AppShell() {
   const hasFreeAccess = subStatus && FREE_ACCESS_VALUES.has((subStatus as any).entitlement?.access);
   const hasFreePublicationAvailable = subStatus !== false && (subStatus as any)?.entitlement?.access === 'free_available';
   if ((!hasSubscriptionAccess && !hasFreeAccess) || screen === 'subscription') {
+    const userHasAppAccess = !!(hasSubscriptionAccess || hasFreeAccess);
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
         <StatusBar style="light" />
@@ -340,6 +347,7 @@ function AppShell() {
           onSubscribed={handleSubscribed}
           onSignOut={handleSubscriptionSignOut}
           initialStatus={subStatus || undefined}
+          onDismiss={userHasAppAccess ? handleSubscriptionDismiss : undefined}
         />
       </SafeAreaView>
     );
@@ -399,6 +407,7 @@ function AppShell() {
             onManageData={() => setScreen('managedata')}
             onManageSubscription={() => setScreen('subscription')}
             returnToPost={settingsReturnToResult}
+            testMode={subscriptionStatus ? (subscriptionStatus as SubscriptionStatus).testMode === true : false}
           />
         )}
         {screen === 'managedata' && (

@@ -15,6 +15,8 @@ import {
   View,
 } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
+import * as Updates from 'expo-updates';
+import Constants from 'expo-constants';
 import { colors } from '../constants/colors';
 import {
   getJobStats,
@@ -42,7 +44,7 @@ import { Analytics } from '../services/analytics';
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 const DONE_BAR_ID = 'settings-kb-done';
 
-type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean };
+type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean; testMode?: boolean };
 type JobStats = { total: number; drafts: number };
 
 const CATEGORIES = [
@@ -79,7 +81,7 @@ function showPicker(title: string, options: string[], onSelect: (v: string) => v
   }
 }
 
-export default function SettingsScreen({ onBack, onAuthChange, onManageData, onManageSubscription, returnToPost }: Props) {
+export default function SettingsScreen({ onBack, onAuthChange, onManageData, onManageSubscription, returnToPost, testMode }: Props) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const [profile, setProfile] = useState<BusinessProfile>(DEFAULT_BUSINESS_PROFILE);
@@ -142,6 +144,80 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
 
   // ── Platform manage panel ──────────────────────────────────────────────────
   const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
+
+  // ── OTA update state ───────────────────────────────────────────────────────
+  type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'done' | 'error';
+  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const updateBusyRef = useRef(false);
+
+  const appVersion = Constants.expoConfig?.version ?? '—';
+  const buildNumber =
+    Constants.platform?.ios?.buildNumber ??
+    (Constants.platform?.android?.versionCode != null
+      ? String(Constants.platform.android.versionCode)
+      : null) ??
+    '—';
+  const currentUpdateId = Updates.updateId ?? null;
+
+  const handleCheckForUpdate = async () => {
+    if (updateBusyRef.current) return;
+    updateBusyRef.current = true;
+    setUpdateMessage(null);
+
+    if (returnToPost) {
+      Alert.alert(
+        'Unsaved Edits',
+        'You have an active post open. Go back and finish your post before applying an update.',
+        [{ text: 'OK' }]
+      );
+      updateBusyRef.current = false;
+      return;
+    }
+
+    if (!Updates.isEnabled) {
+      setUpdatePhase('done');
+      setUpdateMessage('OTA updates are not enabled in this build.');
+      updateBusyRef.current = false;
+      return;
+    }
+
+    setUpdatePhase('checking');
+    try {
+      const check = await Updates.checkForUpdateAsync();
+      if (!check.isAvailable) {
+        setUpdatePhase('done');
+        setUpdateMessage("You're up to date.");
+        updateBusyRef.current = false;
+        return;
+      }
+
+      setUpdatePhase('downloading');
+      setUpdateMessage('Downloading update…');
+      await Updates.fetchUpdateAsync();
+      setUpdatePhase('done');
+      setUpdateMessage(null);
+
+      Alert.alert(
+        'Update Downloaded',
+        'Restart Elmer to apply the update?',
+        [
+          { text: 'Later', style: 'cancel', onPress: () => { updateBusyRef.current = false; } },
+          {
+            text: 'Restart Now',
+            onPress: async () => {
+              updateBusyRef.current = false;
+              await Updates.reloadAsync();
+            },
+          },
+        ]
+      );
+    } catch {
+      setUpdatePhase('error');
+      setUpdateMessage('Update check failed. Check your connection and try again.');
+      updateBusyRef.current = false;
+    }
+  };
 
   const togglePlatformPanel = (platform: string) => {
     setExpandedPlatform(prev => {
@@ -1674,6 +1750,39 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
           )}
         </View>
 
+        {testMode && (
+          <>
+            <Text style={styles.groupLabel}>Developer</Text>
+            <View style={styles.card}>
+              <View style={styles.devUpdateInner}>
+                <TouchableOpacity
+                  style={[styles.saveBtn, (updatePhase === 'checking' || updatePhase === 'downloading') && styles.saveBtnDisabled]}
+                  onPress={handleCheckForUpdate}
+                  disabled={updatePhase === 'checking' || updatePhase === 'downloading'}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.saveBtnText}>
+                    {updatePhase === 'checking'
+                      ? 'Checking for Updates…'
+                      : updatePhase === 'downloading'
+                      ? 'Downloading…'
+                      : 'Check for Updates'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.devVersionText}>Version {appVersion} (Build {buildNumber})</Text>
+                {currentUpdateId && (
+                  <Text style={styles.devUpdateIdText}>Update {currentUpdateId.slice(0, 8)}</Text>
+                )}
+                {updateMessage && (
+                  <Text style={[styles.devUpdateIdText, updatePhase === 'error' && { color: colors.error }]}>
+                    {updateMessage}
+                  </Text>
+                )}
+              </View>
+            </View>
+          </>
+        )}
+
         <TouchableOpacity
           style={styles.supportLink}
           onPress={() => Linking.openURL('mailto:help@getelmer.com')}
@@ -1880,4 +1989,8 @@ const styles = StyleSheet.create({
 
   doneBar: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', justifyContent: 'flex-end' },
   doneBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.cyan, paddingHorizontal: 4, paddingVertical: 2 },
+
+  devUpdateInner: { padding: 16, gap: 8 },
+  devVersionText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', marginTop: 4 },
+  devUpdateIdText: { fontSize: 12, color: colors.textMuted, textAlign: 'center' },
 });

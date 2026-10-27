@@ -1263,7 +1263,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
 
 const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string }> = {
   facebook:  { bg: '#1877F2', iconColor: '#fff',          icon: 'logo-facebook' },
-  google:    { bg: colors.cyan, iconColor: colors.bg,     icon: 'logo-google' },
+  google:    { bg: '#dc4438', iconColor: '#fff',           icon: 'logo-google' },
   wordpress: { bg: '#3D454E', iconColor: '#A0AEC0',       icon: 'globe-outline' },
   instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
   threads:   { bg: '#fff',    iconColor: '#101010',        icon: 'logo-threads'   },

@@ -622,6 +622,7 @@ function createBillingRouter() {
         entitlement,
         onboardingCompleted,
         businessName,
+        testMode: isTestMode(),
         subscription: sub ? {
           status:             sub.status,
           currentPeriodStart: sub.current_period_start,
