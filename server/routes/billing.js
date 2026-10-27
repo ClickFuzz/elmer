@@ -21,7 +21,7 @@ const {
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 // Set STRIPE_TEST_MODE=true in Railway to use test keys instead of live keys.
-const isTestMode = () => process.env.STRIPE_TEST_MODE === 'true';
+const isTestMode = () => process.env.STRIPE_TEST_MODE?.toLowerCase() === 'true';
 
 const STRIPE_SECRET_KEY     = () => isTestMode()
   ? process.env.STRIPE_TEST_SECRET_KEY
