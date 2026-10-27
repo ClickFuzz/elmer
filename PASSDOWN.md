@@ -24,15 +24,15 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | 10 | Production security (webhook dedup, content hashing, draft persistence, onboarding leakage fix) | COMPLETE |
 | 11 | Multi-device sync, server-authoritative settings, test-mode DeviceCheck bypass | COMPLETE |
 | — | GitHub Actions CI/CD pipeline (local EAS build → TestFlight) | COMPLETE |
+| — | Manual OTA update checker in Settings (test-mode only) | COMPLETE |
 
 ---
 
 ## Current Build State
 
 - **Branch:** `main`
-- **HEAD:** `daaeab0`
-- **Last known TestFlight build:** #13 (commit `90bf9e9`) — did NOT include GBP HEIC/topicType fixes
-- **Build in progress:** GitHub Actions run triggered from `daaeab0`; expected to be next EAS build number (auto-incremented)
+- **HEAD:** `a57c19b`
+- **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Bundle ID:** `com.clickfuzz.elmer`
@@ -80,6 +80,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
 - **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal
+- **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
 ### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
 
@@ -138,6 +139,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 | `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret (keep server-side only) |
 | `GOOGLE_REDIRECT_URI` | `https://api.getelmer.com/google/callback` (must match GCP console + Railway) |
 | `GOOGLE_OAUTH_RETURN_SCHEME` | Default `elmer`; matches `scheme` in `app.json` |
+| `STRIPE_TEST_MODE` | `TRUE` in Railway (case-insensitive check); enables test Stripe keys + DeviceCheck bypass + Developer section in Settings |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
 
