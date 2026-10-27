@@ -236,12 +236,6 @@ function AppShell() {
     });
   };
 
-  const handleSubscriptionDismiss = () => {
-    setPendingGenerationAfterSubscription(false);
-    savePendingGenerationFlag(false).catch(() => {});
-    setScreen('home');
-  };
-
   const handleSubscriptionSignOut = async () => {
     const tok = await getSessionToken();
     if (tok) {
@@ -332,14 +326,13 @@ function AppShell() {
     );
   }
 
-  // Subscription gate: show offer / management screen when user has no access
+  // Subscription gate: show offer screen when user has no access.
   // Users with a free publication available or reserved can use the app without a subscription.
   const subStatus = subscriptionStatus as SubscriptionStatus | false;
   const hasSubscriptionAccess = subStatus && subStatus.hasAccess;
   const hasFreeAccess = subStatus && FREE_ACCESS_VALUES.has((subStatus as any).entitlement?.access);
   const hasFreePublicationAvailable = subStatus !== false && (subStatus as any)?.entitlement?.access === 'free_available';
-  if ((!hasSubscriptionAccess && !hasFreeAccess) || screen === 'subscription') {
-    const userHasAppAccess = !!(hasSubscriptionAccess || hasFreeAccess);
+  if (!hasSubscriptionAccess && !hasFreeAccess) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
         <StatusBar style="light" />
@@ -347,7 +340,6 @@ function AppShell() {
           onSubscribed={handleSubscribed}
           onSignOut={handleSubscriptionSignOut}
           initialStatus={subStatus || undefined}
-          onDismiss={userHasAppAccess ? handleSubscriptionDismiss : undefined}
         />
       </SafeAreaView>
     );
@@ -422,6 +414,14 @@ function AppShell() {
             onPublishDraft={handlePublishDraft}
           />
         )}
+        {screen === 'subscription' && (
+          <SubscriptionScreen
+            onSubscribed={handleSubscribed}
+            onSignOut={handleSubscriptionSignOut}
+            initialStatus={subStatus || undefined}
+            onBack={() => setScreen('settings')}
+          />
+        )}
       </View>
       <View style={[navStyles.bar, { paddingBottom: Math.max(bottomInset, 10) }]}>
         <NavItem
@@ -442,7 +442,7 @@ function AppShell() {
           iconActive="settings-sharp"
           iconInactive="settings-outline"
           label="Settings"
-          active={screen === 'settings'}
+          active={screen === 'settings' || screen === 'subscription' || screen === 'managedata'}
           onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
         />
       </View>

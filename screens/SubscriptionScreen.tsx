@@ -42,15 +42,16 @@ export type SubscriptionStatus = {
 type Props = {
   /** Called once the user has an active subscription (trial or paid) */
   onSubscribed: () => void;
-  /** Called when the user taps Sign Out */
+  /** Called when the user taps Sign Out (only shown in gate/offer mode) */
   onSignOut: () => void;
   /** Pre-loaded subscription data (avoids an extra fetch on first render) */
   initialStatus?: SubscriptionStatus | null;
-  /** Called when the user dismisses the screen without subscribing (only passed when the user still has app access) */
-  onDismiss?: () => void;
+  /** When provided the screen is in "manage" mode: back button at top, no sign-out/dismiss */
+  onBack?: () => void;
 };
 
-export default function SubscriptionScreen({ onSubscribed, onSignOut, initialStatus, onDismiss }: Props) {
+export default function SubscriptionScreen({ onSubscribed, onSignOut, initialStatus, onBack }: Props) {
+  const isManageMode = !!onBack;
   const [status, setStatus] = useState<SubscriptionStatus | null>(initialStatus ?? null);
   const [loading, setLoading] = useState(!initialStatus);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -85,10 +86,11 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
     });
   }, [fetchStatus, initialStatus]);
 
-  // If we already have access, hand off immediately
+  // In gate mode, hand off immediately once access is confirmed.
+  // In manage mode (onBack provided) the user already has access — don't auto-dismiss.
   useEffect(() => {
-    if (status?.hasAccess) onSubscribed();
-  }, [status, onSubscribed]);
+    if (!isManageMode && status?.hasAccess) onSubscribed();
+  }, [isManageMode, status, onSubscribed]);
 
   // Track paywall_viewed once when the screen mounts without access
   useEffect(() => {
@@ -293,7 +295,9 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
 
   const formatDate = (ms: number | null) => {
     if (!ms) return '';
-    return new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    const d = new Date(Number(ms));
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   };
 
   const statusLabel = () => {
@@ -309,14 +313,27 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   return (
     <ScrollView
       style={styles.root}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, isManageMode && styles.contentManage]}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Logo */}
-      <View style={styles.logoRow}>
-        <Text style={styles.logoText}>elmer</Text>
-        <Text style={styles.logoPeriod}>.</Text>
-      </View>
+      {/* Back button header (manage mode only) */}
+      {isManageMode && (
+        <View style={styles.manageHeader}>
+          <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Text style={styles.backBtnText}>← Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.manageHeaderTitle}>Subscription</Text>
+          <View style={styles.backBtn} />
+        </View>
+      )}
+
+      {/* Logo (gate mode only) */}
+      {!isManageMode && (
+        <View style={styles.logoRow}>
+          <Text style={styles.logoText}>elmer</Text>
+          <Text style={styles.logoPeriod}>.</Text>
+        </View>
+      )}
 
       {/* Offer card */}
       {!isSubscribed || isCanceled ? (
@@ -397,13 +414,9 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
         </View>
       )}
 
-      <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
-        <Text style={styles.signOutText}>Sign Out</Text>
-      </TouchableOpacity>
-
-      {onDismiss && (
-        <TouchableOpacity style={styles.dismissBtn} onPress={onDismiss} activeOpacity={0.7}>
-          <Text style={styles.dismissText}>Maybe later</Text>
+      {!isManageMode && (
+        <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut} activeOpacity={0.7}>
+          <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
       )}
     </ScrollView>
@@ -420,6 +433,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 24,
     paddingVertical: 48,
+  },
+  contentManage: {
+    justifyContent: 'flex-start',
+    paddingTop: 0,
+    paddingVertical: 0,
+  },
+  manageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    marginBottom: 24,
+  },
+  backBtn: { width: 80 },
+  backBtnText: { color: colors.cyan, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
+  manageHeaderTitle: {
+    fontSize: 18,
+    fontFamily: 'DMSans_600SemiBold',
+    color: colors.textPrimary,
   },
   logoRow: {
     flexDirection: 'row',
