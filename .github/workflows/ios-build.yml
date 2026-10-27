@@ -23,33 +23,21 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
-
       - name: Install dependencies
         run: npm ci
 
       - name: Install EAS CLI
         run: npm install -g eas-cli@latest
 
-      - name: Build iOS app locally
+      - name: Build iOS app (EAS cloud)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           eas build \
-            --local \
             --platform ios \
             --profile github \
             --non-interactive \
-            --output ./elmer.ipa
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: elmer-ios-${{ github.run_number }}
-          path: ./elmer.ipa
-          retention-days: 7
-          if-no-files-found: error
+            --wait
 
       - name: Submit to TestFlight
         env:
@@ -58,5 +46,5 @@ jobs:
           eas submit \
             --platform ios \
             --profile production \
-            --path ./elmer.ipa \
+            --latest \
             --non-interactive
