@@ -18,6 +18,7 @@
     "expo-secure-store": "~57.0.4",
     "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
+    "expo-updates": "~57.0.26",
     "expo-web-browser": "~57.0.3",
     "posthog-node": "^5.21.2",
     "posthog-react-native": "^4.82.0",

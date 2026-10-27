@@ -1,0 +1,59 @@
+name: iOS Build and Submit to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      description:
+        description: 'Release notes (optional)'
+        required: false
+        default: ''
+
+jobs:
+  build-and-submit:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli@latest
+
+      - name: Build iOS app locally
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build \
+            --local \
+            --platform ios \
+            --profile github \
+            --non-interactive \
+            --output ./elmer.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: elmer-ios-${{ github.run_number }}
+          path: ./elmer.ipa
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Submit to TestFlight
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas submit \
+            --platform ios \
+            --profile production \
+            --path ./elmer.ipa \
+            --non-interactive

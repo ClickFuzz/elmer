@@ -6,17 +6,24 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "development"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.getelmer.com",
         "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
-      }
+      },
+      "channel": "production"
+    },
+    "github": {
+      "extends": "production",
+      "credentialsSource": "remote"
     }
   },
   "submit": {
