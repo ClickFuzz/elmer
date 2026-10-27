@@ -21,19 +21,38 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | 3 | Threads OAuth + publishing; WordPress Application Password publishing | COMPLETE |
 | 4 | Stripe billing ($19/month, 14-day trial, subscription gate) | COMPLETE |
 | 5 | Google Business Profile OAuth + posting | COMPLETE |
+| 10 | Production security (webhook dedup, content hashing, draft persistence, onboarding leakage fix) | COMPLETE |
+| 11 | Multi-device sync, server-authoritative settings, test-mode DeviceCheck bypass | COMPLETE |
+| — | GitHub Actions CI/CD pipeline (local EAS build → TestFlight) | COMPLETE |
 
 ---
 
 ## Current Build State
 
 - **Branch:** `main`
-- **HEAD:** `4c7c4e7`
-- **iOS build number:** 6 (auto-incremented by EAS remote versioning; next build will be #7)
-- **TestFlight:** Build #6 submitted and in TestFlight; Phase 5 (GBP) requires new build #7
+- **HEAD:** `daaeab0`
+- **Last known TestFlight build:** #13 (commit `90bf9e9`) — did NOT include GBP HEIC/topicType fixes
+- **Build in progress:** GitHub Actions run triggered from `daaeab0`; expected to be next EAS build number (auto-incremented)
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Bundle ID:** `com.clickfuzz.elmer`
 - **Production API:** `https://api.getelmer.com` (Railway)
+- **EAS cloud build credits:** exhausted for the free tier this month — all builds must go through GitHub Actions
+
+## CI/CD — GitHub Actions Build Pipeline
+
+Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides credentials only.
+
+**Trigger:** Actions tab → "iOS Build and Submit to TestFlight" → Run workflow → Branch: main
+
+**Workflow:** `.github/workflows/ios-build.yml`
+- Runner: `macos-15`
+- `maxim-lobanov/setup-xcode@v1` selects latest Xcode (>= 16.1 required; React Native 0.86.3)
+- Validation step fails the job immediately if active Xcode is below 16.1
+- `eas build --local` builds on runner; no EAS cloud credits consumed
+- IPA uploaded as artifact (`elmer-ios-<run_number>`)
+- `eas submit --path ./elmer.ipa` submits to TestFlight
+- `EXPO_TOKEN` secret must be set in GitHub repo → Settings → Secrets → Actions
 
 ---
 
@@ -82,7 +101,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions (no new migration for GBP — `connected_platforms` already supports `google` platform)
-- **341 automated tests passing** — `cd server && npm test`
+- **457 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -132,8 +151,8 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 4. **Meta App Review:** submit Facebook/Instagram permissions for review (screencast: connect → select pages → create job → Post Everywhere → confirm posts).
 5. **Google Cloud Console:** add `https://api.getelmer.com/google/callback` to authorized redirect URIs for the OAuth 2.0 client in project `elmer-511511`. Add `https://api.getelmer.com` to authorized JavaScript origins.
 6. **Railway GBP env vars:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in the Elmer Server service and redeploy.
-7. **TestFlight build #7:** Phase 5 mobile UI changes require a new EAS build (`npx eas-cli@latest build --platform ios --profile production`) and submit (`npx eas-cli@latest submit --platform ios --latest`).
-8. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console and, if required, the app must go through Google's GBP API access verification process.
+7. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console and, if required, the app must go through Google's GBP API access verification process.
+8. **Confirm current TestFlight build includes GBP fixes** — build in progress from `daaeab0` includes the HEIC→JPEG conversion fix and `topicType: 'STANDARD'` fix. Verify it reaches TestFlight successfully.
 
 ---
 
