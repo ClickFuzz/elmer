@@ -31,13 +31,14 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 ## Current Build State
 
 - **Branch:** `main`
-- **HEAD:** `a57c19b`
+- **HEAD:** `34fe198`
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Bundle ID:** `com.clickfuzz.elmer`
 - **Production API:** `https://api.getelmer.com` (Railway)
 - **EAS cloud build credits:** exhausted for the free tier this month — all builds must go through GitHub Actions
+- **Pending OTA update:** `34fe198` (subscription screen redesign) — not yet pushed to `production` channel
 
 ## CI/CD — GitHub Actions Build Pipeline
 
@@ -79,7 +80,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
-- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal
+- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date".
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
 ### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
@@ -102,7 +103,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions (no new migration for GBP — `connected_platforms` already supports `google` platform)
-- **457 automated tests passing** — `cd server && npm test`
+- **457 automated tests passing** — `cd server && npm test` (no new server-side changes this session)
 
 ---
 

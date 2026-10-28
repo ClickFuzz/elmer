@@ -254,6 +254,11 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
   );
 
   app.use(express.json());
+  // Meta deauth/deletion callbacks (and any other form-posted endpoints) send
+  // application/x-www-form-urlencoded bodies.  This must come after the Stripe
+  // raw handler (which is path-scoped and fires first for /billing/webhook) so
+  // that the webhook body is never consumed by the urlencoded parser.
+  app.use(express.urlencoded({ extended: false }));
 
   // Warn if encryption key is missing.
   if (!process.env.CREDENTIAL_ENCRYPTION_KEY) {

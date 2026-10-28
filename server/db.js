@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 13;
 
 let _pool        = null;
 let _initialized = false;
@@ -430,6 +430,60 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [11, Date.now()]
+      );
+    }
+
+    // ── V12: Meta platform_user_id mapping ───────────────────────────────────
+    // Adds a nullable column to connected_platforms that stores the Meta
+    // app-scoped user ID alongside each connected page/account row.
+    // Used by Facebook deauth/deletion callbacks to identify which rows
+    // belong to the user who revoked access.  Existing rows default to NULL
+    // and are safely handled by the callback handlers (they just skip deletion
+    // for rows with no mapping and never touch other users' data).
+    if (!applied.has(12)) {
+      try {
+        await client.query(
+          `ALTER TABLE connected_platforms ADD COLUMN IF NOT EXISTS platform_user_id TEXT`
+        );
+      } catch {
+        // pg-mem may not support IF NOT EXISTS on ALTER COLUMN
+      }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [12, Date.now()]
+      );
+    }
+
+    // ── V13: Meta deletion request tracking ──────────────────────────────────
+    // Persists confirmation codes and statuses for Meta data-deletion callbacks
+    // (Facebook, Instagram, Threads).  Status URLs query this table by code so
+    // they return accurate outcomes rather than a static page.  Status values:
+    //   pending   – deletion in progress
+    //   completed – data successfully deleted (or confirmed not present)
+    //   failed    – deletion attempted but DB error occurred
+    //   no_data   – identity could not be fully resolved (legacy NULL rows)
+    if (!applied.has(13)) {
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS deletion_requests (
+            id                BIGSERIAL PRIMARY KEY,
+            platform          TEXT    NOT NULL,
+            confirmation_code TEXT    NOT NULL UNIQUE,
+            status            TEXT    NOT NULL DEFAULT 'pending',
+            connections_deleted INTEGER NOT NULL DEFAULT 0,
+            records_deleted     INTEGER NOT NULL DEFAULT 0,
+            created_at        BIGINT  NOT NULL,
+            completed_at      BIGINT
+          )
+        `);
+      } catch {
+        // pg-mem may not support all DDL
+      }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [13, Date.now()]
       );
     }
 

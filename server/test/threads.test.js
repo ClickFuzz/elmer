@@ -726,7 +726,7 @@ describe('POST /threads/uninstall', () => {
     assert.equal(res.status, 400);
   });
 
-  it('removes connected platform and returns 200', async () => {
+  it('removes connected platform and returns 200 — JSON body', async () => {
     const { userId } = await registerAndLogin(app);
     await insertThAccount(userId, { accountId: 'th-uninstall-99' });
 
@@ -736,6 +736,22 @@ describe('POST /threads/uninstall', () => {
 
     const { rows } = await getPool().query(
       `SELECT * FROM connected_platforms WHERE account_id = 'th-uninstall-99' AND platform = 'threads'`
+    );
+    assert.equal(rows.length, 0);
+  });
+
+  it('removes connected platform and returns 200 — URL-encoded body (Meta production format)', async () => {
+    const { userId } = await registerAndLogin(app);
+    await insertThAccount(userId, { accountId: 'th-uninstall-urlenc' });
+
+    const signed = makeSignedRequest({ user_id: 'th-uninstall-urlenc', algorithm: 'HMAC-SHA256' });
+    const res = await request(app).post('/threads/uninstall')
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .send(`signed_request=${encodeURIComponent(signed)}`);
+    assert.equal(res.status, 200);
+
+    const { rows } = await getPool().query(
+      `SELECT * FROM connected_platforms WHERE account_id = 'th-uninstall-urlenc' AND platform = 'threads'`
     );
     assert.equal(rows.length, 0);
   });

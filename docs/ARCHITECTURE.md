@@ -143,7 +143,7 @@ CREATE TABLE settings (
 ## Server-Side Database Schema (PostgreSQL)
 
 **Connection:** `DATABASE_URL` environment variable (Railway provides this automatically)  
-**Schema version: 9** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
+**Schema version: 13** — applied in `server/db.js → migrate()` on startup; tracked in `schema_migrations` table
 
 ```sql
 CREATE TABLE users (
@@ -180,6 +180,7 @@ CREATE TABLE connected_platforms (
   token_expires_at  BIGINT,
   selected          BOOLEAN NOT NULL DEFAULT false,  -- user has enabled this page for publishing
   tasks_json        TEXT,                            -- JSON array of page tasks from /me/accounts
+  platform_user_id  TEXT,                            -- V12: Meta app-scoped user ID (Facebook/IG); NULL for existing rows and non-Meta platforms
   connected_at      BIGINT  NOT NULL,
   updated_at        BIGINT  NOT NULL,
   UNIQUE(user_id, platform, account_id)
@@ -206,6 +207,17 @@ CREATE TABLE publishing_records (
   published_at     BIGINT,
   created_at       BIGINT  NOT NULL,
   updated_at       BIGINT  NOT NULL
+);
+
+CREATE TABLE deletion_requests (
+  id                  BIGSERIAL PRIMARY KEY,
+  platform            TEXT    NOT NULL,
+  confirmation_code   TEXT    NOT NULL UNIQUE,
+  status              TEXT    NOT NULL DEFAULT 'pending',  -- pending | completed | failed | no_data
+  connections_deleted INTEGER NOT NULL DEFAULT 0,
+  records_deleted     INTEGER NOT NULL DEFAULT 0,
+  created_at          BIGINT  NOT NULL,
+  completed_at        BIGINT
 );
 
 CREATE TABLE schema_migrations (
@@ -429,10 +441,13 @@ Mobile                          Elmer Server                  Facebook
 | Endpoint | Auth | Description |
 |---|---|---|
 | `POST /facebook/connect-url` | Bearer | Returns Facebook OAuth authorization URL + creates CSRF state |
-| `GET /facebook/callback` | Public (validates via state) | Facebook redirects here; exchanges code, stores page tokens (selected=true on first insert), redirects to app |
+| `GET /facebook/callback` | Public (validates via state) | Facebook redirects here; exchanges code, fetches `/me` for `platform_user_id`, stores page tokens (selected=true on first insert), redirects to app |
 | `GET /facebook/pages` | Bearer | Lists connected pages with `selected` flag; no tokens in response |
 | `POST /facebook/pages/selection` | Bearer | Replace the user's selected-page set; body: `{page_ids: number[]}` |
 | `POST /facebook/publish` | Bearer, multipart | Publish to all selected pages; per-page idempotency; returns `results[]` |
+| `POST /facebook/uninstall` | Public (signed_request) | Meta deauthorize callback; validates HMAC-SHA256 signed_request, resolves user via `platform_user_id` (with debug_token backfill for legacy NULL rows), removes Facebook connections |
+| `POST /facebook/delete` | Public (signed_request) | Meta data deletion callback; validates signed_request; resolves identity via phase-1 direct lookup + phase-2 debug_token backfill; atomically deletes connections + publishing records; persists status in `deletion_requests`; returns `{ url, confirmation_code }` |
+| `GET /facebook/deletion-status` | Public | Queries `deletion_requests` by `?code=` param and returns accurate status (completed / pending / no_data / failed / not found); no personal data exposed |
 
 **Page selection behavior**: New pages are auto-selected (`selected=true`) on first connect. Reconnecting (`ON CONFLICT`) updates the token but does **not** change `selected` — the user's previous choice is preserved.  
 **Error redirect codes**: `no_manageable_pages`, `insufficient_permissions` (FB error codes 10/200), `auth_failed`, `invalid_state`, `state_already_used`, `state_expired`, `missing_params`.
@@ -493,10 +508,13 @@ Mobile                          Elmer Server                  Instagram (Meta)
 | Endpoint | Auth | Description |
 |---|---|---|
 | `POST /instagram/connect-url` | Bearer | Returns Instagram OAuth authorization URL + creates CSRF state |
-| `GET /instagram/callback` | Public (validates via state) | Instagram redirects here; exchanges code, stores token, redirects to app |
+| `GET /instagram/callback` | Public (validates via state) | Instagram redirects here; exchanges code, stores token (account_id = Instagram user ID), redirects to app |
 | `GET /instagram/profile` | Bearer | Returns connected IG account info |
 | `GET /instagram/media/:filename` | Public (short-lived) | Serves temp-prepared images for IG API upload; deleted post-publish |
 | `POST /instagram/publish` | Bearer, multipart | Publishes single photo or carousel; returns `{ ok, postId?, postUrl? }` |
+| `POST /instagram/uninstall` | Public (signed_request) | Meta deauthorize callback; validates HMAC-SHA256 signed_request, removes Instagram connection for the verified user |
+| `POST /instagram/delete` | Public (signed_request) | Meta data deletion callback; validates signed_request; atomically deletes connection + publishing records; persists status in `deletion_requests`; returns `{ url, confirmation_code }` |
+| `GET /instagram/deletion-status` | Public | Queries `deletion_requests` by `?code=` param and returns accurate status; no personal data exposed |
 
 ---
 
@@ -554,8 +572,8 @@ Mobile                          Elmer Server                  Threads (Meta)
 | `GET /threads/media/:filename` | Public (short-lived) | Serves temp-prepared images for Threads API upload; deleted post-publish |
 | `POST /threads/publish` | Bearer, multipart | Publishes text, single image, or carousel; returns `{ ok, postId?, postUrl? }` |
 | `POST /threads/uninstall` | Public (signed_request) | Meta deauthorize callback; validates HMAC-SHA256 signed_request, removes connection |
-| `POST /threads/delete` | Public (signed_request) | Meta data deletion callback; validates signed_request, deletes Threads data, returns `{ url, confirmation_code }` |
-| `GET /threads/deletion-status` | Public | Human-readable deletion status page required by Meta |
+| `POST /threads/delete` | Public (signed_request) | Meta data deletion callback; validates signed_request; atomically deletes connection + publishing records; persists status in `deletion_requests`; returns `{ url, confirmation_code }` |
+| `GET /threads/deletion-status` | Public | Queries `deletion_requests` by `?code=` param and returns accurate status; no personal data exposed |
 
 **Callback validation**: Both `/threads/uninstall` and `/threads/delete` authenticate via `signed_request` — a dot-separated `base64url(HMAC-SHA256-sig).base64url(JSON-payload)` string computed with `THREADS_APP_SECRET`. Validated using `crypto.timingSafeEqual` to prevent timing attacks.  
 **Token revocation**: API error code 190 → `reconnect_required: true` in publish response; mobile shows "Reconnect Threads" alert.
@@ -776,7 +794,9 @@ Mobile                          Elmer Server                  Google OAuth
 - **Threads OAuth — server + mobile**: Full OAuth flow using `threads_basic` + `threads_content_publish` scopes; encrypted token stored in DB; same deep-link return pattern as Facebook/Instagram (`server/routes/threads.js`, `SettingsScreen.tsx`).
 - **Threads publishing**: Text-only posts, single-image posts, and carousels (up to 20); automatic image preparation using same EXIF/AR pipeline as Instagram; Before/After composite generation; featured-image ordering; images served temporarily from server for Threads API upload (`server/routes/threads.js`).
 - **Threads deauthorize callback**: `POST /threads/uninstall` — validates Meta's HMAC-SHA256 `signed_request`, removes the Threads platform connection (`server/routes/threads.js`).
-- **Threads data deletion callback**: `POST /threads/delete` — validates signed_request, deletes Threads-associated data, returns `{ url, confirmation_code }` as required by Meta; human-readable status page at `GET /threads/deletion-status` (`server/routes/threads.js`).
+- **Threads data deletion callback**: `POST /threads/delete` — validates signed_request, deletes Threads-associated data atomically, persists status in `deletion_requests`, returns `{ url, confirmation_code }` as required by Meta; status page at `GET /threads/deletion-status` queries by confirmation code (`server/routes/threads.js`).
+- **Meta deletion request persistence** (V13 migration): New `deletion_requests` table stores confirmation codes, status (`pending`/`completed`/`failed`/`no_data`), deletion counts, and timestamps for all three Meta platforms. Status URLs query this table by `?code=` so callers get accurate deletion outcomes rather than a static page.
+- **Facebook legacy identity backfill**: `findAndBackfillFbConnections` — resolves NULL `platform_user_id` rows using the Facebook `/debug_token` API. Phase 1 does a direct lookup; Phase 2 calls debug_token for each legacy NULL row to discover and backfill the owning user ID, then matches the requester. `no_data` status is returned when any debug_token call fails (network error), ensuring honest non-completion reporting. `account_id` (Page ID) is never overwritten.
 - **205 automated tests** (DB, auth, platforms, Facebook, Instagram, Threads, media-utils, generation) — all passing (`server/test/`).
 
 ### Implemented (Phase 3 — WordPress integration)
@@ -843,6 +863,17 @@ Mobile                          Elmer Server                  Google OAuth
 - **Onboarding cross-account leakage fix** (`App.tsx`): `deleteSetting('onboarding_completed')` is now called in both sign-out paths (`handleAuthChange(false)` and `handleSubscriptionSignOut`). Previously, the onboarding-completed flag was never cleared on sign-out, so a second user on the same device would inherit the first user's completed onboarding state.
 - **10 targeted security tests** (`server/test/security.test.js`): Stripe webhook deduplication (3 tests), content hash storage and validation (2 tests), destination locking (3 tests), HTTP webhook endpoint deduplication (2 tests). All passing.
 - **436 total automated tests** — all passing.
+
+### Implemented (Meta compliance — deletion integrity)
+
+- **V13 DB migration** (`server/db.js`): New `deletion_requests` table persists confirmation codes and statuses (`pending`/`completed`/`failed`/`no_data`) for all three Meta platforms' data-deletion callbacks. Also fixed a SCHEMA_VERSION bug (was stuck at 11) that prevented the V12 `platform_user_id` column migration from running on existing production databases.
+- **Facebook `/delete` — atomic + tracked** (`server/routes/facebook.js`): Deletion is now transactional (connections + publishing records + status update committed together). Status persisted in `deletion_requests`; honest `no_data` returned when identity cannot be fully verified.
+- **Facebook legacy identity backfill** (`server/routes/facebook.js`): `findAndBackfillFbConnections` resolves NULL `platform_user_id` rows via the Facebook `/debug_token` API. Phase 1 does direct lookup; Phase 2 calls debug_token for each NULL row to discover + backfill the owning user ID, then matches against the requester. Prevents false-positive deletion reporting for pre-V12 connections.
+- **Instagram `/delete` — atomic + tracked** (`server/routes/instagram.js`): Same transactional + deletion_requests pattern as Facebook. `account_id` = Instagram user ID (no debug_token backfill needed).
+- **Threads `/delete` — atomic + tracked** (`server/routes/threads.js`): Same transactional + deletion_requests pattern.
+- **Status pages updated** (all three platforms): `GET /{platform}/deletion-status?code=X` now queries `deletion_requests` by confirmation code and returns an accurate outcome message (completed / pending / no_data / failed / not found). No personal data exposed.
+- **13 new regression tests** (`server/test/meta-callbacks.test.js`): debug_token backfill with match/mismatch/error cases; status-page code lookup (completed, no_data, not-found, generic); Instagram and Threads deletion_request tracking; status page verification via returned code.
+- **505 total automated tests** — all passing.
 
 ### Requires live credentials before functional testing
 

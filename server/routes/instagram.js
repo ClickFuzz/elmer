@@ -642,6 +642,195 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
     }
   });
 
+  // ── Meta signed_request validation ─────────────────────────────────────────
+  // Format: base64url(HMAC-SHA256-sig).base64url(JSON-payload)
+  // Identical algorithm to the Threads implementation; reused here to keep
+  // each route file self-contained.
+  function validateSignedRequest(signedRequest, appSecret) {
+    if (typeof signedRequest !== 'string') return null;
+    const dotIdx = signedRequest.indexOf('.');
+    if (dotIdx < 0) return null;
+    const encodedSig     = signedRequest.slice(0, dotIdx);
+    const encodedPayload = signedRequest.slice(dotIdx + 1);
+
+    const toBuffer = b64url =>
+      Buffer.from(b64url.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+    const sig      = toBuffer(encodedSig);
+    const payload  = toBuffer(encodedPayload);
+    const { createHmac, timingSafeEqual } = require('crypto');
+    const expected = createHmac('sha256', appSecret).update(payload).digest();
+
+    if (sig.length !== expected.length || !timingSafeEqual(sig, expected)) return null;
+    try { return JSON.parse(payload.toString('utf8')); } catch { return null; }
+  }
+
+  // ── POST /instagram/uninstall ─────────────────────────────────────────────────
+  // Meta calls this when a user revokes the Instagram connection from their
+  // account settings.  Validates the signed_request and removes the connection.
+  // payload.user_id is the Instagram user ID, which Elmer stores in account_id.
+  router.post('/uninstall', async (req, res) => {
+    const appSecret = process.env.INSTAGRAM_APP_SECRET ?? '';
+    if (!appSecret) return res.status(503).json({ error: 'Not configured' });
+
+    const payload = validateSignedRequest(req.body?.signed_request, appSecret);
+    if (!payload) {
+      console.warn('[instagram] uninstall: invalid signed_request');
+      return res.status(400).json({ error: 'Invalid signed_request' });
+    }
+
+    const igUserId = String(payload.user_id ?? '');
+    if (igUserId) {
+      try {
+        const { rowCount } = await getPool().query(
+          `DELETE FROM connected_platforms
+           WHERE platform = 'instagram' AND account_id = $1`,
+          [igUserId]
+        );
+        console.log('[instagram] uninstall: removed', rowCount, 'connection(s) for IG user', igUserId);
+      } catch (err) {
+        console.error('[instagram] uninstall DB error:', err.message);
+      }
+    }
+
+    return res.sendStatus(200);
+  });
+
+  // ── POST /instagram/delete ───────────────────────────────────────────────────
+  // Meta data deletion callback — required for Instagram Platform App Review.
+  // Validates the signed_request, deletes all Instagram-sourced data for the user,
+  // and returns the JSON confirmation code required by Meta.
+  // payload.user_id matches the Instagram user ID stored in account_id.
+  // Deletion is atomic: connections + publishing records + status update commit together.
+  router.post('/delete', async (req, res) => {
+    const appSecret = process.env.INSTAGRAM_APP_SECRET ?? '';
+    if (!appSecret) return res.status(503).json({ error: 'Not configured' });
+
+    const payload = validateSignedRequest(req.body?.signed_request, appSecret);
+    if (!payload) {
+      console.warn('[instagram] delete: invalid signed_request');
+      return res.status(400).json({ error: 'Invalid signed_request' });
+    }
+
+    const igUserId         = String(payload.user_id ?? '');
+    const confirmationCode = require('crypto').randomBytes(8).toString('hex');
+    const serverUrl        = process.env.SERVER_URL ?? 'https://api.getelmer.com';
+    const statusUrl        = `${serverUrl}/instagram/deletion-status?code=${confirmationCode}`;
+    const now              = Date.now();
+    const pool             = getPool();
+
+    // Record the deletion request (fail-open)
+    try {
+      await pool.query(
+        `INSERT INTO deletion_requests (platform, confirmation_code, status, created_at)
+         VALUES ('instagram', $1, 'pending', $2)`,
+        [confirmationCode, now]
+      );
+    } catch (err) {
+      console.error('[instagram] delete: failed to record deletion_request:', err.message);
+    }
+
+    if (!igUserId) {
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = 'completed', completed_at = $1
+           WHERE confirmation_code = $2`,
+          [now, confirmationCode]
+        );
+      } catch {}
+      return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+    }
+
+    // Atomically delete connections + publishing records and record completion
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Identify Elmer user IDs before deletion
+      const { rows: mappedRows } = await client.query(
+        `SELECT DISTINCT user_id FROM connected_platforms
+         WHERE platform = 'instagram' AND account_id = $1`,
+        [igUserId]
+      );
+
+      const { rowCount: connCount } = await client.query(
+        `DELETE FROM connected_platforms
+         WHERE platform = 'instagram' AND account_id = $1`,
+        [igUserId]
+      );
+
+      let recCount = 0;
+      for (const { user_id } of mappedRows) {
+        const { rowCount } = await client.query(
+          `DELETE FROM publishing_records WHERE user_id = $1 AND platform = 'instagram'`,
+          [user_id]
+        );
+        recCount += rowCount;
+      }
+
+      await client.query(
+        `UPDATE deletion_requests
+         SET status = 'completed', connections_deleted = $1, records_deleted = $2, completed_at = $3
+         WHERE confirmation_code = $4`,
+        [connCount, recCount, Date.now(), confirmationCode]
+      );
+
+      await client.query('COMMIT');
+      console.log(
+        '[instagram] delete: removed', connCount, 'connection(s) and',
+        recCount, 'publishing record(s) for IG user', igUserId
+      );
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[instagram] delete transaction error:', err.message);
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = 'failed', completed_at = $1
+           WHERE confirmation_code = $2`,
+          [Date.now(), confirmationCode]
+        );
+      } catch {}
+    } finally {
+      client.release();
+    }
+
+    return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+  });
+
+  // ── GET /instagram/deletion-status ──────────────────────────────────────────
+  // Human-readable status page referenced in the data deletion response.
+  // Required by Meta; must not expose any private user data.
+  router.get('/deletion-status', async (req, res) => {
+    const { code } = req.query;
+    let body;
+    if (code && typeof code === 'string') {
+      try {
+        const { rows } = await getPool().query(
+          `SELECT status FROM deletion_requests
+           WHERE platform = 'instagram' AND confirmation_code = $1`,
+          [code]
+        );
+        const status = rows[0]?.status;
+        if (status === 'completed') {
+          body = '<p>Your Instagram connection and associated data have been removed from Elmer.</p>';
+        } else if (status === 'pending') {
+          body = '<p>Your data deletion request is being processed. Please check back shortly.</p>';
+        } else if (status === 'no_data') {
+          body = '<p>We were unable to fully verify your identity in our records. If you believe you have data in our system, please contact support.</p>';
+        } else if (status === 'failed') {
+          body = '<p>An error occurred while processing your deletion request. Please contact support.</p>';
+        } else {
+          body = '<p>Confirmation code not found.</p>';
+        }
+      } catch {
+        body = '<p>Unable to retrieve deletion status at this time.</p>';
+      }
+    } else {
+      body = '<p>Instagram connections and associated data are deleted upon request. To submit a deletion request, remove the Elmer app from your Instagram settings.</p>';
+    }
+    res.type('html').send(`<html><body><h1>Instagram Data Deletion</h1>${body}</body></html>`);
+  });
+
   return router;
 }
 

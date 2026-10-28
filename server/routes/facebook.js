@@ -26,6 +26,89 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
   if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
   const upload = multer({ dest: TMP_DIR, limits: { fileSize: 50 * 1024 * 1024 } });
 
+  // Resolves which connected_platforms rows belong to a given Facebook user ID.
+  // Phase 1: direct lookup by platform_user_id (new connections).
+  // Phase 2: debug_token backfill for legacy rows where platform_user_id IS NULL.
+  //   Calls GET /debug_token for each NULL row's stored page token to discover
+  //   the owning Facebook user ID, then backfills platform_user_id in-place.
+  //   Only rows whose debug_token resolves to fbUserId are returned for deletion.
+  //   account_id (Facebook Page ID) is never read or overwritten.
+  async function findAndBackfillFbConnections(fbUserId, appId, appSecret) {
+    const pool = getPool();
+
+    // Phase 1: direct lookup
+    const { rows: p1 } = await pool.query(
+      `SELECT id, user_id FROM connected_platforms
+       WHERE platform = 'facebook' AND platform_user_id = $1`,
+      [fbUserId]
+    );
+    if (p1.length > 0) {
+      return {
+        rowIds: p1.map(r => r.id),
+        elmUserIds: [...new Set(p1.map(r => r.user_id))],
+        resolvedAll: true,
+      };
+    }
+
+    if (!appId || !appSecret) {
+      return { rowIds: [], elmUserIds: [], resolvedAll: true };
+    }
+
+    // Phase 2: debug_token backfill for legacy NULL rows
+    const { rows: nullRows } = await pool.query(
+      `SELECT id, user_id, access_token_enc FROM connected_platforms
+       WHERE platform = 'facebook' AND platform_user_id IS NULL LIMIT 100`
+    );
+    if (nullRows.length === 0) {
+      return { rowIds: [], elmUserIds: [], resolvedAll: true };
+    }
+
+    const appToken   = `${appId}|${appSecret}`;
+    const matchedRows = [];
+    let anyError = false;
+
+    for (const row of nullRows) {
+      try {
+        const pageToken  = decrypt(row.access_token_enc);
+        const params     = new URLSearchParams({ input_token: pageToken, access_token: appToken });
+        const debugResp  = await graphFetch(`${GRAPH_BASE}/debug_token?${params}`);
+        if (!debugResp.ok) {
+          // HTTP-level error (4xx/5xx) — cannot determine ownership
+          anyError = true;
+          continue;
+        }
+        const debugData  = await debugResp.json();
+        if (debugData.error || !debugData.data) {
+          // API-level error or missing data envelope — cannot determine ownership
+          anyError = true;
+          continue;
+        }
+        const resolvedId = debugData.data.user_id ? String(debugData.data.user_id) : null;
+        if (!resolvedId) {
+          // Successful API call but no user_id — token has no associated user (e.g. system user);
+          // cannot verify ownership for this row
+          anyError = true;
+          continue;
+        }
+        await pool.query(
+          `UPDATE connected_platforms SET platform_user_id = $1 WHERE id = $2`,
+          [resolvedId, row.id]
+        );
+        if (resolvedId === fbUserId) {
+          matchedRows.push({ id: row.id, user_id: row.user_id });
+        }
+      } catch {
+        anyError = true;
+      }
+    }
+
+    return {
+      rowIds:      matchedRows.map(r => r.id),
+      elmUserIds:  [...new Set(matchedRows.map(r => r.user_id))],
+      resolvedAll: !anyError,
+    };
+  }
+
   const router = Router();
 
   // ── POST /facebook/connect-url ──────────────────────────────────────────────
@@ -152,7 +235,25 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         throw new Error(`Long-lived token: ${longData.error.message}`);
       }
 
-      // Step 3 — Retrieve pages the user manages
+      // Step 3 — Fetch the app-scoped Facebook user ID for deauth/deletion mapping.
+      // Stored as platform_user_id on each page row so that Meta's signed_request
+      // callbacks (which carry the user ID, not a page ID) can identify the right rows.
+      // Failure here is non-fatal — the OAuth flow continues; callbacks for existing
+      // connections without this mapping will simply skip deletion rather than error.
+      let facebookUserId = null;
+      try {
+        const meParams = new URLSearchParams({
+          fields:       'id',
+          access_token: longData.access_token,
+        });
+        const meData = await graphFetch(`${GRAPH_BASE}/me?${meParams}`)
+          .then(r => r.json());
+        if (meData.id && !meData.error) facebookUserId = String(meData.id);
+      } catch (err) {
+        console.warn('[facebook] could not fetch user ID for deauth mapping:', err.message);
+      }
+
+      // Step 4 — Retrieve pages the user manages
       const pagesParams = new URLSearchParams({
         access_token: longData.access_token,
         fields:       'id,name,access_token,tasks',
@@ -177,23 +278,26 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         return res.redirect(`${returnBase}?platform=facebook&error=no_manageable_pages`);
       }
 
-      // Step 4 — Persist each page's access token encrypted.
+      // Step 5 — Persist each page's access token encrypted.
       // New rows are inserted with selected=true so they are immediately publishable.
       // Reconnects (ON CONFLICT) preserve the existing selected state.
+      // platform_user_id is updated when available; COALESCE keeps any existing
+      // mapping if the /me call failed during this reconnect.
       for (const page of pages) {
         const tokenEnc  = encrypt(page.access_token);
         const tasksJson = JSON.stringify(page.tasks ?? []);
         await pool.query(
           `INSERT INTO connected_platforms
              (user_id, platform, account_name, account_id, access_token_enc, tasks_json,
-              selected, connected_at, updated_at)
-           VALUES ($1, 'facebook', $2, $3, $4, $5, true, $6, $7)
+              platform_user_id, selected, connected_at, updated_at)
+           VALUES ($1, 'facebook', $2, $3, $4, $5, $6, true, $7, $8)
            ON CONFLICT(user_id, platform, account_id) DO UPDATE SET
              account_name     = EXCLUDED.account_name,
              access_token_enc = EXCLUDED.access_token_enc,
              tasks_json       = EXCLUDED.tasks_json,
+             platform_user_id = COALESCE(EXCLUDED.platform_user_id, connected_platforms.platform_user_id),
              updated_at       = EXCLUDED.updated_at`,
-          [stateRow.user_id, page.name, page.id, tokenEnc, tasksJson, now, now]
+          [stateRow.user_id, page.name, page.id, tokenEnc, tasksJson, facebookUserId, now, now]
         );
       }
 
@@ -560,6 +664,227 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
     trackPublicationResult(req.userId, results, 'facebook');
 
     return res.status(200).json({ ok: anyOk, results });
+  });
+
+  // ── Meta signed_request validation ─────────────────────────────────────────
+  // Format: base64url(HMAC-SHA256-sig).base64url(JSON-payload)
+  // Used by both the deauth and data-deletion callbacks below.
+  function validateSignedRequest(signedRequest, appSecret) {
+    if (typeof signedRequest !== 'string') return null;
+    const dotIdx = signedRequest.indexOf('.');
+    if (dotIdx < 0) return null;
+    const encodedSig     = signedRequest.slice(0, dotIdx);
+    const encodedPayload = signedRequest.slice(dotIdx + 1);
+
+    const toBuffer = b64url =>
+      Buffer.from(b64url.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+
+    const sig      = toBuffer(encodedSig);
+    const payload  = toBuffer(encodedPayload);
+    const expected = require('crypto').createHmac('sha256', appSecret).update(payload).digest();
+
+    if (sig.length !== expected.length || !require('crypto').timingSafeEqual(sig, expected)) return null;
+    try { return JSON.parse(payload.toString('utf8')); } catch { return null; }
+  }
+
+  // ── POST /facebook/uninstall ─────────────────────────────────────────────────
+  // Meta calls this when a user removes the app from their Facebook settings.
+  // Validates the signed_request and removes the user's Facebook page connections.
+  router.post('/uninstall', async (req, res) => {
+    const appSecret = process.env.FACEBOOK_APP_SECRET ?? '';
+    if (!appSecret) return res.status(503).json({ error: 'Not configured' });
+
+    const payload = validateSignedRequest(req.body?.signed_request, appSecret);
+    if (!payload) {
+      console.warn('[facebook] uninstall: invalid signed_request');
+      return res.status(400).json({ error: 'Invalid signed_request' });
+    }
+
+    const fbUserId = String(payload.user_id ?? '');
+    if (fbUserId) {
+      try {
+        const appId        = process.env.FACEBOOK_APP_ID ?? '';
+        const { rowIds }   = await findAndBackfillFbConnections(fbUserId, appId, appSecret);
+        if (rowIds.length > 0) {
+          let totalDeleted = 0;
+          for (const rowId of rowIds) {
+            const { rowCount } = await getPool().query(
+              `DELETE FROM connected_platforms WHERE id = $1`,
+              [rowId]
+            );
+            totalDeleted += rowCount;
+          }
+          console.log('[facebook] uninstall: removed', totalDeleted, 'connection(s) for FB user', fbUserId);
+        } else {
+          console.log('[facebook] uninstall: no connections found for FB user', fbUserId);
+        }
+      } catch (err) {
+        console.error('[facebook] uninstall DB error:', err.message);
+      }
+    }
+
+    return res.sendStatus(200);
+  });
+
+  // ── POST /facebook/delete ─────────────────────────────────────────────────────
+  // Meta data deletion callback — required for Facebook Login App Review.
+  // Validates the signed_request, removes all Facebook-sourced data for the user,
+  // and returns the JSON confirmation code required by Meta.
+  // Deletion is atomic: connections + publishing records + status update commit together.
+  router.post('/delete', async (req, res) => {
+    const appSecret = process.env.FACEBOOK_APP_SECRET ?? '';
+    if (!appSecret) return res.status(503).json({ error: 'Not configured' });
+
+    const payload = validateSignedRequest(req.body?.signed_request, appSecret);
+    if (!payload) {
+      console.warn('[facebook] delete: invalid signed_request');
+      return res.status(400).json({ error: 'Invalid signed_request' });
+    }
+
+    const fbUserId         = String(payload.user_id ?? '');
+    const confirmationCode = randomBytes(8).toString('hex');
+    const serverUrl        = process.env.SERVER_URL ?? 'https://api.getelmer.com';
+    const statusUrl        = `${serverUrl}/facebook/deletion-status?code=${confirmationCode}`;
+    const now              = Date.now();
+    const pool             = getPool();
+
+    // Record the deletion request (fail-open: don't block deletion if tracking fails)
+    try {
+      await pool.query(
+        `INSERT INTO deletion_requests (platform, confirmation_code, status, created_at)
+         VALUES ('facebook', $1, 'pending', $2)`,
+        [confirmationCode, now]
+      );
+    } catch (err) {
+      console.error('[facebook] delete: failed to record deletion_request:', err.message);
+    }
+
+    if (!fbUserId) {
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = 'completed', completed_at = $1
+           WHERE confirmation_code = $2`,
+          [now, confirmationCode]
+        );
+      } catch {}
+      return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+    }
+
+    const appId = process.env.FACEBOOK_APP_ID ?? '';
+    let rowIds, elmUserIds, resolvedAll;
+    try {
+      ({ rowIds, elmUserIds, resolvedAll } =
+        await findAndBackfillFbConnections(fbUserId, appId, appSecret));
+    } catch (err) {
+      console.error('[facebook] delete: backfill error:', err.message);
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = 'failed', completed_at = $1
+           WHERE confirmation_code = $2`,
+          [Date.now(), confirmationCode]
+        );
+      } catch {}
+      return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+    }
+
+    if (rowIds.length === 0) {
+      // resolvedAll=true: lookup succeeded, user simply has no connections → no_data
+      // resolvedAll=false: debug_token failed (network/API error) → identity unverifiable → failed
+      const finalStatus = resolvedAll ? 'no_data' : 'failed';
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = $1, completed_at = $2
+           WHERE confirmation_code = $3`,
+          [finalStatus, Date.now(), confirmationCode]
+        );
+      } catch {}
+      return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+    }
+
+    // Atomically delete connections + publishing records and record completion
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      let connCount = 0;
+      for (const rowId of rowIds) {
+        const { rowCount } = await client.query(
+          `DELETE FROM connected_platforms WHERE id = $1`,
+          [rowId]
+        );
+        connCount += rowCount;
+      }
+
+      let recCount = 0;
+      for (const userId of elmUserIds) {
+        const { rowCount } = await client.query(
+          `DELETE FROM publishing_records WHERE user_id = $1 AND platform = 'facebook'`,
+          [userId]
+        );
+        recCount += rowCount;
+      }
+
+      await client.query(
+        `UPDATE deletion_requests
+         SET status = 'completed', connections_deleted = $1, records_deleted = $2, completed_at = $3
+         WHERE confirmation_code = $4`,
+        [connCount, recCount, Date.now(), confirmationCode]
+      );
+
+      await client.query('COMMIT');
+      console.log(
+        '[facebook] delete: removed', connCount, 'connection(s) and',
+        recCount, 'publishing record(s) for FB user', fbUserId
+      );
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[facebook] delete transaction error:', err.message);
+      try {
+        await pool.query(
+          `UPDATE deletion_requests SET status = 'failed', completed_at = $1
+           WHERE confirmation_code = $2`,
+          [Date.now(), confirmationCode]
+        );
+      } catch {}
+    } finally {
+      client.release();
+    }
+
+    return res.json({ url: statusUrl, confirmation_code: confirmationCode });
+  });
+
+  // ── GET /facebook/deletion-status ────────────────────────────────────────────
+  // Human-readable status page referenced in the data deletion response.
+  // Required by Meta; must not expose any private user data.
+  router.get('/deletion-status', async (req, res) => {
+    const { code } = req.query;
+    let body;
+    if (code && typeof code === 'string') {
+      try {
+        const { rows } = await getPool().query(
+          `SELECT status FROM deletion_requests
+           WHERE platform = 'facebook' AND confirmation_code = $1`,
+          [code]
+        );
+        const status = rows[0]?.status;
+        if (status === 'completed') {
+          body = '<p>Your Facebook connection and associated data have been removed from Elmer.</p>';
+        } else if (status === 'pending') {
+          body = '<p>Your data deletion request is being processed. Please check back shortly.</p>';
+        } else if (status === 'no_data') {
+          body = '<p>Your request was processed. No data associated with your Facebook account was found in Elmer.</p>';
+        } else if (status === 'failed') {
+          body = '<p>An error occurred while processing your deletion request. Please contact support.</p>';
+        } else {
+          body = '<p>Confirmation code not found.</p>';
+        }
+      } catch {
+        body = '<p>Unable to retrieve deletion status at this time.</p>';
+      }
+    } else {
+      body = '<p>Facebook connections and associated data are deleted upon request. To submit a deletion request, remove the Elmer app from your Facebook settings.</p>';
+    }
+    res.type('html').send(`<html><body><h1>Facebook Data Deletion</h1>${body}</body></html>`);
   });
 
   return router;

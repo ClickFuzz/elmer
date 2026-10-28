@@ -182,6 +182,7 @@ describe('GET /facebook/callback', () => {
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short_token', token_type: 'bearer' } },
       { data: { access_token: 'long_token', expires_in: 5183944, token_type: 'bearer' } },
+      { data: { id: 'fb-user-success' } },  // /me — platform_user_id mapping
       { data: { data: [
         { id: 'page-1', name: 'My Shop',  access_token: 'page_token_1', tasks: ['CREATE_CONTENT'] },
         { id: 'page-2', name: 'Side Biz', access_token: 'page_token_2', tasks: ['CREATE_CONTENT'] },
@@ -221,9 +222,11 @@ describe('GET /facebook/callback', () => {
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short1' } },
       { data: { access_token: 'long1' } },
+      { data: { id: 'fb-user-reconnect' } },  // /me — first connect
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_first' }] } },
       { data: { access_token: 'short2' } },
       { data: { access_token: 'long2' } },
+      { data: { id: 'fb-user-reconnect' } },  // /me — second connect (same user)
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_second' }] } },
     ]);
 
@@ -258,6 +261,7 @@ describe('GET /facebook/callback', () => {
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short_token' } },
       { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-nopages' } },  // /me — platform_user_id mapping
       { data: { data: [] } },
     ]);
 
@@ -281,6 +285,7 @@ describe('GET /facebook/callback', () => {
     const mockGraphFetch = makeGraphMock([
       { data: { access_token: 'short_token' } },
       { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-permfail' } },  // /me — platform_user_id mapping (succeeds)
       { ok: false, data: { error: { message: 'Permissions error', code: 10 } } },
     ]);
 
