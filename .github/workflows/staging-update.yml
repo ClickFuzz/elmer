@@ -1,0 +1,55 @@
+name: Staging OTA Update
+
+# Publishes an OTA update to the staging channel when staging branch is pushed.
+# Staging app builds (com.clickfuzz.elmer.staging) receive this update.
+# Production channel is never touched by this workflow.
+
+on:
+  push:
+    branches: [staging]
+    paths-ignore:
+      - 'server/**'
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/test.yml'
+  workflow_dispatch:
+    inputs:
+      message:
+        description: 'Update message'
+        required: false
+        default: 'Staging update'
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install EAS CLI
+        run: npm install -g eas-cli@latest
+
+      - name: Publish staging OTA update
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APP_VARIANT: staging
+          EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com
+          EXPO_PUBLIC_POSTHOG_HOST: https://us.i.posthog.com
+        run: |
+          MESSAGE="${{ github.event.inputs.message || github.event.head_commit.message }}"
+          eas update \
+            --branch staging \
+            --channel staging \
+            --message "$MESSAGE" \
+            --non-interactive
