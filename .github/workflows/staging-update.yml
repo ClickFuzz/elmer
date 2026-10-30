@@ -1,17 +1,23 @@
 name: Staging OTA Update
 
-# Publishes an OTA update to the staging channel when staging branch is pushed.
-# Staging app builds (com.clickfuzz.elmer.staging) receive this update.
-# Production channel is never touched by this workflow.
+# Publishes an OTA update to the EAS 'staging' channel.
+# Targets only the staging app (com.clickfuzz.elmer.staging, channel: staging).
+# The production channel is never touched by this workflow.
+#
+# AUTOMATIC TRIGGER IS DISABLED until the staging Railway environment is live
+# (https://api-staging.getelmer.com must return {"ok":true} from /health).
+# To re-enable after Railway staging is configured, uncomment the push block below.
+#
+# on:
+#   push:
+#     branches: [staging]
+#     paths-ignore:
+#       - 'server/**'
+#       - 'docs/**'
+#       - '*.md'
+#       - '.github/workflows/test.yml'
 
 on:
-  push:
-    branches: [staging]
-    paths-ignore:
-      - 'server/**'
-      - 'docs/**'
-      - '*.md'
-      - '.github/workflows/test.yml'
   workflow_dispatch:
     inputs:
       message:
@@ -40,15 +46,23 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli@latest
 
+      - name: Verify staging channel target
+        run: |
+          echo "Publishing OTA update to staging channel (NOT production)"
+          echo "Branch: staging | Channel: staging | Platform: ios"
+          echo "API URL: https://api-staging.getelmer.com"
+
       - name: Publish staging OTA update
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           APP_VARIANT: staging
           EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com
           EXPO_PUBLIC_POSTHOG_HOST: https://us.i.posthog.com
+          # EXPO_PUBLIC_POSTHOG_API_KEY is intentionally omitted — PostHog disabled in staging
         run: |
-          MESSAGE="${{ github.event.inputs.message || github.event.head_commit.message }}"
+          MESSAGE="${{ github.event.inputs.message }}"
           eas update \
+            --platform ios \
             --branch staging \
             --channel staging \
             --message "$MESSAGE" \
