@@ -125,7 +125,15 @@ export default function ManageDataScreen({ onBack, onAccountDeleted }: Props) {
 
               if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
-                Alert.alert('Deletion failed', data.error ?? 'Could not delete account. Try again.', [{ text: 'OK' }]);
+                if (data.error === 'active_subscription') {
+                  Alert.alert(
+                    'Active Subscription',
+                    'You have an active subscription. Please cancel your subscription before deleting your account.',
+                    [{ text: 'OK' }]
+                  );
+                } else {
+                  Alert.alert('Deletion failed', data.message ?? data.error ?? 'Could not delete account. Try again.', [{ text: 'OK' }]);
+                }
                 return;
               }
 
