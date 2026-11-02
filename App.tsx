@@ -9,6 +9,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import { colors } from './constants/colors';
 import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, getJobPhotos, getSessionToken, getSessionUserId, getBusinessProfile, saveBusinessProfile, saveSettingsVersion, runAutoCleanup, Job, clearSession } from './storage/database';
 import { Analytics } from './services/analytics';
+import OtaBadge from './components/OtaBadge';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
 import ManageDataScreen from './screens/ManageDataScreen';
@@ -466,6 +467,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AppShell />
+      <OtaBadge />
     </SafeAreaProvider>
   );
 }
