@@ -26,51 +26,56 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | GitHub Actions CI/CD pipeline (local EAS build → TestFlight) | COMPLETE |
 | — | Manual OTA update checker in Settings (test-mode only) | COMPLETE |
 | — | Meta compliance: deletion callbacks, V13 migration, SCHEMA_VERSION fix | COMPLETE |
-| — | Staging environment: branch, EAS channel, `app.config.js`, workflows, docs | CODE COMPLETE — Railway `SERVER_URL` env var pending |
-| — | GBP 1-photo limit fix; Threads/Instagram SERVER_URL fallback hardening | COMPLETE — staging `292929d`, Railway deploy pending |
-| — | Fix staging Stripe checkout: `BILLING_RETURN_PREFIX` scheme-aware via `EXPO_PUBLIC_APP_SCHEME` | COMPLETE — staging `ccf563f`, Railway `APP_SCHEME`+`APP_URL` env vars pending |
+| — | Staging environment: branch, EAS channel, `app.config.js`, workflows, docs, Railway live | COMPLETE |
+| — | GBP 1-photo limit fix; Threads/Instagram SERVER_URL fallback hardening | COMPLETE |
+| — | Fix staging Stripe checkout: `BILLING_RETURN_PREFIX` scheme-aware via `EXPO_PUBLIC_APP_SCHEME` | COMPLETE |
+| — | Fix staging OTA workflow: remove `--environment preview`; add `EXPO_PUBLIC_APP_SCHEME` | COMPLETE — staging `19975be` |
+| — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `3fee483`
-- **Staging branch:** `staging` — HEAD `ccf563f` (5 commits ahead of main)
+- **Staging branch:** `staging` — HEAD `19975be` (9 commits ahead of main)
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
-- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (not yet built)
+- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
 - **Production API:** `https://api.getelmer.com` (Railway, deployed at `3fee483`)
-- **Staging API:** `https://api-staging.getelmer.com` — **Railway staging service exists; `SERVER_URL`, `APP_SCHEME=elmer-staging`, `APP_URL=https://api-staging.getelmer.com` env vars not yet confirmed set**
-- **EAS channels:** `production` (live), `staging` (created, no updates published yet)
+- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL` confirmed set)
+- **EAS channels:** `production` (live), `staging` (live — OTA updates active)
 - **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
 - **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
 
 ## Staging Environment
 
-Full staging infrastructure is committed to the `staging` branch. Railway is the only remaining setup step.
+Staging infrastructure is fully live. Railway staging environment is running.
 
-### What is in place (code side — all on `staging` branch)
+### What is in place
 
 | Item | State |
 |---|---|
-| `staging` git branch | Created, pushed to origin |
+| `staging` git branch | Live, pushed to origin |
 | `app.config.js` | Wraps `app.json`; `APP_VARIANT=staging` → name "Elmer Staging", bundle `com.clickfuzz.elmer.staging`, scheme `elmer-staging` |
-| `eas.json` staging profile | `distribution: internal`, `channel: staging`, `EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com` |
-| EAS `staging` channel + branch | Created at expo.dev |
-| `.github/workflows/test.yml` | CI: runs 505 server tests on every push/PR to `main` or `staging` |
-| `.github/workflows/staging-update.yml` | OTA workflow; auto-push **disabled** (uncomment after Railway is live); manual dispatch available |
+| `eas.json` staging profile | `distribution: internal`, `channel: staging`, `EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com`, `EXPO_PUBLIC_APP_SCHEME: elmer-staging` |
+| EAS `staging` channel + branch | Live at expo.dev; OTA updates active |
+| `.github/workflows/test.yml` | CI: runs server tests on every push/PR to `main` or `staging` |
+| `.github/workflows/staging-update.yml` | OTA workflow (manual dispatch); `--environment` removed; all staging env vars explicit; auto-push trigger still disabled |
+| `components/OtaBadge.tsx` | Staging-only OTA version badge; shows `OTA <7-char-id>` or `EMBEDDED`; guards on `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; never visible in production |
 | `docs/DEPLOYMENT-WORKFLOW.md` | Full dev/staging/production/rollback/hotfix procedures |
-| `server/.env.example` | Now includes Instagram, Threads, Google, `SERVER_URL`, all Stripe vars |
+| Railway staging | Live at `https://api-staging.getelmer.com`; `APP_SCHEME=elmer-staging`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set |
 
-### What still needs manual setup
+### Staging OTA workflow — important fix (19975be)
 
-1. **Register Apple bundle ID** `com.clickfuzz.elmer.staging` — developer.apple.com (before first staging build)
-2. **Configure Railway staging environment** — full env var table in `docs/DEPLOYMENT-WORKFLOW.md`; key differences from production: new `CREDENTIAL_ENCRYPTION_KEY`, `STRIPE_TEST_MODE=true`, `*_REDIRECT_URI` → staging URLs, `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging`, `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging`. **Also required for Stripe checkout:** `APP_SCHEME=elmer-staging`, `APP_URL=https://api-staging.getelmer.com`
-3. **Add staging redirect URIs** to Meta (Facebook + Instagram app), Threads app, Google GCP OAuth client
-4. **Create Stripe test webhook** at `https://api-staging.getelmer.com/billing/webhook`
-5. **After Railway is live:** uncomment `push:` trigger in `staging-update.yml`, then run `eas build --profile staging`
+`--environment preview` was causing the EAS server-side "preview" environment (expo.dev) to override and nullify `EXPO_PUBLIC_API_URL`, making the app fall back to `http://localhost:3001`. Removed from the workflow. All staging env vars are now set explicitly in the GitHub Actions `env` block and are correctly inlined by Metro at bundle time.
+
+### What still needs setup
+
+1. **Uncomment `push:` trigger** in `.github/workflows/staging-update.yml` to enable auto-OTA on staging pushes.
+2. **Add staging redirect URIs** to Meta (Facebook + Instagram app), Threads app, Google GCP OAuth client — needed before OAuth testing on staging.
+3. **Create Stripe test webhook** at `https://api-staging.getelmer.com/billing/webhook`.
 
 ### Staging deep-link scheme separation (important)
 
@@ -119,6 +124,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
 - **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date". `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` env var (staging: `elmer-staging://`, production: `elmer://`).
+- **Staging OTA version badge** (`components/OtaBadge.tsx`): persistent top-right badge visible only when `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; shows `OTA <first-7-chars-of-updateId>` for loaded OTA updates, `EMBEDDED` for the original binary bundle; uses `useUpdates()` so it reflects the actually-running update; `pointerEvents="none"`, safe-area-aware, zero cost in production.
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
 ### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
@@ -269,3 +275,5 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
 | `server/test/meta-callbacks.test.js` | 19 Meta callback integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
+| `components/OtaBadge.tsx` | Staging-only OTA version badge; guards on `EXPO_PUBLIC_APP_SCHEME` |
+| `.github/workflows/staging-update.yml` | Staging OTA publish workflow; no `--environment`; all env vars explicit |
