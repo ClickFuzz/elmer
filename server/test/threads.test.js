@@ -835,3 +835,86 @@ describe('Unauthorized access', () => {
     assert.equal(res.body.error, 'no_threads_account');
   });
 });
+
+// ── POST /threads/publish — SERVER_URL media URL handling ─────────────────────
+
+describe('POST /threads/publish (SERVER_URL media URL handling)', () => {
+  let app;
+  let tmpPhoto;
+  beforeEach(async () => {
+    await setupFreshTestDb();
+    tmpPhoto = makeTempPhoto();
+  });
+  after(() => {
+    if (tmpPhoto && fs.existsSync(tmpPhoto)) fs.unlinkSync(tmpPhoto);
+  });
+
+  it('uses SERVER_URL env var for media URLs, not hardcoded production domain', async () => {
+    const capturedImageUrls = [];
+    const responses = [
+      { data: { id: 'container-urlchk' } },
+      { data: { status: 'FINISHED' } },
+      { data: { id: 'post-urlchk' } },
+      { data: { permalink: 'https://www.threads.net/t/post-urlchk' } },
+    ];
+    let i = 0;
+    const capturingFetch = async (_url, opts) => {
+      if (opts?.body?.get) {
+        const u = opts.body.get('image_url');
+        if (u) capturedImageUrls.push(u);
+      }
+      const r = responses[i++] ?? { ok: false, data: { error: { message: 'Unexpected call', code: 0 } } };
+      return { ok: r.ok ?? true, status: r.status ?? 200, json: async () => r.data };
+    };
+
+    const origUrl = process.env.SERVER_URL;
+    process.env.SERVER_URL = 'https://api-staging.getelmer.com';
+    try {
+      app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({ threadsFetch: capturingFetch }) });
+      const { token, userId } = await registerAndLogin(app, 'urlchk@example.com');
+      await insertThAccount(userId);
+
+      const res = await request(app)
+        .post('/threads/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('text', 'URL check post')
+        .field('job_id', '200')
+        .attach('photo_0', tmpPhoto, 'photo.jpg');
+
+      assert.equal(res.body.ok, true);
+      assert.ok(capturedImageUrls.length > 0, 'Expected at least one image_url captured');
+      assert.ok(
+        capturedImageUrls[0].startsWith('https://api-staging.getelmer.com/'),
+        `Expected staging URL prefix, got: ${capturedImageUrls[0]}`
+      );
+      assert.ok(
+        !capturedImageUrls[0].includes('api.getelmer.com/threads'),
+        `URL must not contain hardcoded production domain: ${capturedImageUrls[0]}`
+      );
+    } finally {
+      process.env.SERVER_URL = origUrl;
+    }
+  });
+
+  it('returns 500 when SERVER_URL is unset and photos are provided', async () => {
+    const origUrl = process.env.SERVER_URL;
+    delete process.env.SERVER_URL;
+    try {
+      app = createApp({ threadsRouter: require('../routes/threads').createThreadsRouter({ threadsFetch: makeThreadsMock([]) }) });
+      const { token, userId } = await registerAndLogin(app, 'nourl@example.com');
+      await insertThAccount(userId);
+
+      const res = await request(app)
+        .post('/threads/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('text', 'No URL test')
+        .field('job_id', '201')
+        .attach('photo_0', tmpPhoto, 'photo.jpg');
+
+      assert.equal(res.status, 500);
+    } finally {
+      if (origUrl !== undefined) process.env.SERVER_URL = origUrl;
+      else delete process.env.SERVER_URL;
+    }
+  });
+});
