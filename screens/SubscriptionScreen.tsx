@@ -18,8 +18,10 @@ import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-// Deep-link prefix the app uses to return from Stripe Checkout / Portal
-const BILLING_RETURN_PREFIX = 'elmer://billing/return';
+// Deep-link prefix the app uses to return from Stripe Checkout / Portal.
+// Built from EXPO_PUBLIC_APP_SCHEME so staging builds (elmer-staging://) and
+// production builds (elmer://) each receive the redirect for their own scheme.
+const BILLING_RETURN_PREFIX = `${process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer'}://billing/return`;
 
 export type SubscriptionStatus = {
   hasAccess: boolean;
