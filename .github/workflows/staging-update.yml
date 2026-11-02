@@ -65,5 +65,6 @@ jobs:
             --platform ios \
             --branch staging \
             --channel staging \
+            --environment preview \
             --message "$MESSAGE" \
             --non-interactive

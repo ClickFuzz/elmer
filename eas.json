@@ -16,6 +16,7 @@
     "staging": {
       "distribution": "internal",
       "channel": "staging",
+      "environment": "preview",
       "env": {
         "APP_VARIANT": "staging",
         "EXPO_PUBLIC_API_URL": "https://api-staging.getelmer.com",
