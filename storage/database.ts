@@ -397,8 +397,8 @@ export async function fetchServerConnectedChannels(
     const data = await res.json();
     return (data.platforms ?? [])
       .filter((p: { platform: string; selected?: boolean }) =>
-        // For Facebook, only include pages the user has explicitly selected.
-        p.platform !== 'facebook' || p.selected === true
+        // For multi-entity platforms (Facebook, Google), only include selected pages/locations.
+        (p.platform !== 'facebook' && p.platform !== 'google') || p.selected === true
       )
       .map((p: {
         id: number;

@@ -227,21 +227,24 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     });
   };
 
-  const refreshGbpLocations = async (token: string) => {
+  const refreshGbpLocations = async (token: string): Promise<GbpLocation[]> => {
     try {
       const res = await fetch(`${API_URL}/google/locations`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return;
+      if (!res.ok) return [];
       const data = await res.json();
-      setGbpLocations(data.locations ?? []);
-    } catch { /* ignore */ }
+      const locs: GbpLocation[] = data.locations ?? [];
+      setGbpLocations(locs);
+      return locs;
+    } catch { return []; }
   };
 
-  const refreshFbPages = async (token: string) => {
+  const refreshFbPages = async (token: string): Promise<FacebookPage[]> => {
     const pages = await fetchFacebookPages(token, API_URL);
     setFbPages(pages);
     setSelectedPageIds(pages.filter(p => p.selected).map(p => p.id));
+    return pages;
   };
 
   const refreshIgAccount = async (token: string) => {
@@ -564,12 +567,24 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         if (params.get('success') === 'true') {
           Analytics.platform_connection_succeeded('google');
           const count = parseInt(params.get('location_count') ?? '1', 10);
-          await refreshGbpLocations(sessionToken);
-          Alert.alert(
-            'Google Business Profile connected!',
-            `${count} location${count !== 1 ? 's' : ''} connected.`,
-            [{ text: 'OK' }]
-          );
+          const locs = await refreshGbpLocations(sessionToken);
+          if (count > 1) {
+            Alert.alert(
+              'Google Business Profile connected!',
+              `${count} locations connected. Select which locations should receive your posts.`,
+              [
+                { text: 'Select Locations', onPress: () => {
+                  setExpandedPlatform('google');
+                  setGbpPendingSelection(locs.filter(l => l.selected).map(l => l.id));
+                  setGbpManageOpen(true);
+                }},
+                { text: 'Done' },
+              ]
+            );
+          } else {
+            Alert.alert('Google Business Profile connected!', '1 location connected.', [{ text: 'OK' }]);
+          }
+          return;
         }
       } else {
         Analytics.platform_connection_failed('google', 'user_cancelled');
@@ -680,22 +695,25 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         if (params.get('success') === 'true') {
           Analytics.platform_connection_succeeded('facebook');
           const count = parseInt(params.get('page_count') ?? '1', 10);
+          const pages = await refreshFbPages(sessionToken);
           if (count > 1) {
-            const warned = await getMultiPageWarningShown();
-            if (!warned) {
-              await setMultiPageWarningShown();
-              Alert.alert(
-                'Publishing to multiple Pages',
-                "You've selected multiple Facebook Pages. Elmer will publish your posts to all selected Pages. You can change this anytime under Manage Pages.",
-                [{ text: 'OK' }]
-              );
-            }
+            await setMultiPageWarningShown();
+            Alert.alert(
+              'Facebook connected!',
+              `${count} pages connected. Select which pages should receive your posts.`,
+              [
+                { text: 'Select Pages', onPress: () => {
+                  setExpandedPlatform('facebook');
+                  setPendingSelection(pages.filter(p => p.selected).map(p => p.id));
+                  setManagePagesOpen(true);
+                }},
+                { text: 'Done' },
+              ]
+            );
+          } else {
+            Alert.alert('Facebook connected!', '1 page connected.', [{ text: 'OK' }]);
           }
-          Alert.alert(
-            'Facebook connected!',
-            `${count} page${count !== 1 ? 's' : ''} connected.${count > 1 ? ' Tap Manage Pages to adjust which pages receive your posts.' : ''}`,
-            [{ text: 'OK' }]
-          );
+          return;
         }
       } else {
         Analytics.platform_connection_failed('facebook', 'user_cancelled');

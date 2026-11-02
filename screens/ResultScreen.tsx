@@ -805,16 +805,28 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       : anyOk ? 'That was easy.' : 'Some posts could not be published.';
 
     const handleRetryFailed = () => {
-      const succeededIds = new Set(
+      const newSucceededIds = new Set<string>(
         publishState.results
           .filter(r => r.ok)
-          .map(r => {
+          .flatMap(r => {
+            if (r.platform === 'facebook') {
+              const ch = connectedChannels.find(c => c.platform === 'facebook' && c.accountId === r.pageId);
+              return ch ? [ch.id] : [];
+            }
+            if (r.platform === 'google') {
+              const ch = connectedChannels.find(c => c.platform === 'google' && c.accountId === r.pageId);
+              return ch ? [ch.id] : [];
+            }
+            if (r.platform === 'wordpress') {
+              const siteId = r.pageId.replace(/^wp_/, '');
+              const ch = connectedChannels.find(c => c.platform === 'wordpress' && c.id === siteId);
+              return ch ? [ch.id] : [];
+            }
             const ch = connectedChannels.find(c => c.platform === r.platform);
-            return ch?.id ?? '';
+            return ch ? [ch.id] : [];
           })
-          .filter(Boolean)
       );
-      setExcludedPlatforms(succeededIds);
+      setExcludedPlatforms(prev => new Set([...prev, ...newSucceededIds]));
       setPublishState({ status: 'idle' });
     };
 
