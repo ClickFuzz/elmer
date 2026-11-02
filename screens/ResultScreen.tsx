@@ -7,8 +7,11 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  InputAccessoryView,
+  Keyboard,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -34,6 +37,7 @@ import {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 const TIMEOUT_MS = 30_000;
+const DONE_BAR_ID = 'result-kb-done';
 const MAX_ATTEMPTS = 3;
 
 function raceTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -985,6 +989,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                   placeholderTextColor={colors.textMuted}
                   autoCorrect={false}
                   returnKeyType="done"
+                  inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                 />
                 {!editedLocation && (
                   <Text style={styles.locationNotDetected}>Not detected</Text>
@@ -1006,6 +1011,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                 textAlignVertical="top"
                 autoCorrect
                 scrollEnabled={false}
+                inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
               />
               <View style={styles.postCardFooter}>
                 <Text style={styles.metaCount}>{editedSocial.length} characters</Text>
@@ -1110,6 +1116,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                           textAlignVertical="top"
                           autoCorrect
                           scrollEnabled={false}
+                          inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                         />
                         <View style={styles.postCardFooter}>
                           <Text style={[styles.metaCount, editedGoogle.length > 1400 && styles.threadsCountWarn]}>
@@ -1134,6 +1141,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                           textAlignVertical="top"
                           autoCorrect
                           scrollEnabled={false}
+                          inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                         />
                         <View style={styles.postCardFooter}>
                           <Text style={[styles.metaCount, editedThreads.length > 450 && styles.threadsCountWarn]}>
@@ -1158,6 +1166,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                           placeholderTextColor={colors.textMuted}
                           autoCorrect
                           returnKeyType="next"
+                          inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                         />
                         <TextInput
                           style={styles.webInput}
@@ -1167,6 +1176,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
                           textAlignVertical="top"
                           autoCorrect
                           scrollEnabled={false}
+                          inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
                         />
                         <View style={styles.postCardFooter}>
                           <Text style={styles.metaCount}>{wordCount(editedWordpress)} words</Text>
@@ -1273,6 +1283,17 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             <Text style={styles.regenBtnText}>Regenerate</Text>
           </TouchableOpacity>
         </View>
+      )}
+
+      {/* Keyboard Done bar (iOS only) */}
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={DONE_BAR_ID}>
+          <View style={styles.doneBar}>
+            <TouchableOpacity onPress={() => Keyboard.dismiss()}>
+              <Text style={styles.doneBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
       )}
 
       {/* Publish confirmation modal */}
@@ -1878,6 +1899,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     fontFamily: 'Inter_400Regular',
   },
+  doneBar: { backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', justifyContent: 'flex-end' },
+  doneBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.cyan, paddingHorizontal: 4, paddingVertical: 2 },
   confirmOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.65)',
