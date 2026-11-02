@@ -8,6 +8,7 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -115,9 +116,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [copiedItem, setCopiedItem] = useState<'social' | 'web' | null>(null);
   const [publishState, setPublishState] = useState<PublishState>({ status: 'idle' });
   const [savedJobId, setSavedJobId] = useState<number | null>(draftJob?.id ?? null);
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isGenerating = useRef(false);
   const wasFirstFreePost = useRef(false);
+  const pendingTokenRef = useRef<string | null>(null);
   // Google post is generated server-side and saved to DB but not surfaced in this UI
   const googlePostRef = useRef('');
 
@@ -720,66 +723,68 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
       Alert.alert('No platforms selected', 'Check at least one platform in "Where Elmer will post" to publish.');
       return;
     }
+
+    pendingTokenRef.current = token;
+    setShowPostConfirm(true);
+  };
+
+  const doPostEverywhere = async () => {
+    setShowPostConfirm(false);
+    const token = pendingTokenRef.current;
+    if (!token) return;
+    pendingTokenRef.current = null;
+
+    const activeChannels = connectedChannels.filter(ch => !excludedPlatforms.has(ch.id));
     const hasFacebook  = activeChannels.some(ch => ch.platform === 'facebook');
     const hasInstagram = activeChannels.some(ch => ch.platform === 'instagram');
     const hasThreads   = activeChannels.some(ch => ch.platform === 'threads');
     const hasGoogle    = activeChannels.some(ch => ch.platform === 'google');
     const wpChannels   = activeChannels.filter(ch => ch.platform === 'wordpress');
-    const channelList  = activeChannels.map(ch => ch.accountName).join(', ');
 
-    Alert.alert(
-      'Publish?',
-      `Post to: ${channelList}`,
-      [
-        { text: 'Post', onPress: async () => {
-          wasFirstFreePost.current = hasFreePublicationAvailable === true;
-          setPublishState({ status: 'publishing' });
-          try {
-            const tasks: Promise<PageResult[]>[] = [];
-            if (hasFacebook)         tasks.push(runFacebookPublish(token));
-            if (hasInstagram)        tasks.push(runInstagramPublish(token).then(r => [r]));
-            if (hasThreads)          tasks.push(runThreadsPublish(token).then(r => [r]));
-            if (hasGoogle)           tasks.push(runGooglePublish(token));
-            if (wpChannels.length)   tasks.push(runWordpressPublish(token, wpChannels));
+    wasFirstFreePost.current = hasFreePublicationAvailable === true;
+    setPublishState({ status: 'publishing' });
+    try {
+      const tasks: Promise<PageResult[]>[] = [];
+      if (hasFacebook)         tasks.push(runFacebookPublish(token));
+      if (hasInstagram)        tasks.push(runInstagramPublish(token).then(r => [r]));
+      if (hasThreads)          tasks.push(runThreadsPublish(token).then(r => [r]));
+      if (hasGoogle)           tasks.push(runGooglePublish(token));
+      if (wpChannels.length)   tasks.push(runWordpressPublish(token, wpChannels));
 
-            const settled = await Promise.allSettled(tasks);
-            const allResults: PageResult[] = [];
-            for (const s of settled) {
-              if (s.status === 'fulfilled') {
-                allResults.push(...s.value);
-              } else {
-                allResults.push({ pageId: 'unknown', pageName: 'Unknown', platform: 'unknown', ok: false, error: s.reason?.message ?? 'Publishing failed' });
-              }
-            }
-            const anySuccess = allResults.some(r => r.ok);
-            if (anySuccess) onPublishSuccess?.();
-            setPublishState({ status: 'success', results: allResults, isFirstFreePost: wasFirstFreePost.current });
+      const settled = await Promise.allSettled(tasks);
+      const allResults: PageResult[] = [];
+      for (const s of settled) {
+        if (s.status === 'fulfilled') {
+          allResults.push(...s.value);
+        } else {
+          allResults.push({ pageId: 'unknown', pageName: 'Unknown', platform: 'unknown', ok: false, error: s.reason?.message ?? 'Publishing failed' });
+        }
+      }
+      const anySuccess = allResults.some(r => r.ok);
+      if (anySuccess) onPublishSuccess?.();
+      setPublishState({ status: 'success', results: allResults, isFirstFreePost: wasFirstFreePost.current });
 
-            if (savedJobId != null) {
-              const platformsRecord: Record<string, JobPlatformResult> = {};
-              for (const chId of excludedPlatforms) {
-                const ch = connectedChannels.find(c => c.id === chId);
-                if (ch) platformsRecord[`${ch.platform}_${ch.accountId ?? ch.id}`] = 'excluded';
-              }
-              for (const r of allResults) {
-                platformsRecord[getResultKey(r, connectedChannels)] = r.ok ? 'success' : 'failed';
-              }
-              const successes = allResults.filter(r => r.ok).length;
-              const failures  = allResults.filter(r => !r.ok).length;
-              const newStatus = successes > 0 && failures === 0 ? 'published' : successes > 0 ? 'partial' : 'failed';
-              updateJobPublishStatus(savedJobId, newStatus, {
-                platforms: platformsRecord,
-                results: allResults.map(r => ({ platform: r.platform, pageName: r.pageName, ok: r.ok, postUrl: r.postUrl, error: r.error, duplicate: r.duplicate })),
-              }).catch(err => console.warn('updateJobPublishStatus failed:', err));
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Publishing failed';
-            setPublishState({ status: 'error', message: msg });
-          }
-        }},
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+      if (savedJobId != null) {
+        const platformsRecord: Record<string, JobPlatformResult> = {};
+        for (const chId of excludedPlatforms) {
+          const ch = connectedChannels.find(c => c.id === chId);
+          if (ch) platformsRecord[`${ch.platform}_${ch.accountId ?? ch.id}`] = 'excluded';
+        }
+        for (const r of allResults) {
+          platformsRecord[getResultKey(r, connectedChannels)] = r.ok ? 'success' : 'failed';
+        }
+        const successes = allResults.filter(r => r.ok).length;
+        const failures  = allResults.filter(r => !r.ok).length;
+        const newStatus = successes > 0 && failures === 0 ? 'published' : successes > 0 ? 'partial' : 'failed';
+        updateJobPublishStatus(savedJobId, newStatus, {
+          platforms: platformsRecord,
+          results: allResults.map(r => ({ platform: r.platform, pageName: r.pageName, ok: r.ok, postUrl: r.postUrl, error: r.error, duplicate: r.duplicate })),
+        }).catch(err => console.warn('updateJobPublishStatus failed:', err));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Publishing failed';
+      setPublishState({ status: 'error', message: msg });
+    }
   };
 
   const wordCount = (text: string) =>
@@ -1269,6 +1274,60 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Publish confirmation modal */}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showPostConfirm}
+        onRequestClose={() => setShowPostConfirm(false)}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmSheet}>
+            <Text style={styles.confirmTitle}>Ready to publish?</Text>
+            {(() => {
+              const confirmChannels = connectedChannels.filter(ch => !excludedPlatforms.has(ch.id));
+              const platformOrder = ['facebook', 'instagram', 'threads', 'google', 'wordpress'];
+              const platforms = [...new Set(confirmChannels.map(ch => ch.platform))].sort(
+                (a, b) => (platformOrder.indexOf(a) + 1 || 99) - (platformOrder.indexOf(b) + 1 || 99)
+              );
+              return platforms.map(platform => {
+                const accounts = confirmChannels.filter(ch => ch.platform === platform);
+                const cfg = PLATFORM_CFG[platform] ?? PLATFORM_CFG.default;
+                return (
+                  <View key={platform} style={styles.confirmRow}>
+                    <View style={[styles.confirmIconBadge, { backgroundColor: cfg.bg }]}>
+                      <Ionicons name={cfg.icon as any} size={16} color={cfg.iconColor} />
+                    </View>
+                    <View style={styles.confirmRowContent}>
+                      <Text style={styles.confirmPlatformName}>{platformDisplayName(platform)}</Text>
+                      {accounts.map((ch, i) => (
+                        <Text key={i} style={styles.confirmAccountName}>{ch.accountName}</Text>
+                      ))}
+                    </View>
+                  </View>
+                );
+              });
+            })()}
+            <View style={styles.confirmButtons}>
+              <TouchableOpacity
+                style={styles.confirmCancelBtn}
+                onPress={() => setShowPostConfirm(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmPostBtn}
+                onPress={doPostEverywhere}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmPostText}>Post</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1818,5 +1877,84 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 6,
     fontFamily: 'Inter_400Regular',
+  },
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  confirmSheet: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  confirmTitle: {
+    fontSize: 18,
+    fontFamily: 'DMSans_600SemiBold',
+    color: colors.textPrimary,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  confirmRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  confirmIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    marginTop: 1,
+  },
+  confirmRowContent: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  confirmPlatformName: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.textPrimary,
+  },
+  confirmAccountName: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  confirmButtons: {
+    flexDirection: 'row',
+    marginTop: 24,
+    gap: 12,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    backgroundColor: colors.border,
+    alignItems: 'center',
+  },
+  confirmCancelText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.textSecondary,
+  },
+  confirmPostBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    backgroundColor: colors.cyan,
+    alignItems: 'center',
+  },
+  confirmPostText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.bg,
   },
 });
