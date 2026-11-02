@@ -26,21 +26,22 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | GitHub Actions CI/CD pipeline (local EAS build → TestFlight) | COMPLETE |
 | — | Manual OTA update checker in Settings (test-mode only) | COMPLETE |
 | — | Meta compliance: deletion callbacks, V13 migration, SCHEMA_VERSION fix | COMPLETE |
-| — | Staging environment: branch, EAS channel, `app.config.js`, workflows, docs | CODE COMPLETE — Railway pending |
+| — | Staging environment: branch, EAS channel, `app.config.js`, workflows, docs | CODE COMPLETE — Railway `SERVER_URL` env var pending |
+| — | GBP 1-photo limit fix; Threads/Instagram SERVER_URL fallback hardening | COMPLETE — staging `292929d`, Railway deploy pending |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `3fee483`
-- **Staging branch:** `staging` — HEAD `d96bca2` (2 commits ahead of main)
+- **Staging branch:** `staging` — HEAD `292929d` (4 commits ahead of main)
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
 - **Staging bundle ID:** `com.clickfuzz.elmer.staging` (not yet built)
 - **Production API:** `https://api.getelmer.com` (Railway, deployed at `3fee483`)
-- **Staging API:** `https://api-staging.getelmer.com` — **Railway staging not yet configured**
+- **Staging API:** `https://api-staging.getelmer.com` — **Railway staging service exists; `SERVER_URL` env var not yet set**
 - **EAS channels:** `production` (live), `staging` (created, no updates published yet)
 - **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
 - **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
@@ -139,7 +140,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **507 automated tests passing** — `cd server && npm test`
+- **509 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -233,7 +234,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ```bash
 cd server && npm test
-# 507 tests: db, auth, platforms, facebook, instagram, threads,
+# 509 tests: db, auth, platforms, facebook, instagram, threads,
 #             media-utils, generation, account-isolation, wordpress,
 #             billing, google, free-publication, analytics, device,
 #             security, settings, testmode, meta-callbacks
