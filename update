@@ -15,18 +15,32 @@ if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
   exit 1
 fi
 
-# Write staging overrides to .env.local before bundling.
-# @expo/env loads .env.local after .env, so these values win over the
-# production .env file that lives at the repo root.
-ENV_LOCAL=".env.local"
-cleanup() { rm -f "$ENV_LOCAL"; }
+# @expo/env loads .env.local first then .env, with .env winning (override mode).
+# The only reliable way to inject staging values is to replace .env itself.
+# Back it up and restore it on exit (success, error, or Ctrl-C).
+ENV_FILE=".env"
+ENV_BACKUP=".env.ota-backup"
+
+if [[ -f "$ENV_FILE" ]]; then
+  cp "$ENV_FILE" "$ENV_BACKUP"
+fi
+
+cleanup() {
+  if [[ -f "$ENV_BACKUP" ]]; then
+    mv "$ENV_BACKUP" "$ENV_FILE"
+  elif [[ -f "$ENV_FILE" ]]; then
+    rm -f "$ENV_FILE"
+  fi
+  rm -f ".env.local"
+}
 trap cleanup EXIT
 
-cat > "$ENV_LOCAL" <<'ENVEOF'
+cat > "$ENV_FILE" <<'ENVEOF'
 APP_VARIANT=staging
 EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
 EXPO_PUBLIC_APP_SCHEME=elmer-staging
 EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
 EXPO_PUBLIC_INSTAGRAM_ENABLED=true
 ENVEOF
 
