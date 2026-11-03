@@ -38,14 +38,14 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `7551889` (merge: hide Instagram in OnboardingWizard when flag is off)
-- **Staging branch:** `staging` — HEAD `7551889` (in sync with main)
+- **Production branch:** `main` — HEAD `b3ee091` (location/page selection panel in onboarding)
+- **Staging branch:** `staging` — HEAD `b3ee091` (in sync with main)
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8951-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
 - **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
-- **Production API:** `https://api.getelmer.com` (Railway, deployed at `7551889`)
+- **Production API:** `https://api.getelmer.com` (Railway, deployed at `b3ee091`)
 - **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
 - **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
