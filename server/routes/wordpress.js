@@ -59,7 +59,8 @@ async function checkWordPressInstallation(siteUrl, wpFetch) {
     if (err.name === 'AbortError') {
       return { error: 'WordPress site timed out. Check the URL is correct and the site is publicly accessible.' };
     }
-    return { error: `Could not reach WordPress site: ${err.message}` };
+    const detail = err.cause?.message ?? err.cause?.code ?? err.code ?? err.message;
+    return { error: `Could not reach WordPress site: ${detail}` };
   } finally {
     clearTimeout(timer);
   }
