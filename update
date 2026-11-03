@@ -1,23 +1,55 @@
 #!/bin/bash
+# Staging OTA update script for Elmer.
+# Publishes an iOS OTA update to the EAS 'staging' branch with the EAS 'preview' environment.
+# Usage: bash update
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# ── 1. Branch check ───────────────────────────────────────────────────────────
 if [[ "$(git branch --show-current)" != "staging" ]]; then
   echo "ERROR: You must be on the staging branch."
   exit 1
 fi
 
-read -r -p "Update message: " MESSAGE
-
-if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
-  echo "ERROR: Update message cannot be empty."
+# ── 2. EXPO_TOKEN check ───────────────────────────────────────────────────────
+if [[ -z "${EXPO_TOKEN:-}" ]]; then
+  echo "ERROR: EXPO_TOKEN is not set. Export it before running this script."
+  echo "       export EXPO_TOKEN=<your-token>"
   exit 1
 fi
 
+# ── 3. eas.json configuration check ──────────────────────────────────────────
+if [[ ! -f eas.json ]]; then
+  echo "ERROR: eas.json not found in $(pwd)."
+  exit 1
+fi
+
+STAGING_CHANNEL="$(node -e "const e=require('./eas.json'); process.stdout.write(e.build.staging.channel ?? '')")"
+if [[ "$STAGING_CHANNEL" != "staging" ]]; then
+  echo "ERROR: eas.json staging build profile has channel '${STAGING_CHANNEL}', expected 'staging'."
+  exit 1
+fi
+
+STAGING_ENV="$(node -e "const e=require('./eas.json'); process.stdout.write(e.build.staging.environment ?? '')")"
+if [[ "$STAGING_ENV" != "preview" ]]; then
+  echo "ERROR: eas.json staging build profile has environment '${STAGING_ENV}', expected 'preview'."
+  exit 1
+fi
+echo "Verified: eas.json staging profile maps to channel 'staging', environment 'preview'."
+
+# ── 4. Check CLI support for --environment flag ───────────────────────────────
+if npx eas-cli@latest update --help 2>&1 | grep -q -- '--environment'; then
+  USE_ENVIRONMENT_FLAG=true
+  echo "EAS CLI supports --environment flag; will use --environment preview."
+else
+  USE_ENVIRONMENT_FLAG=false
+  echo "WARNING: EAS CLI does not support --environment flag; proceeding without it."
+fi
+
+# ── 5. Write staging .env (backup production .env; restore on exit) ────────────
 # @expo/env loads .env.local first then .env, with .env winning (override mode).
 # The only reliable way to inject staging values is to replace .env itself.
-# Back it up and restore it on exit (success, error, or Ctrl-C).
 ENV_FILE=".env"
 ENV_BACKUP=".env.ota-backup"
 
@@ -44,15 +76,75 @@ EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
 EXPO_PUBLIC_INSTAGRAM_ENABLED=true
 ENVEOF
 
+# ── 6. Validate required staging settings in the .env ─────────────────────────
+check_env_value() {
+  local key="$1" expected="$2"
+  local actual
+  actual="$(grep -E "^${key}=" "$ENV_FILE" | cut -d= -f2- | tr -d '[:space:]' || true)"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: .env has ${key}='${actual}', expected '${expected}'."
+    echo "       Refusing to publish a bundle not configured for staging."
+    exit 1
+  fi
+}
+
+check_env_value "APP_VARIANT"              "staging"
+check_env_value "EXPO_PUBLIC_API_URL"      "https://api-staging.getelmer.com"
+check_env_value "EXPO_PUBLIC_APP_SCHEME"   "elmer-staging"
+check_env_value "EXPO_PUBLIC_INSTAGRAM_ENABLED" "true"
+echo "Verified: all required staging settings are present and correct."
+
+# ── 7. Update message ─────────────────────────────────────────────────────────
+echo ""
+read -r -p "Update message: " MESSAGE
+
+if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
+  echo "ERROR: Update message cannot be empty."
+  exit 1
+fi
+
+# ── 8. Summary and confirmation ───────────────────────────────────────────────
+echo ""
+echo "  +---------------------------------------------------------+"
+echo "  |  STAGING OTA UPDATE                                     |"
+echo "  |                                                         |"
+echo "  |  Branch:      staging                                   |"
+echo "  |  Environment: preview                                   |"
+echo "  |  Platform:    iOS only                                  |"
+echo "  |  API URL:     https://api-staging.getelmer.com          |"
+echo "  |  App scheme:  elmer-staging                             |"
+echo "  |  Instagram:   enabled                                   |"
+echo "  +---------------------------------------------------------+"
+echo ""
+echo "  Message: ${MESSAGE}"
+echo ""
+read -r -p "  Type STAGING to confirm: " CONFIRM
+if [[ "$CONFIRM" != "STAGING" ]]; then
+  echo ""
+  echo "Aborted. No update was published."
+  exit 1
+fi
+
+# ── 9. Publish ────────────────────────────────────────────────────────────────
 echo ""
 echo "Publishing Elmer Staging OTA update..."
 echo "Message: $MESSAGE"
 echo ""
 
-npx eas-cli@latest update \
-  --branch staging \
-  --platform ios \
-  --message "$MESSAGE"
+if [[ "$USE_ENVIRONMENT_FLAG" == "true" ]]; then
+  npx eas-cli@latest update \
+    --branch staging \
+    --environment preview \
+    --platform ios \
+    --message "$MESSAGE" \
+    --non-interactive
+else
+  npx eas-cli@latest update \
+    --branch staging \
+    --platform ios \
+    --message "$MESSAGE" \
+    --non-interactive
+fi
 
 echo ""
 echo "Staging OTA update published successfully."

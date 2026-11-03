@@ -95,6 +95,23 @@ export EXPO_PUBLIC_APP_SCHEME=elmer
 export EXPO_PUBLIC_INSTAGRAM_ENABLED=false
 export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 
+# ── 8.5. Validate required production settings ────────────────────────────────
+check_production_env() {
+  local key="$1" expected="$2"
+  local actual="${!key:-}"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: ${key}='${actual}', expected '${expected}'."
+    echo "       Refusing to publish a bundle not configured for production."
+    exit 1
+  fi
+}
+
+check_production_env "APP_VARIANT"              "production"
+check_production_env "EXPO_PUBLIC_API_URL"      "https://api.getelmer.com"
+check_production_env "EXPO_PUBLIC_APP_SCHEME"   "elmer"
+check_production_env "EXPO_PUBLIC_INSTAGRAM_ENABLED" "false"
+echo "Verified: all required production settings are present and correct."
+
 # ── 9. Publish ────────────────────────────────────────────────────────────────
 echo ""
 echo "Publishing Elmer production OTA update..."
