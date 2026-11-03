@@ -15,11 +15,20 @@ if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
   exit 1
 fi
 
-export APP_VARIANT=staging
-export EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
-export EXPO_PUBLIC_APP_SCHEME=elmer-staging
-export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
-export EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+# Write staging overrides to .env.local before bundling.
+# @expo/env loads .env.local after .env, so these values win over the
+# production .env file that lives at the repo root.
+ENV_LOCAL=".env.local"
+cleanup() { rm -f "$ENV_LOCAL"; }
+trap cleanup EXIT
+
+cat > "$ENV_LOCAL" <<'ENVEOF'
+APP_VARIANT=staging
+EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
+EXPO_PUBLIC_APP_SCHEME=elmer-staging
+EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+ENVEOF
 
 echo ""
 echo "Publishing Elmer Staging OTA update..."
