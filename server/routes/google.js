@@ -456,7 +456,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       });
     }
 
-    // Order photos and limit to GBP max (10 photos per post)
+    // GBP allows only 1 photo per local post — use featured (or first) photo only
     const photoFiles = orderWithFeaturedFirst(
       uploadedFiles
         .filter(f => /^photo_\d+$/.test(f.fieldname))
@@ -466,7 +466,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
           return ai - bi;
         }),
       featuredIndex
-    ).slice(0, 10);
+    ).slice(0, 1);
 
     // Copy photos to named tmp files so they can be served via /google/media/:filename.
     // GBP fetches the images from the sourceUrl when processing the post.

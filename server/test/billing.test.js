@@ -273,6 +273,41 @@ describe('GET /billing/checkout-return', () => {
     assert.strictEqual(res.status, 302);
     assert.ok(res.headers.location.includes('status=unknown'));
   });
+
+  it('uses APP_SCHEME env var for the redirect scheme (staging scenario)', async () => {
+    // Regression: staging app uses elmer-staging:// scheme. If APP_SCHEME is not
+    // set on the staging server the redirect goes to elmer:// and the staging app
+    // never receives it, leaving the user stuck after a successful Stripe checkout.
+    const original = process.env.APP_SCHEME;
+    process.env.APP_SCHEME = 'elmer-staging';
+    try {
+      const res = await request(app).get('/billing/checkout-return?status=success');
+      assert.strictEqual(res.status, 302);
+      assert.ok(
+        res.headers.location.startsWith('elmer-staging://billing/return'),
+        `expected elmer-staging:// prefix, got: ${res.headers.location}`
+      );
+      assert.ok(res.headers.location.includes('status=success'));
+    } finally {
+      if (original === undefined) delete process.env.APP_SCHEME;
+      else process.env.APP_SCHEME = original;
+    }
+  });
+
+  it('defaults APP_SCHEME to elmer when env var is absent', async () => {
+    const original = process.env.APP_SCHEME;
+    delete process.env.APP_SCHEME;
+    try {
+      const res = await request(app).get('/billing/checkout-return?status=success');
+      assert.strictEqual(res.status, 302);
+      assert.ok(
+        res.headers.location.startsWith('elmer://billing/return'),
+        `expected elmer:// prefix, got: ${res.headers.location}`
+      );
+    } finally {
+      if (original !== undefined) process.env.APP_SCHEME = original;
+    }
+  });
 });
 
 // ── POST /billing/webhook ─────────────────────────────────────────────────────

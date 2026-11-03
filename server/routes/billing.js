@@ -20,20 +20,35 @@ const {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-// Set STRIPE_TEST_MODE=true in Railway to use test keys instead of live keys.
+// STRIPE_TEST_MODE controls DeviceCheck bypass and the Developer UI in the app.
+// It does NOT select credentials — both production and staging set STRIPE_SECRET_KEY
+// (and siblings) directly with their respective live / test key values.
 const isTestMode = () => process.env.STRIPE_TEST_MODE?.toLowerCase() === 'true';
 
-const STRIPE_SECRET_KEY     = () => isTestMode()
-  ? process.env.STRIPE_TEST_SECRET_KEY
-  : process.env.STRIPE_SECRET_KEY;
+// Credential accessors: prefer the environment-agnostic variable names.
+// Falls back to legacy STRIPE_TEST_* names for backward compatibility while
+// existing Railway staging environments are migrated to the new scheme.
+const STRIPE_SECRET_KEY     = () =>
+  process.env.STRIPE_SECRET_KEY ||
+  (isTestMode() ? process.env.STRIPE_TEST_SECRET_KEY : undefined);
 
-const STRIPE_WEBHOOK_SECRET = () => isTestMode()
-  ? process.env.STRIPE_TEST_WEBHOOK_SECRET
-  : process.env.STRIPE_WEBHOOK_SECRET;
+const STRIPE_WEBHOOK_SECRET = () =>
+  process.env.STRIPE_WEBHOOK_SECRET ||
+  (isTestMode() ? process.env.STRIPE_TEST_WEBHOOK_SECRET : undefined);
 
-const STRIPE_PRICE_ID       = () => isTestMode()
-  ? process.env.STRIPE_TEST_PRICE_ID
-  : process.env.STRIPE_PRICE_ID;
+const STRIPE_PRICE_ID       = () =>
+  process.env.STRIPE_PRICE_ID ||
+  (isTestMode() ? process.env.STRIPE_TEST_PRICE_ID : undefined);
+
+// Guard: live credentials must never run with STRIPE_TEST_MODE=true.
+// This prevents accidental live Stripe charges in a staging environment.
+if (process.env.STRIPE_SECRET_KEY?.startsWith('sk_live_') && isTestMode()) {
+  throw new Error(
+    '[billing] FATAL: Live Stripe credentials (sk_live_…) cannot be used with ' +
+    'STRIPE_TEST_MODE=true. Remove STRIPE_TEST_MODE from staging or replace the key ' +
+    'with a Stripe test key (sk_test_…).'
+  );
+}
 
 const APP_URL              = () => process.env.APP_URL ?? 'https://api.getelmer.com';
 const APP_SCHEME           = () => process.env.APP_SCHEME ?? 'elmer';

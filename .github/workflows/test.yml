@@ -1,0 +1,40 @@
+name: Server Tests
+
+on:
+  push:
+    branches: [main, staging]
+    paths:
+      - 'server/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - 'server/**'
+      - '.github/workflows/test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Run server tests
+        working-directory: server
+        run: npm test
+        env:
+          NODE_ENV: test
+          DISABLE_RATE_LIMIT: 'true'

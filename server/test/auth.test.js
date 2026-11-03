@@ -174,6 +174,33 @@ describe('POST /auth/logout', () => {
   });
 });
 
+// ── DELETE /auth/account ──────────────────────────────────────────────────────
+
+describe('DELETE /auth/account', () => {
+  it('deletes account when no subscription exists', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, true);
+  });
+
+  it('blocks deletion with 409 when user has an active subscription', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedActiveSubscription(userId);
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.body.error, 'active_subscription');
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).delete('/auth/account');
+    assert.strictEqual(res.status, 401);
+  });
+});
+
 // ── Auth on /api/generate ─────────────────────────────────────────────────────
 
 describe('/api/generate auth enforcement', () => {

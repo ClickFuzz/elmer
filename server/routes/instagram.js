@@ -311,7 +311,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
     const pool      = getPool();
     const now       = Date.now();
-    const serverUrl = process.env.SERVER_URL ?? 'https://api.getelmer.com';
+    const serverUrl = process.env.SERVER_URL ?? '';
 
     // Fetch Instagram account for this user
     let igAccount;
@@ -487,6 +487,10 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
     }
 
     // Stage photos in the public MEDIA_DIR so Instagram can fetch them
+    if (!serverUrl) {
+      cleanup();
+      return res.status(500).json({ error: 'Server media URL not configured.' });
+    }
     const mediaItems = [];
     for (const preparedPath of preparedPaths) {
       const uuid     = randomBytes(16).toString('hex');

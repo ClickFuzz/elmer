@@ -5,6 +5,7 @@ const { randomBytes } = require('crypto');
 const bcrypt          = require('bcryptjs');
 const { getPool }     = require('../db');
 const { requireAuth, SESSION_TTL_MS } = require('../auth');
+const { hasAccess }   = require('./billing');
 
 const router = Router();
 const BCRYPT_ROUNDS = 12;
@@ -243,6 +244,18 @@ router.delete('/history', requireAuth, wrap(async (req, res) => {
 // connected_platforms, oauth_states, and publishing_records via ON DELETE CASCADE.
 router.delete('/account', requireAuth, wrap(async (req, res) => {
   const pool = getPool();
+
+  const { rows: subRows } = await pool.query(
+    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    [req.userId]
+  );
+  if (hasAccess(subRows[0])) {
+    return res.status(409).json({
+      error: 'active_subscription',
+      message: 'This account has an active subscription. Cancel your subscription before deleting your account.',
+    });
+  }
+
   const result = await pool.query(
     'DELETE FROM users WHERE id = $1',
     [req.userId]

@@ -347,7 +347,7 @@ function createThreadsRouter({
 
     const pool      = getPool();
     const now       = Date.now();
-    const serverUrl = process.env.SERVER_URL ?? 'https://api.getelmer.com';
+    const serverUrl = process.env.SERVER_URL ?? '';
 
     // Fetch Threads account
     let thAccount;
@@ -586,6 +586,11 @@ function createThreadsRouter({
     }
 
     // Stage images in public MEDIA_DIR so Threads API can fetch them
+    if (!serverUrl) {
+      await markFailed('SERVER_URL not configured — cannot serve media URLs to Threads API');
+      cleanup();
+      return res.status(500).json({ error: 'Server media URL not configured.' });
+    }
     const mediaItems = [];
     for (const preparedPath of preparedPaths) {
       const uuid     = crypto.randomBytes(16).toString('hex');

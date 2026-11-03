@@ -25,20 +25,63 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | 11 | Multi-device sync, server-authoritative settings, test-mode DeviceCheck bypass | COMPLETE |
 | — | GitHub Actions CI/CD pipeline (local EAS build → TestFlight) | COMPLETE |
 | — | Manual OTA update checker in Settings (test-mode only) | COMPLETE |
+| — | Meta compliance: deletion callbacks, V13 migration, SCHEMA_VERSION fix | COMPLETE |
+| — | Staging environment: branch, EAS channel, `app.config.js`, workflows, docs, Railway live | COMPLETE |
+| — | GBP 1-photo limit fix; Threads/Instagram SERVER_URL fallback hardening | COMPLETE |
+| — | Fix staging Stripe checkout: `BILLING_RETURN_PREFIX` scheme-aware via `EXPO_PUBLIC_APP_SCHEME` | COMPLETE |
+| — | Fix staging OTA workflow: remove `--environment preview`; add `EXPO_PUBLIC_APP_SCHEME` | COMPLETE — staging `19975be` |
+| — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 
 ---
 
 ## Current Build State
 
-- **Branch:** `main`
-- **HEAD:** `34fe198`
+- **Production branch:** `main` — HEAD `3fee483`
+- **Staging branch:** `staging` — HEAD `19975be` (9 commits ahead of main)
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
-- **Bundle ID:** `com.clickfuzz.elmer`
-- **Production API:** `https://api.getelmer.com` (Railway)
-- **EAS cloud build credits:** exhausted for the free tier this month — all builds must go through GitHub Actions
-- **Pending OTA update:** `34fe198` (subscription screen redesign) — not yet pushed to `production` channel
+- **Production bundle ID:** `com.clickfuzz.elmer`
+- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
+- **Production API:** `https://api.getelmer.com` (Railway, deployed at `3fee483`)
+- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL` confirmed set)
+- **EAS channels:** `production` (live), `staging` (live — OTA updates active)
+- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
+- **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
+
+## Staging Environment
+
+Staging infrastructure is fully live. Railway staging environment is running.
+
+### What is in place
+
+| Item | State |
+|---|---|
+| `staging` git branch | Live, pushed to origin |
+| `app.config.js` | Wraps `app.json`; `APP_VARIANT=staging` → name "Elmer Staging", bundle `com.clickfuzz.elmer.staging`, scheme `elmer-staging` |
+| `eas.json` staging profile | `distribution: internal`, `channel: staging`, `EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com`, `EXPO_PUBLIC_APP_SCHEME: elmer-staging` |
+| EAS `staging` channel + branch | Live at expo.dev; OTA updates active |
+| `.github/workflows/test.yml` | CI: runs server tests on every push/PR to `main` or `staging` |
+| `.github/workflows/staging-update.yml` | OTA workflow (manual dispatch); `--environment` removed; all staging env vars explicit; auto-push trigger still disabled |
+| `components/OtaBadge.tsx` | Staging-only OTA version badge; shows `OTA <7-char-id>` or `EMBEDDED`; guards on `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; never visible in production |
+| `docs/DEPLOYMENT-WORKFLOW.md` | Full dev/staging/production/rollback/hotfix procedures |
+| Railway staging | Live at `https://api-staging.getelmer.com`; `APP_SCHEME=elmer-staging`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set |
+
+### Staging OTA workflow — important fix (19975be)
+
+`--environment preview` was causing the EAS server-side "preview" environment (expo.dev) to override and nullify `EXPO_PUBLIC_API_URL`, making the app fall back to `http://localhost:3001`. Removed from the workflow. All staging env vars are now set explicitly in the GitHub Actions `env` block and are correctly inlined by Metro at bundle time.
+
+### What still needs setup
+
+1. **Uncomment `push:` trigger** in `.github/workflows/staging-update.yml` to enable auto-OTA on staging pushes.
+2. **Add staging redirect URIs** to Meta (Facebook + Instagram app), Threads app, Google GCP OAuth client — needed before OAuth testing on staging.
+3. **Create Stripe test webhook** at `https://api-staging.getelmer.com/billing/webhook`.
+
+### Staging deep-link scheme separation (important)
+
+The staging app uses scheme `elmer-staging://` (set in `app.config.js`) and the staging server must have `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging`. Without this, OAuth callbacks are ambiguous when both apps are on the same device.
+
+---
 
 ## CI/CD — GitHub Actions Build Pipeline
 
@@ -80,7 +123,8 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
-- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date".
+- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date". `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` env var (staging: `elmer-staging://`, production: `elmer://`).
+- **Staging OTA version badge** (`components/OtaBadge.tsx`): persistent top-right badge visible only when `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; shows `OTA <first-7-chars-of-updateId>` for loaded OTA updates, `EMBEDDED` for the original binary bundle; uses `useUpdates()` so it reflects the actually-running update; `pointerEvents="none"`, safe-area-aware, zero cost in production.
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
 ### Backend Server (Node.js + Express 4, Railway + PostgreSQL)
@@ -89,8 +133,8 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - `GET /health`
 - Auth: register, login, logout, /me (`server/routes/auth.js`)
 - Platforms: list, disconnect, OAuth CSRF state (`server/routes/platforms.js`)
-- Facebook: connect-url, callback, pages list/selection, publish (`server/routes/facebook.js`)
-- Instagram: connect-url, callback, account info, media serving, publish (`server/routes/instagram.js`)
+- Facebook: connect-url, callback, pages list/selection, publish, uninstall/delete callbacks (`server/routes/facebook.js`)
+- Instagram: connect-url, callback, account info, media serving, publish, uninstall/delete callbacks (`server/routes/instagram.js`)
 - Threads: connect-url, callback, account info, media serving, publish, uninstall/delete callbacks (`server/routes/threads.js`)
 - WordPress: connect-url, callback, sites list/disconnect, publish (`server/routes/wordpress.js`)
 - Google Business Profile: connect-url, callback, locations list/selection, media serving, publish (`server/routes/google.js`)
@@ -99,11 +143,31 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `GET /billing/subscription` — status + `hasAccess`
   - `POST /billing/checkout-session` — Stripe Checkout; 409 if already subscribed
   - `POST /billing/portal-session` — Stripe Customer Portal
-  - `GET /billing/checkout-return` → redirects to `elmer://billing/return`
+  - `GET /billing/checkout-return` → redirects to `${APP_SCHEME}://billing/return` (env var; default `elmer`; staging must set `APP_SCHEME=elmer-staging`)
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
-- PostgreSQL schema v5: users, sessions, business_settings, connected_platforms, oauth_states, publishing_records, stripe_customers, subscriptions (no new migration for GBP — `connected_platforms` already supports `google` platform)
-- **457 automated tests passing** — `cd server && npm test` (no new server-side changes this session)
+- **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
+- **511 automated tests passing** — `cd server && npm test`
+
+---
+
+## Meta Compliance — Callback Details
+
+All three Meta platforms implement signed-request validation (HMAC-SHA256) and atomic deletion with DB-tracked status.
+
+| Platform | Deauthorize URL | Data Deletion URL | Status URL |
+|---|---|---|---|
+| Facebook | `https://api.getelmer.com/facebook/uninstall` | `https://api.getelmer.com/facebook/delete` | `https://api.getelmer.com/facebook/deletion-status?code=<code>` |
+| Instagram | `https://api.getelmer.com/instagram/uninstall` | `https://api.getelmer.com/instagram/delete` | `https://api.getelmer.com/instagram/deletion-status?code=<code>` |
+| Threads | `https://api.getelmer.com/threads/uninstall` | `https://api.getelmer.com/threads/delete` | `https://api.getelmer.com/threads/deletion-status?code=<code>` |
+
+**Status semantics** (stored in `deletion_requests` table):
+- `completed` — data deleted successfully
+- `no_data` — lookup succeeded; no matching records found for this user
+- `failed` — identity verification failed (network error, Meta API error, HTTP error from `/debug_token`)
+- `pending` — deletion in progress
+
+**Facebook legacy backfill:** `findAndBackfillFbConnections` resolves NULL `platform_user_id` rows via `/debug_token` API. If any debug_token call fails, status is `failed` (unverifiable identity) — never falsely `completed`.
 
 ---
 
@@ -148,14 +212,14 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 
 ## Pending Actions Before App Store Release
 
-1. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
-2. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway.
-3. **Stripe webhook endpoint:** register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
-4. **Meta App Review:** submit Facebook/Instagram permissions for review (screencast: connect → select pages → create job → Post Everywhere → confirm posts).
-5. **Google Cloud Console:** add `https://api.getelmer.com/google/callback` to authorized redirect URIs for the OAuth 2.0 client in project `elmer-511511`. Add `https://api.getelmer.com` to authorized JavaScript origins.
-6. **Railway GBP env vars:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in the Elmer Server service and redeploy.
-7. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console and, if required, the app must go through Google's GBP API access verification process.
-8. **Confirm current TestFlight build includes GBP fixes** — build in progress from `daaeab0` includes the HEIC→JPEG conversion fix and `topicType: 'STANDARD'` fix. Verify it reaches TestFlight successfully.
+1. **OTA update:** push `34fe198` to `production` channel — `bunx eas-cli update --branch production --message "Fix subscription manage screen: no flash, back button, Invalid Date"`
+2. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
+3. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway.
+4. **Stripe webhook endpoint:** register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
+5. **Meta App Review:** Elmer v2 is currently under Meta review. After TestFlight verification passes, configure the Meta dashboard callback URLs (see Meta Compliance section above). Do not modify the pending review submission.
+6. **Google Cloud Console:** add `https://api.getelmer.com/google/callback` to authorized redirect URIs for the OAuth 2.0 client in project `elmer-511511`. Add `https://api.getelmer.com` to authorized JavaScript origins.
+7. **Railway GBP env vars:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in the Elmer Server service and redeploy.
+8. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console; may require Google's GBP API access verification process.
 
 ---
 
@@ -163,7 +227,6 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 
 | Bug | Location |
 |---|---|
-| Google Business post generated but UI shows legacy stub (GBP edit/preview now in ResultScreen) | fixed in Phase 5 |
 | Orphaned `elmer_recording_*.m4a` accumulate | `HomeScreen.tsx` |
 | Job status never changes from `draft` | `storage/database.ts` |
 | `expo-file-system/legacy` import | `HomeScreen.tsx`, `ResultScreen.tsx` |
@@ -178,8 +241,10 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 
 ```bash
 cd server && npm test
-# 341 tests: db, auth, platforms, facebook, instagram, threads,
-#             media-utils, generation, account-isolation, wordpress, billing, google
+# 511 tests: db, auth, platforms, facebook, instagram, threads,
+#             media-utils, generation, account-isolation, wordpress,
+#             billing, google, free-publication, analytics, device,
+#             security, settings, testmode, meta-callbacks
 ```
 
 Mobile:
@@ -198,12 +263,17 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `AGENTS.md` | Dev rules, Expo guidance, commands |
 | `server/.env.example` | Template for required env vars |
 | `storage/database.ts` | All device SQLite access |
-| `server/db.js` | PostgreSQL pool + migrations (schema v5) |
+| `server/db.js` | PostgreSQL pool + migrations (schema v13) |
 | `server/app.js` | Express app factory — middleware + route mounting order |
 | `server/auth.js` | `requireAuth` / `optionalAuth` |
 | `server/crypto.js` | AES-256-GCM encrypt/decrypt |
 | `server/routes/billing.js` | Stripe billing: checkout, portal, webhook, `requireSubscription` |
 | `server/routes/google.js` | GBP: OAuth connect-url/callback, locations, publish, token refresh |
+| `server/routes/facebook.js` | Facebook: OAuth, pages, publish, Meta callbacks, backfill |
+| `server/routes/instagram.js` | Instagram: OAuth, publish, Meta callbacks |
+| `server/routes/threads.js` | Threads: OAuth, publish, Meta callbacks |
 | `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
-| `server/test/google.test.js` | 33 GBP integration tests |
+| `server/test/meta-callbacks.test.js` | 19 Meta callback integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
+| `components/OtaBadge.tsx` | Staging-only OTA version badge; guards on `EXPO_PUBLIC_APP_SCHEME` |
+| `.github/workflows/staging-update.yml` | Staging OTA publish workflow; no `--environment`; all env vars explicit |
