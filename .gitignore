@@ -48,3 +48,8 @@ server/tmp/
 # generated native folders
 /ios
 /android
+
+# local tool directories
+.claude/
+.serena/
+FETCH_HEAD
