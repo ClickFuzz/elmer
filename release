@@ -1,0 +1,302 @@
+#!/bin/bash
+# Release script for Elmer.
+# Commits and pushes staging, runs tests and validation, then merges staging
+# into main and pushes to origin.
+# Usage: bash release
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+die() {
+  echo "" >&2
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+section() {
+  echo ""
+  echo "── $* ──────────────────────────────────────────────────────────────────"
+}
+
+# ── 1. Validate environment ───────────────────────────────────────────────────
+section "1. Validating environment"
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || die "Not inside a Git repository."
+
+PROJ_NAME="$(node -e "process.stdout.write(require('./package.json').name || '')" 2>/dev/null || true)"
+[[ "$PROJ_NAME" == "elmer" || "$PROJ_NAME" == "elmer-init" ]] \
+  || die "package.json name is '${PROJ_NAME}', expected 'elmer' or 'elmer-init'. Wrong repository?"
+
+[[ -f "eas.json" ]] || die "eas.json not found. Wrong project directory?"
+
+git rev-parse --verify staging >/dev/null 2>&1 \
+  || die "Branch 'staging' does not exist. Run: git fetch origin"
+
+git rev-parse --verify main >/dev/null 2>&1 \
+  || die "Branch 'main' does not exist."
+
+echo "Fetching from origin..."
+git fetch origin
+echo "✓ Environment validated."
+
+# ── 2. Switch to staging ──────────────────────────────────────────────────────
+section "2. Switching to staging"
+
+CURRENT_BRANCH="$(git branch --show-current)"
+
+if [[ "$CURRENT_BRANCH" != "staging" ]]; then
+  # Staged or modified tracked files would prevent a clean branch switch
+  TRACKED_CHANGES="$(git status --porcelain | grep -v '^??' || true)"
+  if [[ -n "$TRACKED_CHANGES" ]]; then
+    echo ""
+    echo "Branch '${CURRENT_BRANCH}' has uncommitted tracked changes:"
+    git status --short
+    die "Cannot safely switch to staging. Stash or commit those changes first."
+  fi
+  echo "Switching from '${CURRENT_BRANCH}' to staging..."
+  git switch staging
+  echo "✓ Now on staging."
+else
+  echo "✓ Already on staging."
+fi
+
+# ── 3. Review staging changes ─────────────────────────────────────────────────
+section "3. Reviewing staging changes"
+
+echo "Current staging status:"
+git status --short
+echo ""
+
+CHANGED_FILES="$(git status --porcelain)"
+
+if [[ -n "$CHANGED_FILES" ]]; then
+  # Scan for potentially sensitive filenames
+  SENSITIVE_FOUND=false
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    FNAME="${line:3}"
+    # For renamed files "old -> new", check the destination name
+    if [[ "$FNAME" == *" -> "* ]]; then
+      FNAME="${FNAME#* -> }"
+    fi
+    if echo "$FNAME" | grep -qiE \
+        '(^|/)\.env($|[^a-z])|(^|/)\.env\.|credential|secret|\.pem$|\.key$|\.p12$|\.p8$|id_rsa|id_ed25519|\.pfx$|privatekey|private.key|apikey|api.key|access.token'; then
+      if [[ "$SENSITIVE_FOUND" == "false" ]]; then
+        echo "WARNING: Potentially sensitive files found in changed/untracked files:"
+        SENSITIVE_FOUND=true
+      fi
+      echo "  $FNAME"
+    fi
+  done <<< "$CHANGED_FILES"
+
+  if [[ "$SENSITIVE_FOUND" == "true" ]]; then
+    echo ""
+    read -r -p "These files may contain secrets. Review and continue? [y/N] " CONFIRM_SENSITIVE
+    case "$CONFIRM_SENSITIVE" in
+      [yY]|[yY][eE][sS]) echo "Proceeding." ;;
+      *) echo "Aborted."; exit 1 ;;
+    esac
+    echo ""
+  fi
+
+  read -r -p "Commit these changes to staging? [y/N] " CONFIRM_COMMIT
+  echo ""
+
+  case "$CONFIRM_COMMIT" in
+    [yY]|[yY][eE][sS])
+      read -r -p "Commit message [Prepare production release]: " COMMIT_MSG
+      COMMIT_MSG="${COMMIT_MSG:-Prepare production release}"
+      if [[ -z "$(echo "$COMMIT_MSG" | tr -d '[:space:]')" ]]; then
+        die "Commit message cannot be empty."
+      fi
+      git add -A
+      git commit -m "$COMMIT_MSG"
+      echo "✓ Committed: $COMMIT_MSG"
+      ;;
+    *)
+      echo "Uncommitted changes remain. A clean working tree is required to release."
+      echo "Commit or discard your changes, then re-run: bash release"
+      exit 1
+      ;;
+  esac
+else
+  echo "Working tree is clean — nothing to commit."
+fi
+
+# ── 4. Verify clean working tree ──────────────────────────────────────────────
+section "4. Verifying clean working tree"
+
+REMAINING="$(git status --porcelain)"
+if [[ -n "$REMAINING" ]]; then
+  echo ""
+  git status --short
+  die "Working tree still has uncommitted changes. All changes must be committed before releasing."
+fi
+echo "✓ Working tree is clean."
+
+# ── 5. Preflight checks ───────────────────────────────────────────────────────
+section "5. Preflight checks"
+
+# Staging must not be behind origin/staging
+if git rev-parse origin/staging >/dev/null 2>&1; then
+  STAGING_BEHIND="$(git rev-list --count staging..origin/staging)"
+  if [[ "$STAGING_BEHIND" -gt 0 ]]; then
+    die "Local staging is behind origin/staging by ${STAGING_BEHIND} commit(s). Run: git pull origin staging"
+  fi
+  echo "✓ Staging is current with origin/staging."
+fi
+
+# Local main must not have commits that origin/main does not (diverged)
+if git rev-parse origin/main >/dev/null 2>&1; then
+  MAIN_AHEAD="$(git rev-list --count origin/main..main)"
+  if [[ "$MAIN_AHEAD" -gt 0 ]]; then
+    die "Local main has ${MAIN_AHEAD} unpushed commit(s) not in origin/main. Do not force-push — investigate manually."
+  fi
+  echo "✓ Main has not diverged from origin/main."
+fi
+
+# Early exit: staging is already fully merged into main
+STAGING_SHA="$(git rev-parse staging)"
+if git merge-base --is-ancestor "$STAGING_SHA" main; then
+  echo "✓ Staging ($(git rev-parse --short staging)) is already fully merged into main. Nothing to do."
+  exit 0
+fi
+
+# Dry-run merge conflict check — non-destructive, no branch or index changes
+echo "Checking for merge conflicts (dry run)..."
+MAIN_REF="main"
+git rev-parse origin/main >/dev/null 2>&1 && MAIN_REF="origin/main"
+MERGE_BASE="$(git merge-base "$MAIN_REF" staging)"
+MERGE_OUTPUT="$(git merge-tree "$MERGE_BASE" "$MAIN_REF" staging 2>&1 || true)"
+if echo "$MERGE_OUTPUT" | grep -qF '<<<<<<<'; then
+  die "Merge conflicts detected between staging and main. Resolve conflicts on staging before releasing."
+fi
+echo "✓ No merge conflicts detected."
+
+# ── 6. Release preview ────────────────────────────────────────────────────────
+section "6. Release preview"
+
+echo "Commits that will be introduced into main:"
+echo ""
+git log --oneline main..staging
+echo ""
+echo "Changed files:"
+git diff --stat main...staging
+
+# ── 7. Push staging ───────────────────────────────────────────────────────────
+section "7. Pushing staging"
+
+LOCAL_STAGING="$(git rev-parse staging)"
+REMOTE_STAGING="$(git rev-parse origin/staging 2>/dev/null || echo "none")"
+
+if [[ "$LOCAL_STAGING" == "$REMOTE_STAGING" ]]; then
+  echo "✓ Staging is already in sync with origin/staging ($(git rev-parse --short staging))."
+else
+  if [[ "$REMOTE_STAGING" != "none" ]]; then
+    BEHIND_COUNT="$(git rev-list --count staging..origin/staging)"
+    if [[ "$BEHIND_COUNT" -gt 0 ]]; then
+      die "Local staging is behind origin/staging by ${BEHIND_COUNT} commit(s). Run: git pull origin staging"
+    fi
+  fi
+  echo "Pushing staging to origin..."
+  git push origin staging
+  echo "✓ Staging pushed at $(git rev-parse --short staging)."
+fi
+
+# ── 8. Run tests and validation ───────────────────────────────────────────────
+section "8. Running tests and validation"
+
+echo "[ Server tests ]"
+(
+  cd server
+  NODE_ENV=test DISABLE_RATE_LIMIT=true npm test
+)
+echo "✓ Server tests passed."
+
+echo ""
+echo "[ TypeScript type check ]"
+npx tsc --noEmit
+echo "✓ TypeScript check passed."
+
+echo ""
+echo "[ Lint ]"
+npx expo lint
+echo "✓ Lint passed."
+
+# ── 9. Confirm release ────────────────────────────────────────────────────────
+STAGING_SHORT="$(git rev-parse --short staging)"
+echo ""
+echo "  +---------------------------------------------------------+"
+echo "  |  PRODUCTION RELEASE                                     |"
+echo "  |                                                         |"
+echo "  |  staging -> main: will merge and push to origin.       |"
+echo "  |  Railway will deploy backend changes automatically.     |"
+echo "  |                                                         |"
+printf "  |  Staging commit: %-38s|\n" "$STAGING_SHORT"
+echo "  +---------------------------------------------------------+"
+echo ""
+read -r -p "  Type RELEASE to confirm: " RELEASE_CONFIRM
+echo ""
+
+if [[ "$RELEASE_CONFIRM" != "RELEASE" ]]; then
+  echo "Aborted. No changes were merged or pushed."
+  exit 1
+fi
+
+# ── 10. Merge staging into main ───────────────────────────────────────────────
+section "10. Merging staging into main"
+
+echo "Switching to main..."
+git switch main
+
+echo "Pulling latest main from origin..."
+if ! git pull --ff-only origin main; then
+  die "Could not fast-forward main to origin/main. Local main has diverged. Do NOT force-push — investigate manually."
+fi
+
+# Re-check after pulling: staging may now already be in main
+STAGING_SHA="$(git rev-parse staging)"
+if git merge-base --is-ancestor "$STAGING_SHA" main; then
+  echo "✓ Staging is already in the latest main (after pull). Nothing to merge."
+  echo ""
+  echo "  Production commit: $(git rev-parse --short main)"
+  exit 0
+fi
+
+echo "Merging staging into main (--no-ff)..."
+if ! git merge --no-ff staging -m "Release: merge staging into main"; then
+  echo ""
+  echo "ERROR: Merge failed — conflicts detected."
+  git merge --abort 2>/dev/null || true
+  echo "       The merge has been aborted. main is unchanged."
+  echo "       Resolve conflicts on the staging branch, commit, then re-run this script."
+  exit 1
+fi
+
+echo "Pushing main to origin..."
+git push origin main
+
+# ── 11. Done ──────────────────────────────────────────────────────────────────
+FINAL_SHORT="$(git rev-parse --short HEAD)"
+STAGED_SHORT="$(git rev-parse --short staging)"
+
+echo ""
+echo "  +---------------------------------------------------------+"
+echo "  |  RELEASE COMPLETE                                       |"
+echo "  |                                                         |"
+printf "  |  Production commit: %-36s|\n" "$FINAL_SHORT"
+printf "  |  Staging commit:    %-36s|\n" "$STAGED_SHORT"
+echo "  |                                                         |"
+echo "  |  origin/main pushed successfully.                       |"
+echo "  |                                                         |"
+echo "  |  Railway will deploy backend changes automatically.     |"
+echo "  |  Monitor deployment at: https://railway.app             |"
+echo "  |                                                         |"
+echo "  |  After verifying the Railway deployment is healthy:     |"
+echo "  |    bash update-production                               |"
+echo "  |                                                         |"
+echo "  |  Do NOT run update-production until Railway is          |"
+echo "  |  confirmed healthy.                                     |"
+echo "  +---------------------------------------------------------+"

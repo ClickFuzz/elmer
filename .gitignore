@@ -48,3 +48,8 @@ server/tmp/
 # generated native folders
 /ios
 /android
+
+# local development context (AI tooling, temporary session state)
+.claude/
+.serena/
+HANDOFF.md
