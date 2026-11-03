@@ -32,20 +32,20 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Fix staging OTA workflow: remove `--environment preview`; add `EXPO_PUBLIC_APP_SCHEME` | COMPLETE — staging `19975be` |
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
-| — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `19f4d87` |
+| — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
 
 ---
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `19f4d87` (merge: Instagram feature flag for production launch)
-- **Staging branch:** `staging` — HEAD `dee777e` (in sync with main; HANDOFF.md deleted)
+- **Production branch:** `main` — HEAD `7551889` (merge: hide Instagram in OnboardingWizard when flag is off)
+- **Staging branch:** `staging` — HEAD `7551889` (in sync with main)
 - **Last known TestFlight build:** #21
 - **EAS project:** `778df2e5-7a11-47f0-8951-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
 - **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
-- **Production API:** `https://api.getelmer.com` (Railway, deployed at `19f4d87`)
+- **Production API:** `https://api.getelmer.com` (Railway, deployed at `7551889`)
 - **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
 - **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
