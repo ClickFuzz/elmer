@@ -18,6 +18,11 @@ const {
   parseIntArray,
 } = require('./media-utils');
 
+// When INSTAGRAM_ENABLED=false the server blocks new connections and publishing
+// while keeping compliance endpoints (uninstall, delete, deletion-status) active.
+// Default is true so existing deployments without the variable remain unaffected.
+const isInstagramEnabled = () => process.env.INSTAGRAM_ENABLED?.toLowerCase() !== 'false';
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const IG_AUTHORIZE_URL   = 'https://api.instagram.com/oauth/authorize';
 const IG_TOKEN_URL       = 'https://api.instagram.com/oauth/access_token';
@@ -75,6 +80,10 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
   // ── POST /instagram/connect-url ─────────────────────────────────────────────
   router.post('/connect-url', requireAuth, async (req, res, next) => {
     try {
+      if (!isInstagramEnabled()) {
+        return res.status(503).json({ error: 'instagram_disabled', message: 'Instagram publishing is not available in this version.' });
+      }
+
       const appId       = process.env.INSTAGRAM_APP_ID       ?? '';
       const redirectUri = process.env.INSTAGRAM_REDIRECT_URI ?? '';
 
@@ -269,6 +278,12 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
   // Accepts multipart: caption (text), job_id (text), photo_0..N (files),
   // featured_index (optional integer), classifications (optional JSON array).
   router.post('/publish', requireAuth, upload.any(), async (req, res) => {
+    if (!isInstagramEnabled()) {
+      const uploadedFiles = req.files ?? [];
+      for (const f of uploadedFiles) fs.unlink(f.path, () => {});
+      return res.status(503).json({ error: 'instagram_disabled', message: 'Instagram publishing is not available in this version.' });
+    }
+
     const uploadedFiles = req.files ?? [];
     const processedFiles = []; // IG-prepared files to delete after use
     let compositePath = null;  // composite file to delete after use

@@ -18,6 +18,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Updates from 'expo-updates';
 import Constants from 'expo-constants';
 import { colors } from '../constants/colors';
+import { INSTAGRAM_ENABLED } from '../constants/features';
 import {
   getJobStats,
   getBusinessProfile,
@@ -1435,51 +1436,55 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             </View>
           )}
 
-          <View style={styles.rowDivider} />
+          {INSTAGRAM_ENABLED && <View style={styles.rowDivider} />}
 
-          {/* Instagram */}
-          <View style={styles.platformRow}>
-            <View style={[styles.statusDot, { backgroundColor: igDot }]} />
-            <View style={styles.platformInfo}>
-              <Text style={[styles.platformName, !isIgConnected && styles.platformNameDim]}>Instagram</Text>
-              {isIgConnected && (
-                <Text style={[styles.platformSub, igDot !== '#52D6A4' && { color: igDot }]}>
-                  {igDot === '#FF5050' ? 'Token expired — reconnect'
-                    : igDot === '#C8A040' ? 'Token expiring soon'
-                    : igAccount!.account_name}
-                </Text>
+          {/* Instagram — hidden when INSTAGRAM_ENABLED=false (pending Meta approval) */}
+          {INSTAGRAM_ENABLED && (
+            <>
+              <View style={styles.platformRow}>
+                <View style={[styles.statusDot, { backgroundColor: igDot }]} />
+                <View style={styles.platformInfo}>
+                  <Text style={[styles.platformName, !isIgConnected && styles.platformNameDim]}>Instagram</Text>
+                  {isIgConnected && (
+                    <Text style={[styles.platformSub, igDot !== '#52D6A4' && { color: igDot }]}>
+                      {igDot === '#FF5050' ? 'Token expired — reconnect'
+                        : igDot === '#C8A040' ? 'Token expiring soon'
+                        : igAccount!.account_name}
+                    </Text>
+                  )}
+                </View>
+                {isIgConnected ? (
+                  <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('instagram')} activeOpacity={0.7}>
+                    <Text style={styles.manageBtnText}>Manage</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, (!sessionToken || igConnecting) && styles.actionBtnDisabled]}
+                    onPress={handleConnectInstagram}
+                    disabled={!sessionToken || igConnecting}
+                    activeOpacity={0.7}
+                  >
+                    {igConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
+                  </TouchableOpacity>
+                )}
+              </View>
+              {expandedPlatform === 'instagram' && (
+                <View style={styles.managePanelInner}>
+                  <View style={styles.divider} />
+                  <View style={styles.managePanelRow}>
+                    <Text style={styles.managePanelSubText}>{igAccount?.account_name}</Text>
+                  </View>
+                  <View style={styles.fbActionsRow}>
+                    <TouchableOpacity style={styles.fbReconnectBtn} onPress={handleConnectInstagram} disabled={igConnecting} activeOpacity={0.8}>
+                      {igConnecting ? <ActivityIndicator color={colors.cyan} size="small" /> : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.fbDisconnectBtn} onPress={handleDisconnectInstagram} disabled={igDisconnecting} activeOpacity={0.8}>
+                      {igDisconnecting ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
               )}
-            </View>
-            {isIgConnected ? (
-              <TouchableOpacity style={styles.manageBtn} onPress={() => togglePlatformPanel('instagram')} activeOpacity={0.7}>
-                <Text style={styles.manageBtnText}>Manage</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[styles.actionBtn, (!sessionToken || igConnecting) && styles.actionBtnDisabled]}
-                onPress={handleConnectInstagram}
-                disabled={!sessionToken || igConnecting}
-                activeOpacity={0.7}
-              >
-                {igConnecting ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={[styles.actionBtnText, !sessionToken && styles.actionBtnTextDisabled]}>Connect</Text>}
-              </TouchableOpacity>
-            )}
-          </View>
-          {expandedPlatform === 'instagram' && (
-            <View style={styles.managePanelInner}>
-              <View style={styles.divider} />
-              <View style={styles.managePanelRow}>
-                <Text style={styles.managePanelSubText}>{igAccount?.account_name}</Text>
-              </View>
-              <View style={styles.fbActionsRow}>
-                <TouchableOpacity style={styles.fbReconnectBtn} onPress={handleConnectInstagram} disabled={igConnecting} activeOpacity={0.8}>
-                  {igConnecting ? <ActivityIndicator color={colors.cyan} size="small" /> : <Text style={styles.fbReconnectBtnText}>Reconnect</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.fbDisconnectBtn} onPress={handleDisconnectInstagram} disabled={igDisconnecting} activeOpacity={0.8}>
-                  {igDisconnecting ? <ActivityIndicator color={colors.textMuted} size="small" /> : <Text style={styles.fbDisconnectBtnText}>Disconnect</Text>}
-                </TouchableOpacity>
-              </View>
-            </View>
+            </>
           )}
 
           <View style={styles.rowDivider} />

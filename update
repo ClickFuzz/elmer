@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [[ "$(git branch --show-current)" != "staging" ]]; then
+  echo "ERROR: You must be on the staging branch."
+  exit 1
+fi
+
+read -r -p "Update message: " MESSAGE
+
+if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
+  echo "ERROR: Update message cannot be empty."
+  exit 1
+fi
+
+export APP_VARIANT=staging
+export EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
+export EXPO_PUBLIC_APP_SCHEME=elmer-staging
+export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+export EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+
+echo ""
+echo "Publishing Elmer Staging OTA update..."
+echo "Message: $MESSAGE"
+echo ""
+
+npx eas-cli@latest update \
+  --branch staging \
+  --platform ios \
+  --message "$MESSAGE"
+
+echo ""
+echo "Staging OTA update published successfully."
