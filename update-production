@@ -1,0 +1,123 @@
+#!/bin/bash
+# Production OTA update script for Elmer.
+# Publishes an iOS OTA update to the EAS 'production' branch/channel.
+# Usage: bash update-production
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+# ── 1. Branch check ───────────────────────────────────────────────────────────
+CURRENT_BRANCH="$(git branch --show-current)"
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+  echo "ERROR: Must be on the main branch. Current branch: ${CURRENT_BRANCH}"
+  exit 1
+fi
+
+# ── 2. Clean working tree (staged, unstaged, and untracked files) ─────────────
+DIRTY="$(git status --porcelain)"
+if [[ -n "$DIRTY" ]]; then
+  echo "ERROR: Working tree is not clean. Resolve all changes and untracked files before publishing."
+  echo ""
+  git status --short
+  exit 1
+fi
+
+# ── 3. Fetch and verify local main matches origin/main exactly ────────────────
+echo "Fetching origin..."
+git fetch origin
+
+LOCAL_SHA="$(git rev-parse HEAD)"
+REMOTE_SHA="$(git rev-parse origin/main)"
+if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]]; then
+  echo "ERROR: Local main (${LOCAL_SHA:0:7}) does not match origin/main (${REMOTE_SHA:0:7})."
+  echo "       Run: git pull origin main"
+  exit 1
+fi
+echo "Verified: local main matches origin/main at ${LOCAL_SHA:0:7}."
+
+# ── 4. EXPO_TOKEN check ───────────────────────────────────────────────────────
+if [[ -z "${EXPO_TOKEN:-}" ]]; then
+  echo "ERROR: EXPO_TOKEN is not set. Export it before running this script."
+  echo "       export EXPO_TOKEN=<your-token>"
+  exit 1
+fi
+
+# ── 5. eas.json configuration check ──────────────────────────────────────────
+if [[ ! -f eas.json ]]; then
+  echo "ERROR: eas.json not found in $(pwd)."
+  exit 1
+fi
+
+PROD_CHANNEL="$(node -e "const e=require('./eas.json'); process.stdout.write(e.build.production.channel ?? '')")"
+if [[ "$PROD_CHANNEL" != "production" ]]; then
+  echo "ERROR: eas.json production build profile has channel '${PROD_CHANNEL}', expected 'production'."
+  echo "       This script will not publish to an unverified channel."
+  exit 1
+fi
+echo "Verified: eas.json production profile maps to channel 'production'."
+
+# ── 6. Update message ─────────────────────────────────────────────────────────
+echo ""
+read -r -p "Update message: " MESSAGE
+if [[ -z "${MESSAGE//[[:space:]]/}" ]]; then
+  echo "ERROR: Update message cannot be empty."
+  exit 1
+fi
+
+# ── 7. Production warning and confirmation ────────────────────────────────────
+echo ""
+echo "  +---------------------------------------------------------+"
+echo "  |  WARNING: PRODUCTION OTA UPDATE                        |"
+echo "  |                                                         |"
+echo "  |  This update will be delivered to LIVE PRODUCTION      |"
+echo "  |  users immediately. There is no staging gate.          |"
+echo "  |                                                         |"
+echo "  |  Branch:   production                                   |"
+echo "  |  Channel:  production                                   |"
+echo "  |  Platform: iOS only                                     |"
+echo "  |  API URL:  https://api.getelmer.com                     |"
+echo "  |  Commit:   ${LOCAL_SHA:0:7}                                       |"
+echo "  +---------------------------------------------------------+"
+echo ""
+echo "  Message: ${MESSAGE}"
+echo ""
+read -r -p "  Type PRODUCTION to confirm: " CONFIRM
+if [[ "$CONFIRM" != "PRODUCTION" ]]; then
+  echo ""
+  echo "Aborted. No update was published."
+  exit 1
+fi
+
+# ── 8. Set production env vars ────────────────────────────────────────────────
+export APP_VARIANT=production
+export EXPO_PUBLIC_API_URL=https://api.getelmer.com
+export EXPO_PUBLIC_APP_SCHEME=elmer
+export EXPO_PUBLIC_INSTAGRAM_ENABLED=false
+export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+
+# ── 9. Publish ────────────────────────────────────────────────────────────────
+echo ""
+echo "Publishing Elmer production OTA update..."
+echo "Message: ${MESSAGE}"
+echo ""
+
+TMPFILE="$(mktemp)"
+trap 'rm -f "$TMPFILE"' EXIT
+
+npx eas-cli@latest update \
+  --branch production \
+  --platform ios \
+  --message "$MESSAGE" \
+  --non-interactive 2>&1 | tee "$TMPFILE"
+
+# ── 10. Extract update ID and print dashboard link ────────────────────────────
+# eas update outputs a UUID for the update group in its progress lines.
+# Grab the last UUID-shaped token from the output as the update ID.
+UPDATE_ID="$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$TMPFILE" | tail -1 || true)"
+
+echo ""
+echo "Production OTA update published successfully."
+if [[ -n "$UPDATE_ID" ]]; then
+  echo "Update ID:  ${UPDATE_ID}"
+fi
+echo "Dashboard:  https://expo.dev/accounts/clickfuzz-team/projects/elmer/updates"
