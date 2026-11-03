@@ -19,6 +19,8 @@ import {
   saveBusinessProfile,
   getSettingsVersion,
   saveSettingsVersion,
+  fetchFacebookPages,
+  FacebookPage,
 } from '../storage/database';
 import { Analytics } from '../services/analytics';
 import { INSTAGRAM_ENABLED } from '../constants/features';
@@ -34,6 +36,8 @@ type PlatformState = {
 };
 
 type ConnectingPlatform = 'facebook' | 'instagram' | 'threads' | 'google' | 'wordpress' | null;
+
+type GbpLocation = { id: number; account_name: string; account_id: string; selected: boolean; token_expires_at: number | null };
 
 function PlatformRow({
   platform,
@@ -106,6 +110,16 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const [wpFormOpen, setWpFormOpen] = useState(false);
   const [wpUrl, setWpUrl] = useState('');
   const [platformsLoaded, setPlatformsLoaded] = useState(false);
+
+  // Post-connect selection panels (Google locations, Facebook pages)
+  const [gbpLocations, setGbpLocations] = useState<GbpLocation[]>([]);
+  const [gbpPendingSelection, setGbpPendingSelection] = useState<number[]>([]);
+  const [gbpSelectionOpen, setGbpSelectionOpen] = useState(false);
+  const [gbpSaving, setGbpSaving] = useState(false);
+  const [fbPages, setFbPages] = useState<FacebookPage[]>([]);
+  const [fbPendingSelection, setFbPendingSelection] = useState<number[]>([]);
+  const [fbSelectionOpen, setFbSelectionOpen] = useState(false);
+  const [fbSaving, setFbSaving] = useState(false);
 
   // Step 3: completing
   const [completing, setCompleting] = useState(false);
@@ -224,7 +238,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
   const openOAuth = async (
     platform: ConnectingPlatform,
     connectUrlPath: string,
-    successFn: (params: URLSearchParams) => void,
+    successFn: (params: URLSearchParams) => void | Promise<void>,
     errorFn: (error: string) => void,
   ) => {
     if (!sessionToken || !platform) return;
@@ -246,7 +260,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
         const error  = params.get('error');
         if (error) { errorFn(error); return; }
-        successFn(params);
+        await successFn(params);
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
         Analytics.platform_connection_failed(platform, 'user_cancelled');
       }
@@ -260,10 +274,17 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
 
   const handleConnectFacebook = () =>
     openOAuth('facebook', '/facebook/connect-url',
-      (params) => {
+      async (params) => {
         if (params.get('success') === 'true') {
           setConnected(c => ({ ...c, facebook: true }));
           Analytics.platform_connection_succeeded('facebook');
+          const count = parseInt(params.get('page_count') ?? '1', 10);
+          if (count > 1) {
+            const pages = await fetchFacebookPages(sessionToken!, API_URL);
+            setFbPages(pages);
+            setFbPendingSelection(pages.filter(p => p.selected).map(p => p.id));
+            setFbSelectionOpen(true);
+          }
         }
       },
       (error) => {
@@ -319,10 +340,16 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
 
   const handleConnectGoogle = () =>
     openOAuth('google', '/google/connect-url',
-      (params) => {
+      async (params) => {
         if (params.get('success') === 'true') {
           setConnected(c => ({ ...c, google: true }));
           Analytics.platform_connection_succeeded('google');
+          const count = parseInt(params.get('location_count') ?? '1', 10);
+          if (count > 1) {
+            const locs = await fetchGbpLocations();
+            setGbpPendingSelection(locs.filter(l => l.selected).map(l => l.id));
+            setGbpSelectionOpen(true);
+          }
         }
       },
       (error) => {
@@ -335,6 +362,56 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         }
       }
     );
+
+  const fetchGbpLocations = async (): Promise<GbpLocation[]> => {
+    if (!sessionToken) return [];
+    try {
+      const res = await fetch(`${API_URL}/google/locations`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      const locs: GbpLocation[] = data.locations ?? [];
+      setGbpLocations(locs);
+      return locs;
+    } catch { return []; }
+  };
+
+  const handleSaveGbpSelection = async () => {
+    if (!sessionToken) return;
+    setGbpSaving(true);
+    try {
+      await fetch(`${API_URL}/google/locations/selection`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_ids: gbpPendingSelection }),
+      });
+      setGbpLocations(prev => prev.map(l => ({ ...l, selected: gbpPendingSelection.includes(l.id) })));
+      setGbpSelectionOpen(false);
+    } catch {
+      Alert.alert('Error', 'Could not save location selection. Check your connection.');
+    } finally {
+      setGbpSaving(false);
+    }
+  };
+
+  const handleSaveFbSelection = async () => {
+    if (!sessionToken) return;
+    setFbSaving(true);
+    try {
+      await fetch(`${API_URL}/facebook/pages/selection`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_ids: fbPendingSelection }),
+      });
+      setFbPages(prev => prev.map(p => ({ ...p, selected: fbPendingSelection.includes(p.id) })));
+      setFbSelectionOpen(false);
+    } catch {
+      Alert.alert('Error', 'Could not save page selection. Check your connection.');
+    } finally {
+      setFbSaving(false);
+    }
+  };
 
   const handleConnectWordPress = async () => {
     const url = wpUrl.trim();
@@ -500,8 +577,58 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
 
             <View style={styles.card}>
               <PlatformRow platform="google"    label="Google Business Profile" connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectGoogle} />
+              {gbpSelectionOpen && gbpLocations.length > 1 && (
+                <View>
+                  <View style={styles.selectionDivider} />
+                  <Text style={styles.selectionHint}>Select which locations should receive your posts:</Text>
+                  {gbpLocations.map(loc => {
+                    const checked = gbpPendingSelection.includes(loc.id);
+                    return (
+                      <TouchableOpacity key={loc.id} style={styles.selectionRow} onPress={() => setGbpPendingSelection(prev => prev.includes(loc.id) ? prev.filter(id => id !== loc.id) : [...prev, loc.id])} activeOpacity={0.7}>
+                        <Text style={styles.selectionRowName} numberOfLines={2}>{loc.account_name}</Text>
+                        <View style={[styles.selectionCheckbox, checked && styles.selectionCheckboxChecked]}>
+                          {checked && <Text style={styles.selectionCheckmark}>✓</Text>}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <View style={styles.selectionActions}>
+                    <TouchableOpacity style={[styles.selectionSaveBtn, gbpSaving && styles.selectionSaveBtnDisabled]} onPress={handleSaveGbpSelection} disabled={gbpSaving} activeOpacity={0.8}>
+                      {gbpSaving ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={styles.selectionSaveBtnText}>Save</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.selectionSkipBtn} onPress={() => setGbpSelectionOpen(false)} activeOpacity={0.8}>
+                      <Text style={styles.selectionSkipBtnText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
               <View style={styles.rowDivider} />
               <PlatformRow platform="facebook"  label="Facebook Pages"          connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectFacebook} />
+              {fbSelectionOpen && fbPages.length > 1 && (
+                <View>
+                  <View style={styles.selectionDivider} />
+                  <Text style={styles.selectionHint}>Select which pages should receive your posts:</Text>
+                  {fbPages.map(page => {
+                    const checked = fbPendingSelection.includes(page.id);
+                    return (
+                      <TouchableOpacity key={page.id} style={styles.selectionRow} onPress={() => setFbPendingSelection(prev => prev.includes(page.id) ? prev.filter(id => id !== page.id) : [...prev, page.id])} activeOpacity={0.7}>
+                        <Text style={styles.selectionRowName} numberOfLines={1}>{page.account_name}</Text>
+                        <View style={[styles.selectionCheckbox, checked && styles.selectionCheckboxChecked]}>
+                          {checked && <Text style={styles.selectionCheckmark}>✓</Text>}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <View style={styles.selectionActions}>
+                    <TouchableOpacity style={[styles.selectionSaveBtn, fbSaving && styles.selectionSaveBtnDisabled]} onPress={handleSaveFbSelection} disabled={fbSaving} activeOpacity={0.8}>
+                      {fbSaving ? <ActivityIndicator color={colors.bg} size="small" /> : <Text style={styles.selectionSaveBtnText}>Save</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.selectionSkipBtn} onPress={() => setFbSelectionOpen(false)} activeOpacity={0.8}>
+                      <Text style={styles.selectionSkipBtnText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
               {INSTAGRAM_ENABLED && <View style={styles.rowDivider} />}
               {INSTAGRAM_ENABLED && <PlatformRow platform="instagram" label="Instagram"               connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectInstagram} />}
               <View style={styles.rowDivider} />
@@ -953,5 +1080,87 @@ const styles = StyleSheet.create({
   freeBold: {
     fontFamily: 'Inter_600SemiBold',
     color: colors.textPrimary,
+  },
+
+  // Post-connect location/page selection panels
+  selectionDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginTop: 4,
+  },
+  selectionHint: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  selectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  selectionRowName: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textPrimary,
+    marginRight: 12,
+  },
+  selectionCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionCheckboxChecked: {
+    backgroundColor: colors.cyan,
+    borderColor: colors.cyan,
+  },
+  selectionCheckmark: {
+    color: colors.bg,
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    paddingTop: 6,
+  },
+  selectionSaveBtn: {
+    flex: 1,
+    backgroundColor: colors.cyan,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  selectionSaveBtnDisabled: {
+    opacity: 0.5,
+  },
+  selectionSaveBtnText: {
+    color: colors.bg,
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  selectionSkipBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  selectionSkipBtnText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
   },
 });
