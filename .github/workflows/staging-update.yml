@@ -59,6 +59,7 @@ jobs:
           EXPO_PUBLIC_API_URL: https://api-staging.getelmer.com
           EXPO_PUBLIC_APP_SCHEME: elmer-staging
           EXPO_PUBLIC_POSTHOG_HOST: https://us.i.posthog.com
+          EXPO_PUBLIC_INSTAGRAM_ENABLED: "true"
           # EXPO_PUBLIC_POSTHOG_API_KEY is intentionally omitted — PostHog disabled in staging
           # --environment is intentionally omitted: EAS environment overrides shell vars,
           # so we rely on the explicit env block above to match the eas.json staging profile env.
