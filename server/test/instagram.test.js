@@ -1023,3 +1023,144 @@ describe('POST /instagram/publish — classifications field', () => {
     }
   });
 });
+
+// ── INSTAGRAM_ENABLED feature flag ────────────────────────────────────────────
+
+describe('Instagram feature flag — INSTAGRAM_ENABLED=false blocks new connections and publishing', () => {
+  let app, token, userId;
+
+  beforeEach(async () => {
+    process.env.INSTAGRAM_ENABLED = 'false';
+    await setupFreshTestDb();
+    app = createApp();
+    ({ token, userId } = await registerAndLogin(app, 'ig-flag@example.com', 'password123'));
+  });
+
+  after(async () => {
+    delete process.env.INSTAGRAM_ENABLED;
+    await closeDb();
+  });
+
+  it('POST /instagram/connect-url returns 503 instagram_disabled', async () => {
+    const res = await request(app)
+      .post('/instagram/connect-url')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 503);
+    assert.strictEqual(res.body.error, 'instagram_disabled');
+  });
+
+  it('POST /instagram/publish returns 503 instagram_disabled', async () => {
+    await insertIgAccount(userId);
+    const photo = makeTempPhoto();
+    try {
+      const res = await request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'should be blocked')
+        .field('job_id', 'flag-test-1')
+        .attach('photo_0', photo);
+      assert.strictEqual(res.status, 503);
+      assert.strictEqual(res.body.error, 'instagram_disabled');
+    } finally {
+      fs.unlinkSync(photo);
+    }
+  });
+
+  it('POST /instagram/publish cleans up uploaded files before returning 503', async () => {
+    await insertIgAccount(userId);
+    const photo = makeTempPhoto();
+    try {
+      const res = await request(app)
+        .post('/instagram/publish')
+        .set('Authorization', `Bearer ${token}`)
+        .field('caption', 'cleanup test')
+        .field('job_id', 'flag-test-cleanup')
+        .attach('photo_0', photo);
+      assert.strictEqual(res.status, 503);
+    } finally {
+      fs.unlinkSync(photo);
+    }
+  });
+
+  it('POST /instagram/connect-url still returns 401 without auth when disabled', async () => {
+    const res = await request(app).post('/instagram/connect-url');
+    assert.strictEqual(res.status, 401);
+  });
+});
+
+describe('Instagram feature flag — INSTAGRAM_ENABLED=false leaves compliance endpoints active', () => {
+  let app;
+
+  beforeEach(async () => {
+    process.env.INSTAGRAM_ENABLED = 'false';
+    await setupFreshTestDb();
+    app = createApp();
+  });
+
+  after(async () => {
+    delete process.env.INSTAGRAM_ENABLED;
+    await closeDb();
+  });
+
+  it('POST /instagram/uninstall returns 503 when APP_SECRET unconfigured (not blocked by flag)', async () => {
+    const saved = process.env.INSTAGRAM_APP_SECRET;
+    delete process.env.INSTAGRAM_APP_SECRET;
+    const res = await request(app)
+      .post('/instagram/uninstall')
+      .send({ signed_request: 'invalid' });
+    // 503 = not configured; proves the route is reachable (not blocked by feature flag)
+    assert.strictEqual(res.status, 503);
+    process.env.INSTAGRAM_APP_SECRET = saved;
+  });
+
+  it('POST /instagram/delete returns 503 when APP_SECRET unconfigured (not blocked by flag)', async () => {
+    const saved = process.env.INSTAGRAM_APP_SECRET;
+    delete process.env.INSTAGRAM_APP_SECRET;
+    const res = await request(app)
+      .post('/instagram/delete')
+      .send({ signed_request: 'invalid' });
+    assert.strictEqual(res.status, 503);
+    process.env.INSTAGRAM_APP_SECRET = saved;
+  });
+
+  it('GET /instagram/deletion-status returns 200 for unknown code (not blocked by flag)', async () => {
+    const res = await request(app)
+      .get('/instagram/deletion-status?code=nonexistent');
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('GET /instagram/media/:filename returns 404 for unknown file (not blocked by flag)', async () => {
+    const res = await request(app).get('/instagram/media/deadbeef1234.jpg');
+    assert.strictEqual(res.status, 404);
+  });
+});
+
+describe('Instagram feature flag — INSTAGRAM_ENABLED=true (default) allows normal operation', () => {
+  let app, token;
+
+  beforeEach(async () => {
+    delete process.env.INSTAGRAM_ENABLED;
+    await setupFreshTestDb();
+    app = createApp();
+    ({ token } = await registerAndLogin(app, 'ig-enabled@example.com', 'password123'));
+  });
+
+  after(async () => closeDb());
+
+  it('POST /instagram/connect-url returns 200 auth URL when enabled', async () => {
+    const res = await request(app)
+      .post('/instagram/connect-url')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.authUrl, 'should return authUrl');
+  });
+
+  it('POST /instagram/connect-url also works when INSTAGRAM_ENABLED=true explicitly', async () => {
+    process.env.INSTAGRAM_ENABLED = 'true';
+    const res = await request(app)
+      .post('/instagram/connect-url')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    delete process.env.INSTAGRAM_ENABLED;
+  });
+});

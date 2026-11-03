@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/colors';
+import { INSTAGRAM_ENABLED } from '../constants/features';
 import { GeneratePayload, PhotoClassification } from '../App';
 import {
   saveJob,
@@ -144,6 +145,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         channels = await fetchServerConnectedChannels(sessionToken, API_URL);
       }
       if (channels.length === 0) channels = await getConnectedChannels();
+      if (!INSTAGRAM_ENABLED) channels = channels.filter(ch => ch.platform !== 'instagram');
       setConnectedChannels(channels);
     } catch { /* ignore */ }
 
