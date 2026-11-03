@@ -21,6 +21,7 @@ import {
   saveSettingsVersion,
 } from '../storage/database';
 import { Analytics } from '../services/analytics';
+import { INSTAGRAM_ENABLED } from '../constants/features';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -501,8 +502,8 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
               <PlatformRow platform="google"    label="Google Business Profile" connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectGoogle} />
               <View style={styles.rowDivider} />
               <PlatformRow platform="facebook"  label="Facebook Pages"          connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectFacebook} />
-              <View style={styles.rowDivider} />
-              <PlatformRow platform="instagram" label="Instagram"               connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectInstagram} />
+              {INSTAGRAM_ENABLED && <View style={styles.rowDivider} />}
+              {INSTAGRAM_ENABLED && <PlatformRow platform="instagram" label="Instagram"               connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectInstagram} />}
               <View style={styles.rowDivider} />
               <PlatformRow platform="threads"   label="Threads"                 connected={connected} connecting={connecting} sessionToken={sessionToken} onConnect={handleConnectThreads} />
               <View style={styles.rowDivider} />
