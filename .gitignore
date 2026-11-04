@@ -53,3 +53,4 @@ server/tmp/
 .claude/
 .serena/
 HANDOFF.md
+FETCH_HEAD

@@ -165,12 +165,13 @@ if git merge-base --is-ancestor "$STAGING_SHA" main; then
 fi
 
 # Dry-run merge conflict check — non-destructive, no branch or index changes
+# Uses git merge-tree's 2-arg form (Git 2.38+): exits 1 on conflicts, 0 on clean.
+# The old 3-arg form greps file content, which falsely matches literal '<<<<<<<'
+# strings inside the release script itself.
 echo "Checking for merge conflicts (dry run)..."
 MAIN_REF="main"
 git rev-parse origin/main >/dev/null 2>&1 && MAIN_REF="origin/main"
-MERGE_BASE="$(git merge-base "$MAIN_REF" staging)"
-MERGE_OUTPUT="$(git merge-tree "$MERGE_BASE" "$MAIN_REF" staging 2>&1 || true)"
-if echo "$MERGE_OUTPUT" | grep -qF '<<<<<<<'; then
+if ! git merge-tree "$MAIN_REF" staging > /dev/null; then
   die "Merge conflicts detected between staging and main. Resolve conflicts on staging before releasing."
 fi
 echo "✓ No merge conflicts detected."
