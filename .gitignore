@@ -49,7 +49,8 @@ server/tmp/
 /ios
 /android
 
-# local tool directories
+# local development context (AI tooling, temporary session state)
 .claude/
 .serena/
+HANDOFF.md
 FETCH_HEAD

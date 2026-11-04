@@ -59,7 +59,19 @@ async function checkWordPressInstallation(siteUrl, wpFetch) {
     if (err.name === 'AbortError') {
       return { error: 'WordPress site timed out. Check the URL is correct and the site is publicly accessible.' };
     }
-    return { error: `Could not reach WordPress site: ${err.message}` };
+    // Walk the cause chain to find the first informative message
+    const getCauseChain = (e, depth = 0) => {
+      if (!e || depth > 5) return [];
+      const parts = [];
+      if (e.code) parts.push(e.code);
+      if (e.message && e.message !== 'fetch failed') parts.push(e.message);
+      if (e.cause) parts.push(...getCauseChain(e.cause, depth + 1));
+      return parts;
+    };
+    const chain = getCauseChain(err);
+    const detail = chain.length ? chain.join(' → ') : err.message;
+    console.error('[wordpress] checkWordPressInstallation failed for', siteUrl, JSON.stringify({ msg: err.message, code: err.code, cause: String(err.cause) }));
+    return { error: `Could not reach WordPress site: ${detail}` };
   } finally {
     clearTimeout(timer);
   }
