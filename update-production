@@ -123,6 +123,7 @@ trap 'rm -f "$TMPFILE"' EXIT
 
 npx eas-cli@latest update \
   --branch production \
+  --environment production \
   --platform ios \
   --message "$MESSAGE" \
   --non-interactive 2>&1 | tee "$TMPFILE"
