@@ -52,6 +52,13 @@ if (process.env.STRIPE_SECRET_KEY?.startsWith('sk_live_') && isTestMode()) {
 
 const APP_URL              = () => process.env.APP_URL ?? 'https://api.getelmer.com';
 const APP_SCHEME           = () => process.env.APP_SCHEME ?? 'elmer';
+// BILLING_PORTAL_URL: public URL of the billing web portal.
+// Used to build Stripe web-checkout success/cancel URLs and password reset links.
+const BILLING_PORTAL_URL   = () => process.env.BILLING_PORTAL_URL ?? 'https://billing.getelmer.com';
+
+// Status values accepted by checkout-return and forwarded to the caller.
+// Any other value is normalised to 'unknown' to prevent reflected injection.
+const VALID_RETURN_STATUSES = new Set(['success', 'cancel', 'portal_return', 'unknown']);
 
 // Stripe statuses that grant full access
 const ACCESS_STATUSES = new Set(['trialing', 'active']);
@@ -696,14 +703,26 @@ function createBillingRouter() {
         [req.userId]
       );
       const trialUsed    = subRows[0]?.trial_used ?? false;
-      const appUrl       = APP_URL();
+
+      // source='web' → Stripe redirects directly to the billing portal (no server-side relay).
+      // source='mobile' (or absent) → Stripe redirects through /billing/checkout-return
+      //   which issues the deep-link redirect that the mobile app listens for.
+      const source      = req.body.source === 'web' ? 'web' : 'mobile';
+      const appUrl      = APP_URL();
+      const portalUrl   = BILLING_PORTAL_URL();
+      const successUrl  = source === 'web'
+        ? `${portalUrl}/subscription?status=success&session_id={CHECKOUT_SESSION_ID}`
+        : `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl   = source === 'web'
+        ? `${portalUrl}/subscription?status=cancel`
+        : `${appUrl}/billing/checkout-return?status=cancel`;
 
       const session = await getStripe().checkout.sessions.create({
         customer:                   customerId,
         mode:                       'subscription',
         line_items:                 [{ price: priceId, quantity: 1 }],
-        success_url:                `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url:                 `${appUrl}/billing/checkout-return?status=cancel`,
+        success_url:                successUrl,
+        cancel_url:                 cancelUrl,
         payment_method_collection:  'always',
         billing_address_collection: 'required',
         subscription_data: {
@@ -735,10 +754,13 @@ function createBillingRouter() {
         return res.status(404).json({ error: 'no_billing_account' });
       }
 
-      const appUrl  = APP_URL();
+      const source    = req.body?.source === 'web' ? 'web' : 'mobile';
+      const returnUrl = source === 'web'
+        ? `${BILLING_PORTAL_URL()}/subscription?status=portal_return`
+        : `${APP_URL()}/billing/checkout-return?status=portal_return`;
       const session = await getStripe().billingPortal.sessions.create({
         customer:   rows[0].customer_id,
-        return_url: `${appUrl}/billing/checkout-return?status=portal_return`,
+        return_url: returnUrl,
       });
 
       res.json({ portalUrl: session.url });
@@ -748,11 +770,14 @@ function createBillingRouter() {
     }
   });
 
-  // GET /billing/checkout-return — redirects back to the app's deep link
-  // Called by Stripe after checkout success/cancel, and by portal return
+  // GET /billing/checkout-return — mobile-only relay: Stripe → deep link
+  // Called by Stripe after mobile checkout success/cancel and by portal return.
+  // Web checkouts redirect to the billing portal directly (no server relay needed).
+  // Status is validated against an allowlist to prevent reflected injection.
   router.get('/checkout-return', (req, res) => {
-    const status = req.query.status ?? 'unknown';
-    const scheme = APP_SCHEME();
+    const rawStatus = req.query.status ?? 'unknown';
+    const status    = VALID_RETURN_STATUSES.has(rawStatus) ? rawStatus : 'unknown';
+    const scheme    = APP_SCHEME();
     res.redirect(`${scheme}://billing/return?status=${status}`);
   });
 

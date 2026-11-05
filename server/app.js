@@ -243,7 +243,22 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
   // Trust first proxy when behind nginx/load balancer (needed for rate limit by real IP).
   if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
-  app.use(cors());
+  // CORS origin allowlist — read at app-creation time so tests can vary it.
+  // CORS_ALLOWED_ORIGINS: comma-separated list of permitted browser origins.
+  //   Not set → allow all (backward-compatible default; logs a warning in production).
+  //   Set     → only listed origins receive CORS headers; unlisted origins are blocked.
+  // Native mobile HTTP requests never send an Origin header, so they are always
+  // allowed regardless of this setting.
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+
+  app.use(cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);           // native mobile / server-to-server
+      if (!allowedOrigins.length) return cb(null, true); // dev or unconfigured
+      cb(null, allowedOrigins.includes(origin));
+    },
+  }));
 
   // Stripe webhook requires the raw request body for signature verification.
   // This middleware must be registered BEFORE express.json() so the raw buffer
@@ -287,7 +302,11 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
   app.use('/google',    googleRouter     ?? createGoogleRouter());
 
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });
+    res.json({
+      ok:           true,
+      aiEnabled:    !!process.env.OPENAI_API_KEY,
+      emailEnabled: !!process.env.RESEND_API_KEY,
+    });
   });
 
   // ── POST /api/generate ─────────────────────────────────────────────────────

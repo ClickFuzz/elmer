@@ -875,6 +875,82 @@ Mobile                          Elmer Server                  Google OAuth
 - **13 new regression tests** (`server/test/meta-callbacks.test.js`): debug_token backfill with match/mismatch/error cases; status-page code lookup (completed, no_data, not-found, generic); Instagram and Threads deletion_request tracking; status page verification via returned code.
 - **505 total automated tests** — all passing.
 
+### Implemented (Stage 1 — Billing portal backend preparation)
+
+- **CORS origin allowlist** (`server/app.js`): `createApp()` reads `CORS_ALLOWED_ORIGINS` (comma-separated) at factory time. When set, only listed origins receive CORS response headers; requests without an `Origin` header (native mobile / server-to-server) are always allowed. When unset, all origins permitted (backward-compatible default). Startup log emits the configured list or a warning if unset.
+- **Web-aware billing return URLs** (`server/routes/billing.js`): `POST /billing/checkout-session` and `POST /billing/portal-session` accept an optional `source` field (`'web'` or `'mobile'`; default `'mobile'`). Web sessions point `success_url`/`cancel_url`/`return_url` directly to `BILLING_PORTAL_URL` (default `https://billing.getelmer.com`); mobile sessions continue using the existing server relay + deep-link pattern unchanged.
+- **Checkout-return status sanitization** (`server/routes/billing.js`): `GET /billing/checkout-return` now validates `status` against an allowlist (`success`, `cancel`, `portal_return`, `unknown`) before constructing the deep-link redirect, preventing injection via the query string.
+- **`BILLING_PORTAL_URL` env var**: New optional env var controlling the billing portal origin. Default: `https://billing.getelmer.com`. Used in `forgot-password` reset links and web billing return URLs.
+- **V14 DB migration** (`server/db.js`): New `password_reset_tokens` table (`id`, `user_id` FK, `token_hash` UNIQUE, `expires_at`, `used_at`). Index on `token_hash`. Expired tokens cleaned at startup via `cleanExpiredPasswordResetTokens()`.
+- **`POST /auth/forgot-password`** (`server/routes/auth.js`): Always returns `{ ok: true }` regardless of whether the email is registered (prevents user enumeration). Invalidates any existing unused tokens for the user. Generates 32-byte random hex raw token; stores SHA-256 hash only (raw token never logged). Builds reset URL as `${BILLING_PORTAL_URL}/reset-password?token=...`. Calls `sendPasswordResetEmail` — no-op when `RESEND_API_KEY` is absent. Rate-limited to 5 requests per 15 min per IP (bypassed when `DISABLE_RATE_LIMIT=true`).
+- **`POST /auth/reset-password`** (`server/routes/auth.js`): Hashes incoming token for DB lookup (`WHERE token_hash = $1 AND expires_at > now AND used_at IS NULL FOR UPDATE`). Marks token `used_at` to prevent replay. Updates password (bcrypt, 12 rounds). Deletes all existing sessions. Issues a fresh session. Returns `{ ok: true, token, expiresAt }`.
+- **`server/services/email.js`** (new): `sendPasswordResetEmail(toEmail, resetUrl)` — lazy-requires Resend; silently skips if `RESEND_API_KEY` absent; supports `_setEmailSenderForTest` / `_clearEmailSenderForTest` hooks for test isolation without hitting the Resend API.
+- **`resend` npm dependency** added (`^6.37.0`).
+- **New test files**: `test/cors.test.js` (11 tests), `test/web-billing.test.js` (17 tests), `test/password-reset.test.js` (20 tests).
+- **New env vars documented** in `server/.env.example`: `CORS_ALLOWED_ORIGINS`, `BILLING_PORTAL_URL`, `RESEND_API_KEY`, `EMAIL_FROM`.
+- **569 total automated tests** — all passing.
+
+### Implemented (Stage 2 — billing.getelmer.com portal)
+
+Static HTML + CSS + vanilla JS portal at `website/billing/`. No build framework.
+
+**Pages and their files:**
+
+| Page | HTML | JS |
+|---|---|---|
+| Entry redirect | `index.html` | `index.js` — session check → subscription or login |
+| Login + signup | `login.html` | `login.js` — tab switcher; two forms; email format validation |
+| Forgot password | `forgot-password.html` | `forgot-password.js` — always shows success (no enumeration) |
+| Reset password | `reset-password.html` | `reset-password.js` — token read + immediately removed from URL bar |
+| Subscription dashboard | `subscription.html` | `subscription.js` — full dashboard |
+| Shared | `style.css`, `common.js` | — |
+
+**`common.js` — session management and API client:**
+- `sessionStorage`-based sessions (`elmer_session` key); cleared on tab close
+- `apiFetch(path, options)`: adds `Authorization` header; handles 401 → clear session + redirect to login; `skipAuthRedirect: true` option disables the 401 redirect for auth endpoints where 401 means wrong credentials
+- `requireAuth()` / `redirectIfAuthed()` guards
+- `showAlert` / `hideAlert` / `setLoading` / `formatDate` UI helpers
+- `signOut()`: best-effort `POST /auth/logout`, clears session, redirects to login
+
+**`subscription.js` — dashboard logic:**
+- `handleStripeReturn()`: reads `?status` from URL and immediately removes it via `history.replaceState`
+- `loadSubscription(returnStatus)`: calls `GET /billing/subscription`; never infers access from redirect alone
+- `pollUntilAccess()`: polls up to 10× with 2 s delay after `status=success` return when webhook hasn't fired yet
+- Start trial / subscribe: `POST /billing/checkout-session {source:'web'}` → `window.location.href = data.checkoutUrl`
+- Manage billing: `POST /billing/portal-session {source:'web'}` → `window.location.href = data.portalUrl`
+- Account deletion: blocked if `hasAccess=true` (shows "cancel subscription first" warning); confirmed two-step for no-subscription case; `DELETE /auth/account` with 409 guard
+- Badge variants: `trialing`, `active`, `past_due`, `canceled`
+
+**Apache `.htaccess`:**
+- 301 HTTPS redirect for all HTTP traffic
+- Extensionless URL rewriting (`/subscription` → `subscription.html`) for Stripe return URLs and email links
+- Security headers: `Strict-Transport-Security` (2 years + preload), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.getelmer.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` — no inline scripts, no eval
+- `Cache-Control: no-store, no-cache, must-revalidate, private` on all pages (auth-sensitive)
+- `Options -Indexes` (directory listing disabled)
+
+**Deployment:**
+- Subdomain `billing.getelmer.com` does NOT yet exist on CrocWeb/DirectAdmin — must be created before go-live
+- SSL certificate must be expanded to include `billing.getelmer.com` after subdomain creation
+- Document root: `/domains/getelmer.com/billing.getelmer.com/public_html/`
+- Required Railway env vars before deployment: `CORS_ALLOWED_ORIGINS=https://billing.getelmer.com`, `BILLING_PORTAL_URL=https://billing.getelmer.com`, `RESEND_API_KEY`, `EMAIL_FROM`
+- Detailed deployment plan: `website/billing/DEPLOY.md`
+- **Status: awaiting explicit deployment approval**
+
+**Portal smoke tests** (`website/billing/test/smoke.test.js`, 36 tests):
+- File presence for all 13 required files
+- JS syntax validation (`node --check`) for all 6 JS files
+- `<script src>` and `<link rel="stylesheet">` cross-file reference checks
+- `common.js` function completeness and `skipAuthRedirect` extraction
+- `login.js` email format validation presence (both login and signup forms)
+- `.htaccess` HTTPS redirect, HSTS, CSP (`script-src 'self'`, no `unsafe-inline`, no `unsafe-eval`), no-cache, `-Indexes`
+- `subscription.html` required element IDs (dashboard, forms, alert regions)
+- `reset-password.js` URL token removal via `history.replaceState`
+- `subscription.js` `source:'web'` and API-verified entitlement; no Stripe secret keys in frontend
+- `DEPLOY.md` env var coverage and `emailEnabled` health check instruction
+
+Run: `node --test website/billing/test/smoke.test.js`
+
 ### Requires live credentials before functional testing
 
 - Facebook OAuth callback requires `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI` in `server/.env`.
@@ -891,13 +967,23 @@ Mobile                          Elmer Server                  Google OAuth
 
 ## Testing
 
+### Backend (569 tests)
+
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js test/meta-callbacks.test.js test/cors.test.js test/web-billing.test.js test/password-reset.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
+
+### Portal smoke tests (36 tests)
+
+```bash
+node --test website/billing/test/smoke.test.js
+```
+
+Validates file presence, JS syntax, cross-file script/stylesheet references, required DOM element IDs, CSP rules, Stripe secret absence, and DEPLOY.md completeness. Runs entirely in Node.js — no browser or server required.
 
 ---
 

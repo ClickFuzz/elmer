@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "test": "node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js test/meta-callbacks.test.js"
+    "test": "node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js test/meta-callbacks.test.js test/cors.test.js test/web-billing.test.js test/password-reset.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -18,6 +18,7 @@
     "openai": "^4.52.0",
     "pg": "^8.13.0",
     "posthog-node": "^4.18.0",
+    "resend": "^6.37.0",
     "sharp": "^0.35.5",
     "stripe": "^17.7.0"
   },

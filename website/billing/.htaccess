@@ -1,0 +1,61 @@
+# ── Elmer Billing Portal — Apache configuration ────────────────────────────────
+# Deployed to: billing.getelmer.com document root
+
+Options -Indexes -MultiViews
+
+# ── Force HTTPS ────────────────────────────────────────────────────────────────
+RewriteEngine On
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
+
+# ── Extensionless URL rewriting ───────────────────────────────────────────────
+# Allows /subscription, /login, /signup, etc. to serve .html files.
+# Stripe and password-reset email links use extensionless paths.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.html -f
+RewriteRule ^([^.]+)$ $1.html [L]
+
+# ── Security headers ──────────────────────────────────────────────────────────
+<IfModule mod_headers.c>
+  # HTTP Strict Transport Security (2 years)
+  Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+  # Prevent clickjacking — no iframing
+  Header always set X-Frame-Options "DENY"
+
+  # Prevent MIME-type sniffing
+  Header always set X-Content-Type-Options "nosniff"
+
+  # Control Referer header leakage
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+  # Restrict browser APIs
+  Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+
+  # Content Security Policy
+  # - script-src 'self': only scripts from billing.getelmer.com (no inline, no eval)
+  # - style-src 'self' fonts.googleapis.com: Google Fonts CSS allowed
+  # - font-src fonts.gstatic.com: Google Fonts binary files
+  # - connect-src api.getelmer.com: Railway API only
+  # - img-src 'self' data:: local images + inline data URIs
+  # - frame-ancestors 'none': prevent embedding in any frame
+  # - base-uri 'self': prevent base-tag injection
+  # - form-action 'self': JS fetch is used (not form POST), self is correct
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://api.getelmer.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+
+  # Prevent caching of all portal pages (auth-sensitive)
+  Header always set Cache-Control "no-store, no-cache, must-revalidate, private"
+  Header always set Pragma "no-cache"
+  Header always unset ETag
+
+  # Suppress server version header
+  Header always unset X-Powered-By
+  Header always unset Server
+</IfModule>
+
+# ── Disable ETags ─────────────────────────────────────────────────────────────
+FileETag None
+
+# ── Custom 404 ────────────────────────────────────────────────────────────────
+ErrorDocument 404 /index.html

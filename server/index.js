@@ -30,6 +30,12 @@ async function start() {
     console.log(`Auth mode:    ${process.env.DISABLE_AUTH === 'true' ? 'OPEN (DISABLE_AUTH=true)' : 'REQUIRED'}`);
     console.log(`DeviceCheck:  ${isDeviceCheckConfigured() ? 'ENABLED (iOS device protection active)' : 'DISABLED (set APPLE_DEVICECHECK_* vars to enable)'}`);
     console.log(`DB:           PostgreSQL`);
+    const corsOrigins = process.env.CORS_ALLOWED_ORIGINS;
+    if (corsOrigins) {
+      console.log(`CORS:         ${corsOrigins}`);
+    } else {
+      console.warn(`[elmer] CORS_ALLOWED_ORIGINS not set — all browser origins permitted. Set this to restrict cross-origin access.`);
+    }
   });
 
   async function shutdown() {

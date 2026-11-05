@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account — elmer.</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <span class="wordmark">elmer<span class="wordmark-period">.</span></span>
+    <button class="btn btn-ghost btn-sm" id="signOutBtn" type="button">Sign out</button>
+  </header>
+
+  <!-- Full-page loading state -->
+  <div id="loadingView" class="page-loading">
+    <div class="spinner"></div>
+    <span style="font-size:14px;color:var(--muted);">Loading…</span>
+  </div>
+
+  <!-- Main dashboard (hidden until data loads) -->
+  <main id="dashboardView" class="dashboard hidden">
+
+    <!-- Page header -->
+    <div class="dashboard-header">
+      <h1 class="dashboard-title" id="greetingTitle">Your account</h1>
+      <p class="dashboard-email" id="accountEmail"></p>
+    </div>
+
+    <!-- Stripe return banner (success / cancel / portal_return) -->
+    <div id="returnBanner" class="alert alert-hidden" role="status"></div>
+
+    <!-- Subscription status section -->
+    <div class="section" id="subscriptionSection">
+      <div class="section-title">Subscription</div>
+
+      <div class="section-row">
+        <span class="row-label">Status</span>
+        <span class="row-value" id="statusBadgeWrap"></span>
+      </div>
+
+      <div class="section-row hidden" id="periodRow">
+        <span class="row-label" id="periodLabel">Current period</span>
+        <span class="row-value" id="periodValue"></span>
+      </div>
+
+      <div class="section-row hidden" id="trialRow">
+        <span class="row-label">Trial ends</span>
+        <span class="row-value" id="trialValue"></span>
+      </div>
+
+      <div class="section-row hidden" id="cancelRow">
+        <span class="row-label">Cancels on</span>
+        <span class="row-value" id="cancelValue"></span>
+      </div>
+    </div>
+
+    <!-- Trial / subscribe offer (shown when no active subscription) -->
+    <div id="trialOfferSection" class="trial-card hidden">
+      <span class="badge badge-trialing" style="margin-bottom:8px;">14-day free trial</span>
+      <div class="trial-price">$19<span style="font-size:18px;font-weight:600;">/mo</span></div>
+      <p class="trial-price-sub" id="trialPriceNote">Free for 14 days, then $19/month. Cancel anytime.</p>
+      <div class="trial-feature-list">
+        <div class="trial-feature">Publish to Google Business, Facebook, Instagram, Threads</div>
+        <div class="trial-feature">WordPress blog posts with SEO metadata</div>
+        <div class="trial-feature">AI transcription and content generation</div>
+        <div class="trial-feature">Unlimited publishing after trial</div>
+      </div>
+      <button class="btn btn-primary btn-full" id="startTrialBtn"
+        data-loading-text="Opening checkout…">Start free trial</button>
+      <div id="checkoutAlert" class="alert alert-hidden" style="margin-top:12px;" role="alert"></div>
+    </div>
+
+    <!-- Manage billing (shown when subscription exists) -->
+    <div id="manageBillingSection" class="section hidden">
+      <div class="section-title">Billing</div>
+      <div class="section-row">
+        <span class="row-label">Update payment, cancel, or view invoices</span>
+        <button class="btn btn-secondary btn-sm" id="manageBtn"
+          data-loading-text="Opening…">Manage billing</button>
+      </div>
+      <div id="portalAlert" class="alert alert-hidden" style="margin-top:12px;" role="alert"></div>
+    </div>
+
+    <!-- Account section -->
+    <div class="section">
+      <div class="section-title">Account</div>
+      <div class="section-row">
+        <span class="row-label">Email</span>
+        <span class="row-value" id="accountEmailRow"></span>
+      </div>
+      <div class="section-row" style="margin-top:12px;">
+        <span class="row-label">Password</span>
+        <a href="forgot-password.html" class="btn btn-ghost btn-sm">Change password</a>
+      </div>
+    </div>
+
+    <!-- Danger zone -->
+    <div class="section danger-zone">
+      <div class="section-title">Danger zone</div>
+
+      <div class="section-row">
+        <span class="row-label" style="font-size:14px;">Delete your account and all data</span>
+        <button class="btn btn-danger btn-sm" id="deleteAccountBtn" type="button">Delete account</button>
+      </div>
+
+      <!-- Inline confirmation (shown on first click) -->
+      <div id="confirmDeleteBox" class="confirm-box">
+        <p id="confirmDeleteMsg">
+          This permanently deletes your account and cannot be undone.
+          All your publishing history will be removed.
+        </p>
+        <div class="confirm-actions">
+          <button class="btn btn-danger btn-sm" id="confirmDeleteBtn"
+            data-loading-text="Deleting…">Yes, delete my account</button>
+          <button class="btn btn-ghost btn-sm" id="cancelDeleteBtn" type="button">Cancel</button>
+        </div>
+        <div id="deleteAlert" class="alert alert-hidden" style="margin-top:12px;" role="alert"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="common.js"></script>
+  <script src="subscription.js"></script>
+</body>
+</html>

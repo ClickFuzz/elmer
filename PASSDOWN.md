@@ -149,7 +149,26 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **524 automated tests passing** — `cd server && npm test`
+- **Stage 1 — Billing portal backend** (`server/routes/billing.js`, `server/routes/auth.js`, `server/app.js`, `server/services/email.js`):
+  - `POST /billing/checkout-session` and `POST /billing/portal-session` accept `source: 'web'`; web sessions point success/cancel/return URLs to `BILLING_PORTAL_URL` instead of the mobile deep-link relay
+  - `GET /billing/checkout-return` sanitizes `status` against an allowlist before constructing the deep-link URL
+  - CORS allowlist via `CORS_ALLOWED_ORIGINS` env var; requests without `Origin` (mobile) always pass
+  - `POST /auth/forgot-password` — always returns `{ok:true}`; generates 32-byte token; stores SHA-256 hash only; sends reset email via Resend; silently skips if `RESEND_API_KEY` absent
+  - `POST /auth/reset-password` — verifies token hash, marks used, updates password (bcrypt), invalidates all sessions, issues fresh session
+  - `server/services/email.js` — `sendPasswordResetEmail`; test hooks `_setEmailSenderForTest` / `_clearEmailSenderForTest`
+  - V14 DB migration: `password_reset_tokens` table (`id`, `user_id`, `token_hash` UNIQUE, `expires_at`, `used_at`)
+  - `GET /health` now returns `emailEnabled: !!RESEND_API_KEY` for pre-deployment Resend verification
+- **Stage 2 — billing.getelmer.com portal** (static HTML/CSS/vanilla JS, `website/billing/`):
+  - Login + signup (combined tab switcher), forgot-password, reset-password, subscription dashboard
+  - `sessionStorage`-based auth; `apiFetch` with `skipAuthRedirect` option to prevent false 401 redirects on auth endpoints
+  - Stripe Checkout and Customer Portal via `source:'web'`; entitlement verified from `GET /billing/subscription` (never inferred from redirect)
+  - Webhook latency: polls up to 10× with 2 s delay after successful checkout return
+  - Account deletion: blocks if `hasAccess=true` with "cancel subscription first" message
+  - Apache `.htaccess`: HTTPS redirect, extensionless URL rewriting, HSTS, `X-Frame-Options: DENY`, `Content-Security-Policy: script-src 'self'` (no inline/eval), `no-store` cache
+  - `website/billing/test/smoke.test.js`: 36 portal smoke tests (file presence, JS syntax, cross-file refs, DOM elements, CSP rules, secret-free frontend)
+  - `website/billing/DEPLOY.md`: step-by-step subdomain + SSL + Railway + Stripe + Resend setup; post-deployment checklist
+  - **Status: awaiting explicit deployment approval** — subdomain and SSL not yet created
+- **569 automated tests passing** — `cd server && npm test` (22 test files); 36 portal smoke tests — `node --test website/billing/test/smoke.test.js`
 
 ---
 
@@ -170,6 +189,63 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 - `pending` — deletion in progress
 
 **Facebook legacy backfill:** `findAndBackfillFbConnections` resolves NULL `platform_user_id` rows via `/debug_token` API. If any debug_token call fails, status is `failed` (unverifiable identity) — never falsely `completed`.
+
+---
+
+## Website — getelmer.com
+
+### Hosting
+
+- **Provider:** CrocWeb shared hosting, managed via DirectAdmin
+- **DA panel:** `homesincda.com:2222` — account `clgorman`
+- **Document root:** `/domains/getelmer.com/public_html/`
+- **API server:** Railway — `https://api.getelmer.com` (separate from website hosting)
+- **Local source copy:** `website/` directory in this repo (mirrors server files for version control)
+
+### Technology
+
+Pure static HTML + CSS + vanilla JS. No PHP, no frameworks, no SSR, no build step. Apache serves files directly.
+
+### Pages
+
+| Page | Server path | Local source |
+|---|---|---|
+| Home | `/domains/getelmer.com/public_html/index.html` | `website/index.html` |
+| Privacy Policy | `/domains/getelmer.com/public_html/privacy-policy/index.html` | `website/privacy-policy/index.html` |
+| Terms & Conditions | `/domains/getelmer.com/public_html/terms-and-conditions/index.html` | `website/terms-and-conditions/index.html` |
+| Stylesheet | `/domains/getelmer.com/public_html/style.css` | `website/style.css` |
+
+### How to deploy changes
+
+Use the DirectAdmin MCP tools:
+```
+da_upload_file(
+  local_path="<absolute path under website/>",
+  remote_dir="/domains/getelmer.com/public_html[/subdir]",
+  remote_filename="<filename>"
+)
+```
+
+Read a server file: `da_read_file(path="/domains/getelmer.com/public_html/style.css")`  
+Check a file exists: `da_stat(path="/domains/getelmer.com/public_html/style.css")`
+
+### ClickFuzz cleanup (completed 2026-11-05)
+
+The site was previously managed by the ClickFuzz PitchSnap CMS which:
+- Used SSI includes (`<!--#include virtual="_cf/head.html">`) in `<head>` — Apache was not processing SSI, so `<head>` rendered empty and CSS never loaded
+- Injected nav items via `<!-- cf-nav-start/end -->` delimiters
+- Used `data-cf-form` attributes for form embeds
+- Required `runtime.js` from `/cf-runtime/`
+- Had CSS selectors `nav[data-clickfuzz-nav="primary/mobile/footer"]`
+
+All three pages were rewritten as standalone HTML. CSS nav selectors updated to structural selectors: `.header-inner nav`, `.mobile-drawer nav`, `footer nav`. All ClickFuzz dependencies removed.
+
+### CSS nav selector history (important)
+
+The old `style.css` used `nav[data-clickfuzz-nav="primary"]` etc. These are now gone. Current selectors:
+- Desktop nav: `.header-inner nav { display: none; }` → `@media (min-width: 768px) { .header-inner nav { display: flex; } }`
+- Mobile drawer nav: `.mobile-drawer nav ul { display: flex; flex-direction: column; gap: 4px; }`
+- Footer nav: `footer nav ul { display: flex; flex-direction: column; gap: 10px; }`
 
 ---
 
@@ -212,6 +288,10 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 | `APP_SCHEME` | `elmer` (production); `elmer-staging` (staging) — used for Stripe + OAuth deep-link returns |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed CORS origins; e.g. `https://billing.getelmer.com`; unset = all origins (backward compat) |
+| `BILLING_PORTAL_URL` | Base URL for billing portal web sessions; default `https://billing.getelmer.com`; used in Stripe return URLs and password reset email links |
+| `RESEND_API_KEY` | Resend API key (`re_…`); required for password reset emails; server logs warning and skips email when absent; check via `GET /health` → `emailEnabled` |
+| `EMAIL_FROM` | Sender for transactional emails; default `Elmer <noreply@getelmer.com>`; must be a verified domain in Resend |
 
 ---
 

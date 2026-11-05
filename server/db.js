@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 let _pool        = null;
 let _initialized = false;
@@ -487,6 +487,30 @@ async function migrate(pool) {
       );
     }
 
+    // ── V14: password reset tokens ────────────────────────────────────────────
+    // One-time expiring tokens for the forgot-password / reset-password flow.
+    // The raw token is never stored — only its SHA-256 hash.  Tokens expire
+    // after 1 hour and become permanently unusable once used_at is set.
+    if (!applied.has(14)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id         BIGSERIAL PRIMARY KEY,
+          user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT   NOT NULL UNIQUE,
+          expires_at BIGINT NOT NULL,
+          used_at    BIGINT
+        )
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash)`
+      );
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [14, Date.now()]
+      );
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -509,6 +533,9 @@ async function initDb() {
     );
     cleanStaleFreePublicationReservations().catch(err =>
       console.warn('[elmer] reservation cleanup error:', err.message)
+    );
+    cleanExpiredPasswordResetTokens().catch(err =>
+      console.warn('[elmer] password reset token cleanup error:', err.message)
     );
   }
   return pool;
@@ -539,6 +566,13 @@ async function cleanExpiredPublishingRecords() {
 
 // Release free_publications rows stuck in 'reserved' for more than 1 hour
 // that have no corresponding successful publishing record.
+async function cleanExpiredPasswordResetTokens() {
+  await getPool().query(
+    'DELETE FROM password_reset_tokens WHERE expires_at < $1',
+    [Date.now()]
+  );
+}
+
 async function cleanStaleFreePublicationReservations() {
   const cutoff = Date.now() - 60 * 60 * 1000;
   const pool = getPool();
@@ -587,4 +621,4 @@ function _setPoolForTesting(pool) {
   _initialized = false;
 }
 
-module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, _setPoolForTesting };
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, cleanExpiredPasswordResetTokens, _setPoolForTesting };
