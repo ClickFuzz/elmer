@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 let _pool        = null;
 let _initialized = false;
@@ -484,6 +484,30 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [13, Date.now()]
+      );
+    }
+
+    if (!applied.has(14)) {
+      // Add multi-provider columns to subscriptions
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'stripe'`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_subscription_id TEXT`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_event_at BIGINT`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ALTER COLUMN stripe_customer_id DROP NOT NULL`); } catch { /* pg-mem */ }
+
+      // Backfill provider_subscription_id for existing Stripe rows
+      try {
+        await client.query(`UPDATE subscriptions SET provider_subscription_id = stripe_subscription_id WHERE provider = 'stripe' AND stripe_subscription_id IS NOT NULL AND provider_subscription_id IS NULL`);
+        await client.query(`UPDATE subscriptions SET provider_subscription_id = 'legacy_' || id::text WHERE provider_subscription_id IS NULL`);
+      } catch { /* pg-mem */ }
+
+      try { await client.query(`ALTER TABLE subscriptions ALTER COLUMN provider_subscription_id SET NOT NULL`); } catch { /* pg-mem */ }
+      // New composite unique constraint for multi-provider rows
+      try { await client.query(`ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_user_provider_sub_unique UNIQUE(user_id, provider, provider_subscription_id)`); } catch { /* pg-mem */ }
+      // INTENTIONALLY keeping existing UNIQUE(user_id) — dropped in V15 after all instances run V14 code
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [14, Date.now()]
       );
     }
 
