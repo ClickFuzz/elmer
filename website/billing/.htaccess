@@ -8,6 +8,13 @@ RewriteEngine On
 RewriteCond %{HTTPS} off
 RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
 
+# ── Canonical hostname redirect ───────────────────────────────────────────────
+# getelmer.com/billing/* and any other host → billing.getelmer.com/*
+# Prevents duplicate-content and enforces the single canonical portal host.
+# Runs after the HTTPS redirect so the host check always sees HTTPS traffic.
+RewriteCond %{HTTP_HOST} !=billing.getelmer.com [NC]
+RewriteRule ^(.*)$ https://billing.getelmer.com/$1 [R=301,L]
+
 # ── Extensionless URL rewriting ───────────────────────────────────────────────
 # Allows /subscription, /login, /signup, etc. to serve .html files.
 # Stripe and password-reset email links use extensionless paths.

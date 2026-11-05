@@ -80,7 +80,7 @@ Redeploy the Railway service after changing variables.
 | `CORS_ALLOWED_ORIGINS` | `https://billing.getelmer.com` | Restricts CORS to portal only. Currently unset (all origins allowed). |
 | `BILLING_PORTAL_URL` | `https://billing.getelmer.com` | Base URL for Stripe return URLs and password reset links. |
 | `RESEND_API_KEY` | `re_...` | Obtain from resend.com. **Without this, password reset emails are silently skipped.** Verify before launch: `curl https://api.getelmer.com/health` must return `"emailEnabled":true`. Railway logs also emit `[email] RESEND_API_KEY not set` on each skipped send. |
-| `EMAIL_FROM` | `Elmer <noreply@getelmer.com>` | Sender address. Must be a verified domain in Resend. |
+| `EMAIL_FROM` | `Elmer <noreply@notify.getelmer.com>` | Sender address. Must use the verified Resend sending domain (`notify.getelmer.com`). |
 | `APP_URL` | `https://api.getelmer.com` | Already set in production. |
 | `APP_SCHEME` | `elmer` | Already set in production. |
 
