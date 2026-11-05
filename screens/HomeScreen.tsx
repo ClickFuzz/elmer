@@ -372,7 +372,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
           <Text style={styles.logoText}>elmer</Text>
           <Text style={styles.logoPeriod}>.</Text>
         </View>
-        <Text style={styles.headline}>Turn great work into growth.</Text>
+        <Text style={styles.headline}>Share More. Grow More.</Text>
         <Text style={styles.subheadline}>Take a minute to spread the word</Text>
       </View>
 
@@ -388,7 +388,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
               <Ionicons name="camera" size={18} color={colors.cyan} />
             </View>
             <View style={styles.sectionLabelGroup}>
-              <Text style={styles.sectionLabel}>Job Photos</Text>
+              <Text style={styles.sectionLabel}>Photos</Text>
               <Text style={styles.sectionSubLabel}>Add up to {MAX_PHOTOS}</Text>
             </View>
             <View style={styles.sectionCountWrap}>
@@ -455,7 +455,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
             </View>
             <View style={styles.sectionLabelGroup}>
               <Text style={styles.sectionLabel}>Voice Description</Text>
-              <Text style={styles.sectionSubLabel}>Explain the details about this job</Text>
+              <Text style={styles.sectionSubLabel}>Tell Elmer what you'd like to share.</Text>
             </View>
           </View>
 
