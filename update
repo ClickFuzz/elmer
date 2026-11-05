@@ -38,14 +38,9 @@ if [[ "$STAGING_ENV" != "preview" ]]; then
 fi
 echo "Verified: eas.json staging profile maps to channel 'staging', environment 'preview'."
 
-# ── 4. Check CLI support for --environment flag ───────────────────────────────
-if npx eas-cli@latest update --help 2>&1 | grep -q -- '--environment'; then
-  USE_ENVIRONMENT_FLAG=true
-  echo "EAS CLI supports --environment flag; will use --environment preview."
-else
-  USE_ENVIRONMENT_FLAG=false
-  echo "WARNING: EAS CLI does not support --environment flag; proceeding without it."
-fi
+# ── 4. EAS CLI configuration ──────────────────────────────────────────────────
+USE_ENVIRONMENT_FLAG=true
+echo "Using EAS CLI with --environment preview."
 
 # ── 5. Write staging .env (backup production .env; restore on exit) ────────────
 # @expo/env loads .env.local first then .env, with .env winning (override mode).
@@ -63,7 +58,6 @@ cleanup() {
   elif [[ -f "$ENV_FILE" ]]; then
     rm -f "$ENV_FILE"
   fi
-  rm -f ".env.local"
 }
 trap cleanup EXIT
 
