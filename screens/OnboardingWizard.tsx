@@ -26,6 +26,7 @@ import { Analytics } from '../services/analytics';
 import { INSTAGRAM_ENABLED } from '../constants/features';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+const RETURN_SCHEME = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer';
 
 type PlatformState = {
   facebook: boolean;
@@ -247,7 +248,8 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
     try {
       const res  = await fetch(`${API_URL}${connectUrlPath}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -255,7 +257,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         Alert.alert('Connection failed', data.error ?? 'Could not start authorization.');
         return;
       }
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       if (result.type === 'success') {
         const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
         const error  = params.get('error');
@@ -425,14 +427,14 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       const res  = await fetch(`${API_URL}/wordpress/connect-url`, {
         method:  'POST',
         headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ siteUrl: url }),
+        body:    JSON.stringify({ siteUrl: url, returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
         Alert.alert('Connection failed', data.error ?? 'Could not reach your WordPress site.');
         return;
       }
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       if (result.type === 'success') {
         const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
         const error  = params.get('error');
