@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 
 let _pool        = null;
 let _initialized = false;
@@ -508,6 +508,19 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [14, Date.now()]
+      );
+    }
+
+    if (!applied.has(15)) {
+      // Drop the legacy UNIQUE(user_id) constraint that prevented multiple provider rows.
+      // IF EXISTS makes this idempotent — safe if already dropped.
+      // No try/catch: a real failure here must stop deployment and must not be recorded as applied.
+      await client.query(
+        `ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_user_id_key`
+      );
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [15, Date.now()]
       );
     }
 

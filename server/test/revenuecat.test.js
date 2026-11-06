@@ -126,6 +126,70 @@ describe('V14 migration', () => {
   });
 });
 
+// ── V15 migration tests ───────────────────────────────────────────────────────
+
+describe('V15 migration', () => {
+  it('allows Stripe and Apple rows to coexist for the same user', async () => {
+    await register('v15multi@example.com');
+    const userId = await getUserId('v15multi@example.com');
+    const now = Date.now();
+
+    // Stripe row (canceled — not granting access, so no entitlement conflict)
+    await getPool().query(
+      `INSERT INTO subscriptions
+         (user_id, provider, provider_subscription_id,
+          stripe_subscription_id, stripe_customer_id, status, created_at, updated_at)
+       VALUES ($1, 'stripe', 'sub_v15', 'sub_v15', 'cus_v15', 'canceled', $2, $2)`,
+      [userId, now]
+    );
+
+    // Apple row for the same user — would violate old UNIQUE(user_id) before V15
+    await assert.doesNotReject(
+      () => getPool().query(
+        `INSERT INTO subscriptions
+           (user_id, provider, provider_subscription_id,
+            stripe_customer_id, stripe_subscription_id, status,
+            current_period_end, created_at, updated_at)
+         VALUES ($1, 'apple', 'txn_v15', NULL, NULL, 'active', $2, $3, $3)`,
+        [userId, now + 30 * 24 * 60 * 60 * 1000, now]
+      ),
+      'V15 must allow a second provider row for the same user'
+    );
+
+    const { rows } = await getPool().query(
+      `SELECT provider FROM subscriptions WHERE user_id = $1 ORDER BY provider`,
+      [userId]
+    );
+    assert.equal(rows.length, 2, 'both Stripe and Apple rows must coexist after V15');
+    assert.equal(rows[0].provider, 'apple');
+    assert.equal(rows[1].provider, 'stripe');
+  });
+
+  it('composite unique still rejects duplicate (user_id, provider, provider_subscription_id)', async () => {
+    await register('v15dupcmp@example.com');
+    const userId = await getUserId('v15dupcmp@example.com');
+    const now = Date.now();
+    await getPool().query(
+      `INSERT INTO subscriptions
+         (user_id, provider, provider_subscription_id,
+          stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+       VALUES ($1, 'apple', 'txn_v15cmp', NULL, NULL, 'active', $2, $2)`,
+      [userId, now]
+    );
+    await assert.rejects(
+      () => getPool().query(
+        `INSERT INTO subscriptions
+           (user_id, provider, provider_subscription_id,
+            stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+         VALUES ($1, 'apple', 'txn_v15cmp', NULL, NULL, 'trialing', $2, $2)`,
+        [userId, now]
+      ),
+      /unique|duplicate/i,
+      'composite unique must still reject exact duplicate rows'
+    );
+  });
+});
+
 // ── hasAccess() RC expiry buffer tests ────────────────────────────────────────
 
 describe('hasAccess() — RC expiry buffer', () => {
@@ -157,6 +221,14 @@ describe('hasAccess() — RC expiry buffer', () => {
 
   it('canceled sub → false regardless of provider', () => {
     assert.equal(hasAccess({ status: 'canceled', provider: 'apple', current_period_end: makeFutureMs(5) }), false);
+  });
+
+  it('Apple active sub with null current_period_end → false (anomalous row must not grant perpetual access)', () => {
+    assert.equal(hasAccess({ status: 'active', provider: 'apple', current_period_end: null }), false);
+  });
+
+  it('Google trialing sub with null current_period_end → false (anomalous)', () => {
+    assert.equal(hasAccess({ status: 'trialing', provider: 'google', current_period_end: null }), false);
   });
 });
 
@@ -452,6 +524,31 @@ describe('handleRcWebhookEvent()', () => {
       `SELECT event_id FROM stripe_webhook_events WHERE event_id = $1`, [eventId]
     );
     assert.equal(rows.length, 0, 'failed event must not be marked as processed');
+  });
+
+  it('event is not marked processed when it exits before the transaction (null providerSubId)', async () => {
+    // Verifies the invariant: event ID is only written to stripe_webhook_events when the
+    // subscription upsert also succeeds (both are inside the same DB transaction).
+    // This path tests early exit before BEGIN — the ROLLBACK path (upsert throws after
+    // dedup INSERT) is a standard Postgres transaction guarantee covered by the catch block.
+    await register('rcnosubid@example.com');
+    const userId = await getUserId('rcnosubid@example.com');
+    const eventId = `rc_nosubid_${Date.now()}`;
+    const future = new Date(makeFutureMs(30)).toISOString();
+    // null store_transaction_id + null original_transaction_id → providerSubId is null
+    // → handleRcWebhookEvent returns before the transaction starts
+    const stubFetch = async () => makeRcResponse({ expires_date: future, is_sandbox: true,
+      store_transaction_id: null });
+
+    await handleRcWebhookEvent(
+      makeEvent({ id: eventId, app_user_id: String(userId), original_transaction_id: null }),
+      { _fetchSubscriber: stubFetch }
+    );
+
+    const { rows } = await getPool().query(
+      `SELECT event_id FROM stripe_webhook_events WHERE event_id = $1`, [eventId]
+    );
+    assert.equal(rows.length, 0, 'event must not be marked processed when no upsert occurred');
   });
 });
 

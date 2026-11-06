@@ -72,7 +72,10 @@ function hasAccess(sub) {
     // 24-hour buffer accommodates delayed RC notifications so a valid subscriber isn't
     // incorrectly blocked between the actual expiry and the RC webhook arrival.
     const provider = sub.provider ?? 'stripe';
-    if (provider !== 'stripe' && sub.current_period_end) {
+    if (provider !== 'stripe') {
+      // Apple/Google rows always have a hard expiry. A missing current_period_end is
+      // anomalous (corrupt row, RC API quirk) — deny access rather than grant it forever.
+      if (!sub.current_period_end) return false;
       return Date.now() < Number(sub.current_period_end) + RC_NOTIFICATION_BUFFER_MS;
     }
     return true;
