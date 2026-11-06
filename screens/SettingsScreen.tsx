@@ -43,6 +43,7 @@ import {
 import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+const RETURN_SCHEME = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer';
 const DONE_BAR_ID = 'settings-kb-done';
 
 type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean; testMode?: boolean };
@@ -534,7 +535,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/google/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -543,7 +545,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       console.log('[gbp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -659,7 +661,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/facebook/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -668,7 +671,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       console.log('[fb-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -814,7 +817,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/instagram/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -823,7 +827,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       console.log('[ig-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -923,7 +927,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/threads/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -932,7 +937,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       console.log('[threads-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -1009,7 +1014,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       const res = await fetch(`${API_URL}/wordpress/connect-url`, {
         method:  'POST',
         headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ siteUrl: url }),
+        body:    JSON.stringify({ siteUrl: url, returnScheme: RETURN_SCHEME }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1018,7 +1023,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, `${RETURN_SCHEME}://oauth/callback`);
       console.log('[wp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {

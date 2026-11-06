@@ -11,6 +11,7 @@ const { requireAuth } = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { orderWithFeaturedFirst, prepareForGbp } = require('./media-utils');
+const { resolveReturnScheme } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage';
@@ -125,13 +126,17 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         return res.status(503).json({ error: 'Google integration not configured on this server' });
       }
 
+      const returnScheme = resolveReturnScheme(
+        req.body?.returnScheme,
+        process.env.GOOGLE_OAUTH_RETURN_SCHEME ?? 'elmer'
+      );
       const state = randomBytes(24).toString('hex');
       const now   = Date.now();
 
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at)
-         VALUES ($1, $2, 'google', $3, $4)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme)
+         VALUES ($1, $2, 'google', $3, $4, $5)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme]
       );
 
       const params = new URLSearchParams({
@@ -152,25 +157,26 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
   // ── GET /google/callback ─────────────────────────────────────────────────────
   router.get('/callback', async (req, res) => {
-    const clientId     = process.env.GOOGLE_CLIENT_ID     ?? '';
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? '';
-    const redirectUri  = process.env.GOOGLE_REDIRECT_URI  ?? '';
-    const returnScheme = process.env.GOOGLE_OAUTH_RETURN_SCHEME ?? 'elmer';
-    const returnBase   = `${returnScheme}://oauth/callback`;
+    const clientId      = process.env.GOOGLE_CLIENT_ID     ?? '';
+    const clientSecret  = process.env.GOOGLE_CLIENT_SECRET ?? '';
+    const redirectUri   = process.env.GOOGLE_REDIRECT_URI  ?? '';
+    // Fallback scheme for pre-state-validation errors only; post-validation uses stateRow.return_scheme
+    const fallbackScheme = process.env.GOOGLE_OAUTH_RETURN_SCHEME ?? 'elmer';
+    const fallbackBase   = `${fallbackScheme}://oauth/callback`;
 
     const { code, state, error: googleError } = req.query;
     console.log('[google] callback — code:', !!code, '| state:', !!state, '| error:', googleError ?? 'none');
 
     if (googleError) {
-      return res.redirect(`${returnBase}?platform=google&error=${encodeURIComponent(String(googleError))}`);
+      return res.redirect(`${fallbackBase}?platform=google&error=${encodeURIComponent(String(googleError))}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${returnBase}?platform=google&error=missing_params`);
+      return res.redirect(`${fallbackBase}?platform=google&error=missing_params`);
     }
 
     if (!clientId || !clientSecret || !redirectUri) {
-      return res.redirect(`${returnBase}?platform=google&error=server_not_configured`);
+      return res.redirect(`${fallbackBase}?platform=google&error=server_not_configured`);
     }
 
     const pool = getPool();
@@ -182,7 +188,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     try {
       await client.query('BEGIN');
       const { rows } = await client.query(
-        `SELECT id, user_id, expires_at, used_at
+        `SELECT id, user_id, expires_at, used_at, return_scheme
          FROM oauth_states WHERE state = $1 AND platform = 'google'
          FOR UPDATE`,
         [state]
@@ -191,15 +197,16 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
       if (!stateRow) {
         await client.query('ROLLBACK');
-        return res.redirect(`${returnBase}?platform=google&error=invalid_state`);
+        return res.redirect(`${fallbackBase}?platform=google&error=invalid_state`);
       }
+      const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
       if (stateRow.used_at) {
         await client.query('ROLLBACK');
-        return res.redirect(`${returnBase}?platform=google&error=state_already_used`);
+        return res.redirect(`${stateBase}?platform=google&error=state_already_used`);
       }
       if (stateRow.expires_at < now) {
         await client.query('ROLLBACK');
-        return res.redirect(`${returnBase}?platform=google&error=state_expired`);
+        return res.redirect(`${stateBase}?platform=google&error=state_expired`);
       }
 
       await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -210,6 +217,9 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     } finally {
       client.release();
     }
+
+    // Use the return scheme stored with this state token (sent by the mobile app at connect time)
+    const returnBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
     try {
       // Step 1 — Exchange code for tokens

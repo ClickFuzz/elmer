@@ -12,6 +12,7 @@ const { tryReserveFreePublication, redeemFreePublication, releaseFreePublication
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { encrypt, decrypt } = require('../crypto');
 const { orderWithFeaturedFirst } = require('./media-utils');
+const { resolveReturnScheme } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -210,12 +211,16 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       const check = await checkWordPressInstallation(norm.url, wpFetch);
       if (!check.ok) return res.status(422).json({ error: check.error });
 
+      const returnScheme = resolveReturnScheme(
+        req.body?.returnScheme,
+        process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer'
+      );
       const state = crypto.randomBytes(24).toString('hex');
       const now   = Date.now();
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at)
-         VALUES ($1, $2, 'wordpress', $3, $4)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme)
+         VALUES ($1, $2, 'wordpress', $3, $4, $5)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme]
       );
 
       const callbackBase = process.env.WORDPRESS_CALLBACK_URL
@@ -240,8 +245,9 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
   // Public — WordPress redirects here after Application Password authorization.
   // Validates state, verifies credentials, encrypts and stores them.
   router.get('/callback', async (req, res) => {
-    const returnScheme = process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer';
-    const returnBase   = `${returnScheme}://oauth/callback`;
+    const fallbackScheme = process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer';
+    // Starts as env-var fallback; updated to stateRow.return_scheme after state is validated
+    let returnBase = `${fallbackScheme}://oauth/callback`;
 
     const { state, site_url, user_login, password, error: wpError } = req.query;
 
@@ -273,7 +279,7 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       try {
         await client.query('BEGIN');
         const { rows } = await client.query(
-          `SELECT id, user_id, expires_at, used_at
+          `SELECT id, user_id, expires_at, used_at, return_scheme
            FROM oauth_states WHERE state = $1 AND platform = 'wordpress' FOR UPDATE`,
           [state]
         );
@@ -282,13 +288,14 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
           await client.query('ROLLBACK');
           return res.redirect(`${returnBase}?platform=wordpress&error=invalid_state`);
         }
+        const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=wordpress&error=state_already_used`);
+          return res.redirect(`${stateBase}?platform=wordpress&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=wordpress&error=state_expired`);
+          return res.redirect(`${stateBase}?platform=wordpress&error=state_expired`);
         }
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
         await client.query('COMMIT');
@@ -298,6 +305,9 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       } finally {
         client.release();
       }
+
+      // Update returnBase to the scheme the mobile app requested at connect time
+      returnBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
       // Verify credentials against the WordPress site
       const verification = await verifyWordPressCredentials(normalizedSite, user_login, password, wpFetch);
