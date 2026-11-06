@@ -38,10 +38,27 @@
     "github": {
       "extends": "production",
       "credentialsSource": "remote"
+    },
+    "staging-testflight": {
+      "distribution": "store",
+      "channel": "staging",
+      "environment": "preview",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-staging.getelmer.com",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true",
+        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq"
+      }
     }
   },
   "submit": {
     "production": {
+      "ios": {
+        "ascAppId": "6824199734"
+      }
+    },
+    "staging-testflight": {
       "ios": {
         "ascAppId": "6824199734"
       }
