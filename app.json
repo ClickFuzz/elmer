@@ -52,12 +52,7 @@
       "expo-web-browser",
       "expo-secure-store",
       "expo-asset",
-      ["expo-build-properties", {
-        "ios": {
-          "podInstallCommand": "pod install --repo-update"
-        }
-      }],
-      "./plugins/withGitPodSource"
+      "expo-build-properties"
     ],
     "extra": {
       "eas": {
