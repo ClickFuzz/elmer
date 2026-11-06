@@ -56,7 +56,8 @@
         "ios": {
           "podInstallCommand": "pod install --repo-update"
         }
-      }]
+      }],
+      "./plugins/withGitPodSource"
     ],
     "extra": {
       "eas": {
