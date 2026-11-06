@@ -19,4 +19,8 @@ module.exports = ({ config }) => ({
       ? 'com.clickfuzz.elmer.staging'
       : config.ios.bundleIdentifier,
   },
+  android: {
+    ...config.android,
+    package: IS_STAGING ? 'com.clickfuzz.elmer.staging' : config.android.package,
+  },
 });

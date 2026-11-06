@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  AppState,
-  AppStateStatus,
   Linking,
   Platform,
   ScrollView,
@@ -15,12 +13,11 @@ import {
 import { colors } from '../constants/colors';
 import { getSessionToken } from '../storage/database';
 import { Analytics } from '../services/analytics';
+import { purchaseSubscription, restorePurchases } from '../services/purchases';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-// Deep-link prefix the app uses to return from Stripe Checkout / Portal.
-// Built from EXPO_PUBLIC_APP_SCHEME so staging builds (elmer-staging://) and
-// production builds (elmer://) each receive the redirect for their own scheme.
+// Deep-link prefix used to detect returns from the Stripe Customer Portal.
 const BILLING_RETURN_PREFIX = `${process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer'}://billing/return`;
 
 export type SubscriptionStatus = {
@@ -30,6 +27,7 @@ export type SubscriptionStatus = {
   testMode?: boolean;
   subscription: {
     status: string;
+    provider: string;
     currentPeriodStart: number | null;
     currentPeriodEnd: number | null;
     trialStart: number | null;
@@ -58,7 +56,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   const [loading, setLoading] = useState(!initialStatus);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
-  const [checkoutStarted, setCheckoutStarted] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
   const [pollingMessage, setPollingMessage] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAttemptsRef = useRef(0);
@@ -107,7 +105,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
     }
   }, [loading, status]);
 
-  // ── Poll for subscription activation after checkout ────────────────────────
+  // ── Poll for subscription activation after purchase ────────────────────────
 
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current) {
@@ -132,16 +130,13 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
         stopPolling();
         setStatus(s);
         setCheckoutLoading(false);
-        setCheckoutStarted(false);
         onSubscribed();
         return;
       }
       if (pollAttemptsRef.current >= MAX_ATTEMPTS) {
         stopPolling();
         setCheckoutLoading(false);
-        setCheckoutStarted(false);
         setPollingMessage(null);
-        // Subscription may still be activating — let the user continue anyway
         Alert.alert(
           'Almost there',
           'Your subscription is still activating. Please check back in a moment — all features will be available once confirmed.',
@@ -155,107 +150,100 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
     await attempt();
   }, [fetchStatus, onSubscribed, stopPolling]);
 
-  // Resume polling / refresh when app returns to foreground after checkout
-  useEffect(() => {
-    if (!checkoutStarted) return;
-
-    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
-      if (state === 'active') {
-        pollForActivation();
-      }
-    });
-
-    return () => sub.remove();
-  }, [checkoutStarted, pollForActivation]);
-
-  // Handle deep-link return from Stripe Checkout or Portal
+  // Handle deep-link return from Stripe Customer Portal
   useEffect(() => {
     const handleUrl = ({ url }: { url: string }) => {
       if (!url.startsWith(BILLING_RETURN_PREFIX)) return;
       const params = new URLSearchParams(url.split('?')[1] ?? '');
       const returnStatus = params.get('status');
-
-      if (returnStatus === 'success') {
-        setCheckoutLoading(true);
-        pollForActivation();
-      } else if (returnStatus === 'cancel') {
-        Analytics.checkout_cancelled();
-      } else if (returnStatus === 'portal_return') {
-        // Refresh subscription status after portal visit
+      if (returnStatus === 'portal_return') {
         fetchStatus().then(s => {
           setStatus(s);
           if (s?.hasAccess) onSubscribed();
         });
       }
     };
-
     const linkingSub = Linking.addEventListener('url', handleUrl);
-    // Also handle cold-start return
     Linking.getInitialURL().then(url => {
       if (url && url.startsWith(BILLING_RETURN_PREFIX)) handleUrl({ url });
     });
-
     return () => {
       linkingSub.remove();
       stopPolling();
     };
-  }, [fetchStatus, onSubscribed, pollForActivation, stopPolling]);
+  }, [fetchStatus, onSubscribed, stopPolling]);
 
-  // ── Checkout flow ──────────────────────────────────────────────────────────
+  // ── Purchase flow (RevenueCat) ─────────────────────────────────────────────
 
   const handleStartTrial = async () => {
-    // iOS disclosure before opening external browser for checkout.
-    if (Platform.OS === 'ios') {
-      const proceed = await new Promise<boolean>(resolve => {
-        Alert.alert(
-          "You're leaving Elmer",
-          "You'll be taken to an external website to set up your subscription. Apple is not responsible for the privacy or security of purchases made on the web.",
-          [
-            { text: 'Continue', onPress: () => resolve(true) },
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          ]
-        );
-      });
-      if (!proceed) return;
-    }
-
     setCheckoutLoading(true);
     try {
-      const token = await getSessionToken();
-      if (!token) throw new Error('Not signed in');
+      Analytics.checkout_started(!(status?.subscription?.trialUsed ?? false));
+      const result = await purchaseSubscription();
 
-      const res = await fetch(`${API_URL}/billing/checkout-session`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        if (data.error === 'active_subscription_exists') {
-          const refreshed = await fetchStatus();
-          setStatus(refreshed);
-          if (refreshed?.hasAccess) { onSubscribed(); return; }
-        }
-        throw new Error(data.error ?? 'Failed to start checkout');
+      if (!result.success) {
+        setCheckoutLoading(false);
+        if ('cancelled' in result && result.cancelled) return; // user dismissed the native sheet
+        Alert.alert('Purchase error', result.error ?? 'Something went wrong. Please try again.');
+        return;
       }
 
-      Analytics.checkout_started(data.trialEligible === true);
-      setCheckoutStarted(true);
-      await Linking.openURL(data.checkoutUrl);
-      // Activation is confirmed via AppState / Linking listener above
-    } catch (err) {
+      // Purchase succeeded — poll server until the RC webhook activates the subscription.
+      await pollForActivation();
+    } catch {
       setCheckoutLoading(false);
-      setCheckoutStarted(false);
-      Alert.alert('Checkout error', err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      Alert.alert('Purchase error', 'Something went wrong. Please try again.');
     }
   };
 
+  // ── Restore purchases ──────────────────────────────────────────────────────
+
+  const handleRestore = async () => {
+    setRestoreLoading(true);
+    try {
+      const result = await restorePurchases();
+      if (!result.success) {
+        Alert.alert('Restore failed', result.error);
+        return;
+      }
+      if (result.hasEntitlement) {
+        // RC found an active entitlement — poll server to sync it
+        setCheckoutLoading(true);
+        await pollForActivation();
+      } else {
+        // Refresh server status anyway — maybe a Stripe sub is active
+        const s = await fetchStatus();
+        setStatus(s);
+        if (s?.hasAccess) {
+          onSubscribed();
+        } else {
+          Alert.alert('No subscription found', 'No prior subscription was found for this Apple ID / Google account. If you subscribed with a different account, sign in with that account first.');
+        }
+      }
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  // ── Manage subscription (provider-aware) ──────────────────────────────────
+
   const handleManageSubscription = async () => {
+    const provider = status?.subscription?.provider ?? 'stripe';
+
+    if (provider === 'apple') {
+      await Linking.openURL('https://apps.apple.com/account/subscriptions');
+      return;
+    }
+    if (provider === 'google') {
+      await Linking.openURL('https://play.google.com/store/account/subscriptions');
+      return;
+    }
+
+    // Stripe — open the Customer Portal
     setPortalLoading(true);
     try {
       const token = await getSessionToken();
       if (!token) throw new Error('Not signed in');
-
       const res = await fetch(`${API_URL}/billing/portal-session`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -312,6 +300,16 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
     return sub.status.charAt(0).toUpperCase() + sub.status.slice(1);
   };
 
+  const isAppleOrGoogle = sub?.provider === 'apple' || sub?.provider === 'google';
+
+  const disclosureText = trialUsed
+    ? Platform.OS === 'ios'
+      ? 'Payment will be charged to your Apple ID account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage subscriptions in your Account Settings after purchase.'
+      : 'Payment will be charged to your Google Play account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage your subscription in Google Play.'
+    : Platform.OS === 'ios'
+      ? 'A 14-day free trial is available to new subscribers. Payment will be charged to your Apple ID account when the trial ends ($19/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage subscriptions in your Account Settings.'
+      : 'A 14-day free trial is available to new subscribers. Payment will be charged to your Google Play account when the trial ends ($19/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage your subscription in Google Play.';
+
   return (
     <ScrollView
       style={styles.root}
@@ -353,7 +351,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
             <View style={styles.loadingBox}>
               <ActivityIndicator color={colors.cyan} />
               <Text style={styles.loadingText}>
-                {pollingMessage ?? 'Opening checkout…'}
+                {pollingMessage ?? 'Processing…'}
               </Text>
             </View>
           ) : (
@@ -368,11 +366,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
             </TouchableOpacity>
           )}
 
-          <Text style={styles.disclosure}>
-            {trialUsed
-              ? 'Your payment method will be charged $19 when you subscribe. The subscription renews monthly and can be canceled anytime.'
-              : 'Payment information is required. You will not be charged during the 14-day trial. After the trial, your payment method will be billed $19/month unless you cancel before the trial ends. The subscription renews automatically each month.'}
-          </Text>
+          <Text style={styles.disclosure}>{disclosureText}</Text>
 
           <View style={styles.legalRow}>
             <TouchableOpacity onPress={() => Linking.openURL('https://getelmer.com/terms')} activeOpacity={0.7}>
@@ -383,9 +377,21 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
               <Text style={styles.legalLink}>Privacy Policy</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Restore Purchases — required by Apple App Store guidelines */}
+          {restoreLoading ? (
+            <View style={styles.restoreLoadingRow}>
+              <ActivityIndicator color={colors.textMuted} size="small" />
+              <Text style={styles.restoreText}>Restoring…</Text>
+            </View>
+          ) : (
+            <TouchableOpacity onPress={handleRestore} activeOpacity={0.7} style={styles.restoreBtn}>
+              <Text style={styles.restoreText}>Restore Purchases</Text>
+            </TouchableOpacity>
+          )}
         </View>
       ) : (
-        /* Existing subscriber — show status + portal */
+        /* Existing subscriber — show status + management */
         <View style={styles.statusCard}>
           <View style={styles.statusRow}>
             <View style={[styles.statusDot, { backgroundColor: isTrialing || isActive ? colors.success : colors.error }]} />
@@ -398,7 +404,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
           {portalLoading ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator color={colors.cyan} />
-              <Text style={styles.loadingText}>Opening billing portal…</Text>
+              <Text style={styles.loadingText}>Opening subscription management…</Text>
             </View>
           ) : (
             <TouchableOpacity
@@ -411,7 +417,9 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
           )}
 
           <Text style={styles.manageNote}>
-            Update your payment method, view invoices, or cancel your subscription.
+            {isAppleOrGoogle
+              ? 'Manage your subscription in your device account settings.'
+              : 'Update your payment method, view invoices, or cancel your subscription.'}
           </Text>
         </View>
       )}
@@ -531,6 +539,23 @@ const styles = StyleSheet.create({
   legalDot: {
     fontSize: 12,
     color: colors.textMuted,
+  },
+  restoreBtn: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  restoreLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  restoreText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textDecorationLine: 'underline',
   },
 
   // Status card

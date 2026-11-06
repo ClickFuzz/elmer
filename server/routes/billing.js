@@ -821,6 +821,7 @@ function createBillingRouter() {
         testMode: isTestMode(),
         subscription: sub ? {
           status:             sub.status,
+          provider:           sub.provider ?? 'stripe',
           currentPeriodStart: sub.current_period_start,
           currentPeriodEnd:   sub.current_period_end,
           trialStart:         sub.trial_start,

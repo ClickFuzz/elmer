@@ -1,0 +1,86 @@
+import Purchases, { LOG_LEVEL, PURCHASES_ERROR_CODE } from 'react-native-purchases';
+import { Platform } from 'react-native';
+
+const RC_KEY_IOS = process.env.EXPO_PUBLIC_RC_API_KEY_IOS ?? '';
+const RC_KEY_ANDROID = process.env.EXPO_PUBLIC_RC_API_KEY_ANDROID ?? '';
+
+// Entitlement identifier configured in the RevenueCat dashboard.
+const ENTITLEMENT_ID = 'elmer-post-everywhere';
+
+let _configured = false;
+
+export function initPurchases(userId: string | null): void {
+  const apiKey = Platform.OS === 'ios' ? RC_KEY_IOS : RC_KEY_ANDROID;
+  if (!apiKey) {
+    // No key configured — RC runs in Preview API Mode (simulated purchases).
+    // This is expected in Expo Go and CI builds.
+    return;
+  }
+  if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+  Purchases.configure({ apiKey, appUserID: userId ?? undefined });
+  _configured = true;
+}
+
+// Call after sign-in to associate purchases with the authenticated user.
+export async function switchPurchasesUser(userId: string): Promise<void> {
+  if (!_configured) return;
+  try {
+    await Purchases.logIn(userId);
+  } catch {
+    // Non-fatal — entitlement verification is authoritative on the server via webhook.
+  }
+}
+
+// Call on sign-out to revert RC to anonymous identity.
+export async function logOutPurchases(): Promise<void> {
+  if (!_configured) return;
+  try {
+    await Purchases.logOut();
+  } catch {
+    // Non-fatal
+  }
+}
+
+export type PurchaseResult =
+  | { success: true }
+  | { success: false; cancelled: true }
+  | { success: false; cancelled?: false; error: string };
+
+export async function purchaseSubscription(): Promise<PurchaseResult> {
+  if (!_configured) {
+    return { success: false, error: 'Purchases not available in this build. Use a development or distribution build.' };
+  }
+  try {
+    const offerings = await Purchases.getOfferings();
+    const pkg = offerings.current?.availablePackages?.[0];
+    if (!pkg) {
+      return { success: false, error: 'No subscription packages are available. Please try again later.' };
+    }
+    await Purchases.purchasePackage(pkg);
+    return { success: true };
+  } catch (err: unknown) {
+    const e = err as { code?: string; message?: string };
+    if (e?.code === PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR) {
+      return { success: false, cancelled: true };
+    }
+    return { success: false, error: e?.message ?? 'Purchase failed. Please try again.' };
+  }
+}
+
+export type RestoreResult =
+  | { success: true; hasEntitlement: boolean }
+  | { success: false; error: string };
+
+export async function restorePurchases(): Promise<RestoreResult> {
+  if (!_configured) {
+    return { success: false, error: 'Purchases not available in this build.' };
+  }
+  try {
+    const customerInfo = await Purchases.restorePurchases();
+    const hasEntitlement = !!(customerInfo?.entitlements?.active?.[ENTITLEMENT_ID]);
+    return { success: true, hasEntitlement };
+  } catch (err: unknown) {
+    const e = err as { message?: string };
+    return { success: false, error: e?.message ?? 'Restore failed. Please try again.' };
+  }
+}

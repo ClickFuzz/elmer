@@ -9,6 +9,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import { colors } from './constants/colors';
 import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, getJobPhotos, getSessionToken, getSessionUserId, getBusinessProfile, saveBusinessProfile, saveSettingsVersion, runAutoCleanup, Job, clearSession } from './storage/database';
 import { Analytics } from './services/analytics';
+import { initPurchases, switchPurchasesUser, logOutPurchases } from './services/purchases';
 import OtaBadge from './components/OtaBadge';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -151,6 +152,7 @@ function AppShell() {
         getPendingHomeState(),
       ]);
 
+      initPurchases(storedUserId !== null ? String(storedUserId) : null);
       if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
 
@@ -195,7 +197,10 @@ function AppShell() {
           syncServerSettings(tok),
           getSessionUserId(),
         ]);
-        if (storedUserId) Analytics.identify(storedUserId);
+        if (storedUserId) {
+          Analytics.identify(storedUserId);
+          switchPurchasesUser(String(storedUserId)).catch(() => {});
+        }
         setSubscriptionStatus(status);
         const localProfile = await getBusinessProfile();
         const hasName = !!(localProfile.name ?? '').trim() || serverHasName;
@@ -205,6 +210,7 @@ function AppShell() {
     } else {
       sessionGenRef.current += 1;
       Analytics.reset();
+      logOutPurchases().catch(() => {});
       setAuthToken(null);
       setSubscriptionStatus(null);
       setIsOnboarded(null);
@@ -247,6 +253,7 @@ function AppShell() {
     }
     sessionGenRef.current += 1;
     Analytics.reset();
+    logOutPurchases().catch(() => {});
     await clearSession();
     setIsAuthed(false);
     setAuthToken(null);

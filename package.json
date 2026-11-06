@@ -26,6 +26,7 @@
     "posthog-react-native": "^4.82.0",
     "react": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-purchases": "^11.0.1",
     "react-native-safe-area-context": "~5.7.0"
   },
   "devDependencies": {

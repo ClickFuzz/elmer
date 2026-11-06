@@ -18,6 +18,7 @@
       }
     },
     "android": {
+      "package": "com.clickfuzz.elmer",
       "adaptiveIcon": {
         "backgroundColor": "#0D1B2A",
         "foregroundImage": "./assets/icon.png"
