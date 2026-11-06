@@ -51,7 +51,12 @@
       "expo-font",
       "expo-web-browser",
       "expo-secure-store",
-      "expo-asset"
+      "expo-asset",
+      ["expo-build-properties", {
+        "ios": {
+          "podInstallCommand": "pod install --repo-update"
+        }
+      }]
     ],
     "extra": {
       "eas": {
