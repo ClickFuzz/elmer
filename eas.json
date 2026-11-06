@@ -23,7 +23,8 @@
         "EXPO_PUBLIC_APP_SCHEME": "elmer-staging",
         "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
         "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true",
-        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq"
+        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq",
+        "EXPO_USE_PRECOMPILED_MODULES": "0"
       }
     },
     "production": {
