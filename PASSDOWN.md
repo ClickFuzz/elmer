@@ -33,23 +33,25 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `fd73554`; sandbox purchase test pending |
 
 ---
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `b3ee091` (location/page selection panel in onboarding)
-- **Staging branch:** `staging` — HEAD `b3ee091` (in sync with main)
-- **Last known TestFlight build:** #21
-- **EAS project:** `778df2e5-7a11-47f0-8951-7e3844f59e42` (`@clickfuzz-team/elmer`)
+- **Production branch:** `main` — HEAD `7551889`
+- **Staging branch:** `staging` — HEAD `fd73554` (12 commits ahead of main — RC integration)
+- **Last known TestFlight build:** #23 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026)
+- **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
-- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
-- **Production API:** `https://api.getelmer.com` (Railway, deployed at `b3ee091`)
-- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set)
+- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (internal distribution only; no ASC app)
+- **Production API:** `https://api.getelmer.com` (Railway)
+- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
-- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
+- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions (exception: `npx eas-cli@latest build` still works for staging-testflight ad-hoc builds)
 - **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
+- **react-native-purchases**: pinned at `10.16.0` on staging (downgraded from `11.0.1` — `PurchasesHybridCommon 20.4.0` unpublished Nov 2–6 2026 CocoaPods disruption); upgrade back to `11.x` after disruption clears
 
 ## Staging Environment
 
@@ -125,7 +127,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
-- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date". `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` env var (staging: `elmer-staging://`, production: `elmer://`).
+- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`. iOS/Android: native StoreKit / Google Play purchase via RevenueCat SDK (`services/purchases.ts`); no browser for mobile purchases. Web/Stripe: `Linking.openURL` to Stripe Checkout (unchanged). After purchase: `POST /billing/rc-verify-purchase` grants access within seconds; RC webhook confirms asynchronously. Provider-aware management: Apple → Account Settings URL, Google → Play subscriptions URL, Stripe → Customer Portal. Restore Purchases button (Apple requirement). `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` (staging: `elmer-staging://`, production: `elmer://`).
 - **Staging OTA version badge** (`components/OtaBadge.tsx`): persistent top-right badge visible only when `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; shows `OTA <first-7-chars-of-updateId>` for loaded OTA updates, `EMBEDDED` for the original binary bundle; uses `useUpdates()` so it reflects the actually-running update; `pointerEvents="none"`, safe-area-aware, zero cost in production.
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
@@ -180,8 +182,9 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 - **Credentials server-side only** — OAuth tokens and app passwords encrypted AES-256-GCM; mobile never holds provider credentials.
 - **No PostgreSQL/Redis/Supabase/Firebase addition** without explicit requirement.
 - **Platform independence** — Facebook, Instagram, Threads, WordPress failures must not affect each other.
-- **iOS billing:** `Linking.openURL()` to Stripe Checkout. No StoreKit or `com.apple.developer.storekit.external-purchase-link` entitlement needed — Elmer is US-only and App Review Guideline 3.1.1(a) (updated Oct 16, 2026) does not require the entitlement for US storefront apps.
-- **Android billing:** `Linking.openURL()`. SaaS exemption applies — Elmer sells backend service access, not in-app digital goods.
+- **iOS billing:** RevenueCat SDK (`react-native-purchases`) + native StoreKit. RC offering `default`, package `$rc_monthly`, entitlement `elmer-post-everywhere`, product `com.clickfuzz.elmer.monthly`. After purchase: `POST /billing/rc-verify-purchase` fast path; RC webhook confirms. Existing Stripe subscribers retain access (multi-provider `subscriptions` table, V15 migration).
+- **Android billing:** RevenueCat SDK + Google Play Billing (RC key `EXPO_PUBLIC_RC_API_KEY_ANDROID`, not yet set — Android purchase path exists in code but untested).
+- **Web/Stripe billing:** `Linking.openURL()` to Stripe Checkout (unchanged for web users on getelmer.com).
 
 ---
 
@@ -208,6 +211,8 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 | `GOOGLE_OAUTH_RETURN_SCHEME` | Default `elmer`; matches `scheme` in `app.json` |
 | `STRIPE_TEST_MODE` | `TRUE` in Railway (case-insensitive check); enables test Stripe keys + DeviceCheck bypass + Developer section in Settings |
 | `INSTAGRAM_ENABLED` | `false` in production Railway (set); omit or set `true` in staging — blocks connect-url + publish; compliance endpoints always active |
+| `REVENUECAT_SECRET_KEY` | RC server-side secret key — required for `rc-verify-purchase` and `rc-webhook` endpoints; Railway only |
+| `REVENUECAT_WEBHOOK_SECRET` | Bearer token RC sends in `Authorization` header; must match Railway env var; Railway only |
 | `APP_URL` | `https://api.getelmer.com` (production); `https://api-staging.getelmer.com` (staging) |
 | `APP_SCHEME` | `elmer` (production); `elmer-staging` (staging) — used for Stripe + OAuth deep-link returns |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
@@ -217,8 +222,12 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ## Pending Actions Before App Store Release
 
-1. **Merge Instagram feature flag PR** — open at `https://github.com/ClickFuzz/elmer/compare/main...staging`; 524 tests pass; ready to merge.
-2. **New production iOS build** — required after merging Instagram flag (build-time env var; OTA alone is not sufficient to disable Instagram in current TestFlight binary). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
+1. **Complete RC sandbox purchase test** — Install TestFlight build 23, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock. See HANDOFF.md.
+2. **Merge staging → main** — After sandbox test passes; 12 commits of RC integration.
+3. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
+4. **New production iOS build** — Required after merging RC integration (new native module; OTA alone is not sufficient). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
+5. **Set `EXPO_PUBLIC_RC_API_KEY_IOS` in production `eas.json` env** — Only after RC sandbox test passes on staging; use the same key `appl_qiMBWYvElXNhKitKwqFWXExCYsq`.
+6. **Set `REVENUECAT_SECRET_KEY` + `REVENUECAT_WEBHOOK_SECRET` on Railway production** — After staging test passes; configure RC production webhook at `https://api.getelmer.com/billing/rc-webhook`.
 3. **OTA update (interim):** if shipping before a new binary, push `34fe198` to `production` channel — `bunx eas-cli update --branch production --message "Fix subscription manage screen: no flash, back button, Invalid Date"` — but note this does NOT include the Instagram flag (that requires a build with the new `EXPO_PUBLIC_INSTAGRAM_ENABLED` env var absent).
 4. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
 5. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway. **Do not set `STRIPE_TEST_MODE=true` when live key is present** — the billing.js startup guard will crash the server.
@@ -286,7 +295,8 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `server/routes/facebook.js` | Facebook: OAuth, pages, publish, Meta callbacks, backfill |
 | `server/routes/instagram.js` | Instagram: OAuth, publish, Meta callbacks |
 | `server/routes/threads.js` | Threads: OAuth, publish, Meta callbacks |
-| `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
+| `services/purchases.ts` | RevenueCat SDK wrapper — configure, purchase, restore, logIn/logOut |
+| `screens/SubscriptionScreen.tsx` | Trial offer, native StoreKit purchase flow, manage subscription (provider-aware) |
 | `server/test/meta-callbacks.test.js` | 19 Meta callback integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
 | `constants/features.ts` | Mobile feature flags: `INSTAGRAM_ENABLED` (derived from `EXPO_PUBLIC_INSTAGRAM_ENABLED`) |
