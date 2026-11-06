@@ -34,20 +34,21 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
 | 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `fd73554`; sandbox purchase test pending |
+| — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `fd73554` (12 commits ahead of main — RC integration)
-- **Last known TestFlight build:** #23 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026)
+- **Staging branch:** `staging` — HEAD `f1b47ef` (13 commits ahead of main — RC integration + OAuth fix)
+- **Last known TestFlight build:** #24 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026 — includes OAuth return scheme fix)
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
 - **Staging bundle ID:** `com.clickfuzz.elmer.staging` (internal distribution only; no ASC app)
 - **Production API:** `https://api.getelmer.com` (Railway)
-- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET` confirmed set)
+- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET`, `ALLOWED_OAUTH_RETURN_SCHEMES=elmer,elmer-staging` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
 - **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions (exception: `npx eas-cli@latest build` still works for staging-testflight ad-hoc builds)
 - **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
@@ -83,7 +84,9 @@ Staging infrastructure is fully live. Railway staging environment is running.
 
 ### Staging deep-link scheme separation (important)
 
-The staging app uses scheme `elmer-staging://` (set in `app.config.js`) and the staging server must have `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging`. Without this, OAuth callbacks are ambiguous when both apps are on the same device.
+The staging app uses scheme `elmer-staging://` (set in `app.config.js`). The staging server has `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging` as fallback defaults.
+
+**OAuth return scheme fix (f1b47ef):** Mobile now passes `returnScheme: EXPO_PUBLIC_APP_SCHEME ?? 'elmer'` in every connect-url request. The server validates against `ALLOWED_OAUTH_RETURN_SCHEMES` (staging: `elmer,elmer-staging`) and stores the scheme in `oauth_states.return_scheme` (V16 DB migration). The callback reads it back and redirects to the correct app. TestFlight builds (no `APP_SCHEME` set → `elmer`) and staging builds (`APP_SCHEME=elmer-staging`) now correctly return to their respective apps even when both point at `api-staging.getelmer.com`.
 
 ---
 
