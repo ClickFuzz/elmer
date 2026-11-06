@@ -175,6 +175,27 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
 
   // ── Purchase flow (RevenueCat) ─────────────────────────────────────────────
 
+  // Calls the server's rc-verify-purchase endpoint immediately after a successful
+  // native purchase. This syncs RC subscriber state before the webhook fires so
+  // the user gets access in seconds instead of waiting for the polling loop.
+  const verifyPurchaseWithServer = useCallback(async (): Promise<boolean> => {
+    try {
+      const token = await getSessionToken();
+      if (!token) return false;
+      const store = Platform.OS === 'ios' ? 'APP_STORE' : 'PLAY_STORE';
+      const res = await fetch(`${API_URL}/billing/rc-verify-purchase`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return !!(data.hasAccess);
+    } catch {
+      return false;
+    }
+  }, []);
+
   const handleStartTrial = async () => {
     setCheckoutLoading(true);
     try {
@@ -188,7 +209,19 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
         return;
       }
 
-      // Purchase succeeded — poll server until the RC webhook activates the subscription.
+      // Fast path: immediately sync RC subscriber state with the server.
+      // If confirmed, refresh full status and hand off — no polling needed.
+      const immediateAccess = await verifyPurchaseWithServer();
+      if (immediateAccess) {
+        const s = await fetchStatus();
+        stopPolling();
+        setStatus(s);
+        setCheckoutLoading(false);
+        onSubscribed();
+        return;
+      }
+
+      // Fallback: RC API may be briefly delayed — poll until the webhook fires.
       await pollForActivation();
     } catch {
       setCheckoutLoading(false);

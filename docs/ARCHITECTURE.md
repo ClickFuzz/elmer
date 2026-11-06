@@ -33,6 +33,7 @@ Elmer is a mobile-first publishing tool for local contractors. The workflow is:
 | Image picker | `expo-image-picker` |
 | Fonts | `@expo-google-fonts/dm-sans`, `@expo-google-fonts/inter` |
 | Icons | `@expo/vector-icons` (Ionicons) |
+| In-app subscriptions | `react-native-purchases@11.0.1` (RevenueCat) — no Expo config plugin; standard autolinking |
 
 ### Backend Server (`server/`)
 | Concern | Implementation |
@@ -812,18 +813,41 @@ Mobile                          Elmer Server                  Google OAuth
 
 - **V5 DB migration**: `stripe_customers` (user ↔ Stripe customer mapping) and `subscriptions` (status, trial dates, `trial_used` sticky flag) tables (`server/db.js`).
 - **Billing routes** (`server/routes/billing.js`):
-  - `GET /billing/subscription` — returns current subscription status and `hasAccess` flag
-  - `POST /billing/checkout-session` — creates Stripe Checkout session; 409 if already subscribed; 503 if `STRIPE_SECRET_KEY` not set
-  - `POST /billing/portal-session` — creates Stripe Customer Portal session for managing/canceling
+  - `GET /billing/subscription` — returns current subscription status, `hasAccess` flag, and `provider` field
+  - `POST /billing/checkout-session` — creates Stripe Checkout session (web/getelmer.com only); 409 if already subscribed; 503 if `STRIPE_SECRET_KEY` not set
+  - `POST /billing/portal-session` — creates Stripe Customer Portal session for managing/canceling (Stripe subscribers only)
   - `GET /billing/checkout-return` — Stripe success/cancel redirect; bridges to `elmer://billing/return` deep link
   - `POST /billing/webhook` — receives Stripe events; verifies HMAC-SHA256 signature in production; handles `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
+  - `POST /billing/rc-webhook` — receives RevenueCat events; validates HMAC-SHA256 signature; upserts `apple`/`google` subscription rows
+  - `POST /billing/rc-verify-purchase` — called by mobile after purchase to immediately sync RC subscriber state before the webhook fires
 - **US-only restriction**: `checkout.session.completed` webhook cancels the subscription if `customer_details.address.country !== 'US'`.
 - **`trial_used` sticky**: upsert uses `CASE WHEN … THEN true ELSE trial_used END` so `trial_used` can only go `false → true`, never reversed; prevents re-granting a free trial after cancellation.
 - **Entitlement check** (`requireSubscription` middleware): `trialing`/`active` = full access; `past_due` within a 3-day grace period = full access; all other statuses = 402. Guards `/api/generate` and all platform publish endpoints.
 - **`hasAccess` exported** for server-side use and unit testing.
-- **Checkout flow — iOS**: disclosure Alert before leaving the app (`Linking.openURL`); no StoreKit or external-purchase-link entitlement required — Elmer is US-only and Apple's App Review Guideline 3.1.1(a) (updated October 16, 2026) does not require an entitlement for US storefront apps linking to external purchase pages.
-- **Checkout flow — Android**: uses `Linking.openURL()` directly. Google Play Billing is not used; Elmer sells only access to an external backend service, not in-app digital goods, so the Google Play Billing policy exemption for SaaS applies.
-- **SubscriptionScreen** (`screens/SubscriptionScreen.tsx`): trial offer card (14 days free / $19/month); starts checkout via `Linking.openURL`; polls `GET /billing/subscription` every 2 s (up to 15 attempts) on return from browser; shows manage/portal card for existing subscribers; deep-link listener for `elmer://billing/return`.
+- **Multi-provider subscriptions** (V14/V15 migrations): `subscriptions` table holds one row per `(user_id, provider, provider_subscription_id)`. V15 dropped the old `UNIQUE(user_id)` constraint so Stripe and Apple/Google rows can coexist for the same user. Provider values: `stripe`, `apple`, `google`.
+
+### Implemented (Phase 14/V14 — RevenueCat integration)
+
+- **V14 DB migration** (`server/db.js`): Added `provider TEXT NOT NULL DEFAULT 'stripe'`, `provider_subscription_id TEXT`, `provider_event_at BIGINT` columns to `subscriptions`. Added composite unique `(user_id, provider, provider_subscription_id)`. RC webhook and verify-purchase endpoints reference `provider_subscription_id` as the stable identifier.
+- **V15 DB migration**: Dropped the legacy `UNIQUE(user_id)` constraint on `subscriptions` to allow multiple provider rows per user (e.g., one Stripe row + one Apple row for the same account).
+- **RC webhook** (`POST /billing/rc-webhook`): Receives RevenueCat events; validates HMAC-SHA256 `Authorization` header; maps `store` to `provider` (`APP_STORE`→`apple`, `PLAY_STORE`→`google`); fetches current RC subscriber state via `GET https://api.revenuecat.com/v1/subscribers/{userId}`; upserts subscription row in a transaction with idempotency dedup via `stripe_webhook_events`; ignores sandbox events in production.
+- **RC verify-purchase** (`POST /billing/rc-verify-purchase`): Bearer-authenticated endpoint called by the mobile app immediately after `purchasePackage()` resolves, before the webhook fires. Fetches RC subscriber state and upserts the subscription row so the user gets access within seconds rather than waiting for the webhook.
+- **RevenueCat configuration**:
+  - Offering: `default`
+  - Package identifier: `$rc_monthly`
+  - Apple product: `com.clickfuzz.elmer.monthly`
+  - Entitlement: `elmer-post-everywhere`
+  - SDK key env vars: `EXPO_PUBLIC_RC_API_KEY_IOS` (staging + production, in `eas.json`), `EXPO_PUBLIC_RC_API_KEY_ANDROID` (future Android support)
+  - Server vars: `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET` (Railway only, never in git)
+- **Mobile checkout** (`screens/SubscriptionScreen.tsx`, `services/purchases.ts`): `purchaseSubscription()` calls RC `getOfferings()` → finds `$rc_monthly` package → `purchasePackage()` → native StoreKit sheet; on success, polls `GET /billing/subscription` for up to 30 s. No browser is opened for iOS purchases.
+- **Restore Purchases** (`services/purchases.ts → restorePurchases()`): calls RC `restorePurchases()`; checks `elmer-post-everywhere` entitlement in `CustomerInfo`; shown as a link on the offer card (Apple App Store requirement).
+- **Provider-aware management** (`SubscriptionScreen.tsx`): `provider = 'apple'` → `Linking.openURL('https://apps.apple.com/account/subscriptions')`; `provider = 'google'` → Google Play subscriptions URL; `provider = 'stripe'` → Customer Portal (unchanged).
+- **RC identity lifecycle** (`App.tsx`, `services/purchases.ts`): `initPurchases(userId)` on startup (configure with appUserID); `switchPurchasesUser(userId)` calls `Purchases.logIn()` after sign-in; `logOutPurchases()` calls `Purchases.logOut()` in both sign-out paths.
+- **IAP disclosure text**: Platform-aware; iOS text satisfies Apple App Store Review Guidelines for subscription disclosure (Apple ID charge, 24-hour cancellation window, Account Settings management); Android text mirrors for Google Play.
+- **Checkout flow — iOS**: Native StoreKit payment sheet via RevenueCat; no browser navigation; no external-purchase-link entitlement required.
+- **Checkout flow — Android**: Google Play Billing via RevenueCat (key pending); same `purchaseSubscription()` call, platform-specific key injected at build time.
+- **Existing Stripe subscribers**: Stripe rows remain in DB; `hasAccess()` checks all provider rows; Stripe subscribers see "Manage Subscription" → Customer Portal (unchanged).
+- **SubscriptionScreen** (`screens/SubscriptionScreen.tsx`): Preserves existing paywall UI; uses existing Elmer paywall (not RC Paywall UI); `checkoutStarted` / AppState listener removed (not needed for native purchase flow); deep-link listener retained for Stripe portal return only.
 - **App.tsx subscription gate**: fetches subscription status after auth token found; shows loading spinner; blocks app access (shows SubscriptionScreen) until `hasAccess = true`; `onManageSubscription` callback from SettingsScreen.
 - **SettingsScreen**: "Subscription" row in Elmer Account card navigates to SubscriptionScreen.
 - **308 automated tests** (all prior + 32 billing tests) — all passing (`server/test/`).

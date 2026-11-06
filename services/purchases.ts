@@ -4,7 +4,9 @@ import { Platform } from 'react-native';
 const RC_KEY_IOS = process.env.EXPO_PUBLIC_RC_API_KEY_IOS ?? '';
 const RC_KEY_ANDROID = process.env.EXPO_PUBLIC_RC_API_KEY_ANDROID ?? '';
 
-// Entitlement identifier configured in the RevenueCat dashboard.
+// RC dashboard: Offering = "default", Package = "$rc_monthly", Entitlement = "elmer-post-everywhere"
+// Product: com.clickfuzz.elmer.monthly (Apple) / com.clickfuzz.elmer.monthly (Google Play TBD)
+const MONTHLY_PACKAGE_ID = '$rc_monthly';
 const ENTITLEMENT_ID = 'elmer-post-everywhere';
 
 let _configured = false;
@@ -52,7 +54,9 @@ export async function purchaseSubscription(): Promise<PurchaseResult> {
   }
   try {
     const offerings = await Purchases.getOfferings();
-    const pkg = offerings.current?.availablePackages?.[0];
+    const pkgs = offerings.current?.availablePackages ?? [];
+    // Prefer the explicit $rc_monthly package; fall back to first available.
+    const pkg = pkgs.find(p => p.identifier === MONTHLY_PACKAGE_ID) ?? pkgs[0];
     if (!pkg) {
       return { success: false, error: 'No subscription packages are available. Please try again later.' };
     }
