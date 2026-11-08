@@ -352,11 +352,13 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
       if (audioFile) {
         const renamedPath = audioFile.path + '.m4a';
         fs.renameSync(audioFile.path, renamedPath);
+        const audioStream = fs.createReadStream(renamedPath);
         const result = await openai.audio.transcriptions.create({
-          file:     fs.createReadStream(renamedPath),
+          file:     audioStream,
           model:    'whisper-1',
           language: 'en',
         });
+        audioStream.destroy();
         transcription = result.text ?? '';
         fs.unlink(renamedPath, () => {});
       }
