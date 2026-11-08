@@ -11,7 +11,7 @@ const { requireAuth } = require('../auth');
 const { orderWithFeaturedFirst } = require('./media-utils');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
-const { resolveReturnScheme } = require('./oauth-helpers');
+const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -163,15 +163,15 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
     if (fbError) {
       const reason = (typeof error_description === 'string' ? error_description : fbError);
-      return res.redirect(`${returnBase}?platform=facebook&error=${encodeURIComponent(reason)}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=${encodeURIComponent(reason)}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${returnBase}?platform=facebook&error=missing_params`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=missing_params`);
     }
 
     if (!appId || !appSecret || !redirectUri) {
-      return res.redirect(`${returnBase}?platform=facebook&error=server_not_configured`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=server_not_configured`);
     }
 
     try {
@@ -193,16 +193,16 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
         if (!stateRow) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=facebook&error=invalid_state`);
+          return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=invalid_state`);
         }
         const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=facebook&error=state_already_used`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=facebook&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=facebook&error=state_expired`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=facebook&error=state_expired`);
         }
 
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -285,7 +285,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       const pages = (pagesData.data ?? []).filter(p => p.id && p.access_token);
 
       if (pages.length === 0) {
-        return res.redirect(`${returnBase}?platform=facebook&error=no_manageable_pages`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=no_manageable_pages`);
       }
 
       // Step 5 — Persist each page's access token encrypted.
@@ -311,14 +311,14 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         );
       }
 
-      return res.redirect(
+      return sendOAuthRedirect(res,
         `${returnBase}?platform=facebook&success=true&page_count=${pages.length}`
       );
 
     } catch (err) {
       console.error('[facebook] callback error:', err.message);
       const errorCode = err.isPermissionError ? 'insufficient_permissions' : 'auth_failed';
-      return res.redirect(`${returnBase}?platform=facebook&error=${errorCode}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=${errorCode}`);
     }
   });
 

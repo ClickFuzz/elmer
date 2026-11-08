@@ -652,7 +652,7 @@ describe('Facebook OAuth callback — platform_user_id storage', () => {
 
     const cbRes = await request(app).get(`/facebook/callback?code=testcode&state=${state}`);
     // Must still redirect to success — /me failure is non-fatal
-    assert.ok(cbRes.headers.location?.includes('success=true'), 'Callback must succeed even when /me fails');
+    assert.ok(cbRes.text.includes('success=true'), 'Callback must succeed even when /me fails');
 
     const { rows } = await getPool().query(
       `SELECT platform_user_id FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,

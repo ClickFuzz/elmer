@@ -10,6 +10,7 @@ const {
   processQueuedDeviceUpdate,
   isDeviceCheckConfigured,
 } = require('./device');
+const { sendOAuthRedirect } = require('./oauth-helpers');
 const {
   trackTrialStarted,
   trackTrialConverted,
@@ -938,7 +939,7 @@ function createBillingRouter() {
   router.get('/checkout-return', (req, res) => {
     const status = req.query.status ?? 'unknown';
     const scheme = APP_SCHEME();
-    res.redirect(`${scheme}://billing/return?status=${status}`);
+    sendOAuthRedirect(res, `${scheme}://billing/return?status=${status}`);
   });
 
   // POST /billing/webhook — Stripe webhook event receiver

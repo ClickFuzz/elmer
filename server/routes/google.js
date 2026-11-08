@@ -11,7 +11,7 @@ const { requireAuth } = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { orderWithFeaturedFirst, prepareForGbp } = require('./media-utils');
-const { resolveReturnScheme } = require('./oauth-helpers');
+const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage';
@@ -168,15 +168,15 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     console.log('[google] callback — code:', !!code, '| state:', !!state, '| error:', googleError ?? 'none');
 
     if (googleError) {
-      return res.redirect(`${fallbackBase}?platform=google&error=${encodeURIComponent(String(googleError))}`);
+      return sendOAuthRedirect(res, `${fallbackBase}?platform=google&error=${encodeURIComponent(String(googleError))}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${fallbackBase}?platform=google&error=missing_params`);
+      return sendOAuthRedirect(res, `${fallbackBase}?platform=google&error=missing_params`);
     }
 
     if (!clientId || !clientSecret || !redirectUri) {
-      return res.redirect(`${fallbackBase}?platform=google&error=server_not_configured`);
+      return sendOAuthRedirect(res, `${fallbackBase}?platform=google&error=server_not_configured`);
     }
 
     const pool = getPool();
@@ -197,16 +197,16 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
       if (!stateRow) {
         await client.query('ROLLBACK');
-        return res.redirect(`${fallbackBase}?platform=google&error=invalid_state`);
+        return sendOAuthRedirect(res, `${fallbackBase}?platform=google&error=invalid_state`);
       }
       const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
       if (stateRow.used_at) {
         await client.query('ROLLBACK');
-        return res.redirect(`${stateBase}?platform=google&error=state_already_used`);
+        return sendOAuthRedirect(res, `${stateBase}?platform=google&error=state_already_used`);
       }
       if (stateRow.expires_at < now) {
         await client.query('ROLLBACK');
-        return res.redirect(`${stateBase}?platform=google&error=state_expired`);
+        return sendOAuthRedirect(res, `${stateBase}?platform=google&error=state_expired`);
       }
 
       await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -257,7 +257,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
 
       const accounts = accountsData.accounts ?? [];
       if (accounts.length === 0) {
-        return res.redirect(`${returnBase}?platform=google&error=no_business_accounts`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=google&error=no_business_accounts`);
       }
 
       // Step 3 — Fetch locations for each account
@@ -294,7 +294,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       }
 
       if (allLocations.length === 0) {
-        return res.redirect(`${returnBase}?platform=google&error=no_locations`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=google&error=no_locations`);
       }
 
       // Step 4 — Persist each location
@@ -333,12 +333,12 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         );
       }
 
-      return res.redirect(
+      return sendOAuthRedirect(res,
         `${returnBase}?platform=google&success=true&location_count=${allLocations.length}`
       );
     } catch (err) {
       console.error('[google] callback error:', err.message);
-      return res.redirect(`${returnBase}?platform=google&error=auth_failed`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=google&error=auth_failed`);
     }
   });
 

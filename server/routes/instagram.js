@@ -17,7 +17,7 @@ const {
   orderWithFeaturedFirst,
   parseIntArray,
 } = require('./media-utils');
-const { resolveReturnScheme } = require('./oauth-helpers');
+const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
 
 // When INSTAGRAM_ENABLED=false the server blocks new connections and publishing
 // while keeping compliance endpoints (uninstall, delete, deletion-status) active.
@@ -132,15 +132,15 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
     console.log('[instagram] callback — code:', !!code, '| state:', !!state, '| error:', igError ?? 'none');
 
     if (igError) {
-      return res.redirect(`${returnBase}?platform=instagram&error=${encodeURIComponent(String(igError))}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=${encodeURIComponent(String(igError))}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${returnBase}?platform=instagram&error=missing_params`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=missing_params`);
     }
 
     if (!appId || !appSecret || !redirectUri) {
-      return res.redirect(`${returnBase}?platform=instagram&error=server_not_configured`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=server_not_configured`);
     }
 
     try {
@@ -162,16 +162,16 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
         if (!stateRow) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=instagram&error=invalid_state`);
+          return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=invalid_state`);
         }
         const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=instagram&error=state_already_used`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=instagram&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=instagram&error=state_expired`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=instagram&error=state_expired`);
         }
 
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -240,7 +240,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
 
       const accountType = profileData.account_type;
       if (accountType !== 'BUSINESS' && accountType !== 'CREATOR') {
-        return res.redirect(`${returnBase}?platform=instagram&error=personal_account_not_supported`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=personal_account_not_supported`);
       }
 
       const accountName = profileData.name || profileData.username || `Instagram ${igUserId}`;
@@ -259,12 +259,12 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         [stateRow.user_id, accountName, igUserId, tokenEnc, now + expiresMs, now, now]
       );
 
-      return res.redirect(`${returnBase}?platform=instagram&success=true`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=instagram&success=true`);
 
     } catch (err) {
       console.error('[instagram] callback error:', err.message);
       const code = err.isPermissionError ? 'insufficient_permissions' : 'auth_failed';
-      return res.redirect(`${returnBase}?platform=instagram&error=${code}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=${code}`);
     }
   });
 

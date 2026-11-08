@@ -262,21 +262,21 @@ describe('POST /billing/portal-session', () => {
 describe('GET /billing/checkout-return', () => {
   it('redirects to elmer://billing/return?status=success', async () => {
     const res = await request(app).get('/billing/checkout-return?status=success');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('elmer://billing/return'));
-    assert.ok(res.headers.location.includes('status=success'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('elmer://billing/return'));
+    assert.ok(res.text.includes('status=success'));
   });
 
   it('redirects to elmer://billing/return?status=cancel', async () => {
     const res = await request(app).get('/billing/checkout-return?status=cancel');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('status=cancel'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('status=cancel'));
   });
 
   it('uses status=unknown when no status param is provided', async () => {
     const res = await request(app).get('/billing/checkout-return');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('status=unknown'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('status=unknown'));
   });
 
   it('uses APP_SCHEME env var for the redirect scheme (staging scenario)', async () => {
@@ -287,12 +287,12 @@ describe('GET /billing/checkout-return', () => {
     process.env.APP_SCHEME = 'elmer-staging';
     try {
       const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.status, 200);
       assert.ok(
-        res.headers.location.startsWith('elmer-staging://billing/return'),
-        `expected elmer-staging:// prefix, got: ${res.headers.location}`
+        res.text.includes('elmer-staging://billing/return'),
+        `expected elmer-staging:// prefix, got: ${res.text}`
       );
-      assert.ok(res.headers.location.includes('status=success'));
+      assert.ok(res.text.includes('status=success'));
     } finally {
       if (original === undefined) delete process.env.APP_SCHEME;
       else process.env.APP_SCHEME = original;
@@ -304,10 +304,10 @@ describe('GET /billing/checkout-return', () => {
     delete process.env.APP_SCHEME;
     try {
       const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.status, 200);
       assert.ok(
-        res.headers.location.startsWith('elmer://billing/return'),
-        `expected elmer:// prefix, got: ${res.headers.location}`
+        res.text.includes('elmer://billing/return'),
+        `expected elmer:// prefix, got: ${res.text}`
       );
     } finally {
       if (original !== undefined) process.env.APP_SCHEME = original;

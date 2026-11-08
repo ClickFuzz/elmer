@@ -12,7 +12,7 @@ const { tryReserveFreePublication, redeemFreePublication, releaseFreePublication
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { encrypt, decrypt } = require('../crypto');
 const { orderWithFeaturedFirst } = require('./media-utils');
-const { resolveReturnScheme } = require('./oauth-helpers');
+const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -252,20 +252,20 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
     const { state, site_url, user_login, password, error: wpError } = req.query;
 
     if (wpError) {
-      return res.redirect(`${returnBase}?platform=wordpress&error=${encodeURIComponent(String(wpError))}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=${encodeURIComponent(String(wpError))}`);
     }
 
     if (!state || !site_url || !user_login || !password ||
         typeof state !== 'string' || typeof site_url !== 'string' ||
         typeof user_login !== 'string' || typeof password !== 'string') {
-      return res.redirect(`${returnBase}?platform=wordpress&error=missing_params`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=missing_params`);
     }
 
     // SSRF guard on site_url returned by WordPress
     const norm = normalizeWordPressUrl(site_url);
     if (norm.error) {
       console.warn('[wp] callback: SSRF guard rejected site_url:', site_url);
-      return res.redirect(`${returnBase}?platform=wordpress&error=invalid_site`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=invalid_site`);
     }
     const normalizedSite = norm.url;
 
@@ -286,16 +286,16 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
         stateRow = rows[0];
         if (!stateRow) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=wordpress&error=invalid_state`);
+          return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=invalid_state`);
         }
         const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=wordpress&error=state_already_used`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=wordpress&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=wordpress&error=state_expired`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=wordpress&error=state_expired`);
         }
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
         await client.query('COMMIT');
@@ -313,7 +313,7 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       const verification = await verifyWordPressCredentials(normalizedSite, user_login, password, wpFetch);
       if (!verification.ok) {
         console.warn('[wp] callback: credential verification failed:', verification.error);
-        return res.redirect(`${returnBase}?platform=wordpress&error=auth_failed`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=auth_failed`);
       }
 
       // Encrypt and store the credentials
@@ -345,11 +345,11 @@ function createWordPressRouter({ wpFetch = (...args) => fetch(...args) } = {}) {
       );
 
       console.log('[wp] callback: connected site', normalizedSite, 'for user', stateRow.user_id);
-      return res.redirect(`${returnBase}?platform=wordpress&success=true&site_name=${encodeURIComponent(siteName)}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&success=true&site_name=${encodeURIComponent(siteName)}`);
 
     } catch (err) {
       console.error('[wp] callback error:', err.message);
-      return res.redirect(`${returnBase}?platform=wordpress&error=auth_failed`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=wordpress&error=auth_failed`);
     }
   });
 

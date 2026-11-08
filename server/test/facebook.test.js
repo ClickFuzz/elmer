@@ -136,8 +136,8 @@ describe('GET /facebook/callback', () => {
     const res = await request(app)
       .get('/facebook/callback')
       .query({ error: 'access_denied', error_description: 'User denied access' });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error='), 'location should include error param');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error='), 'location should include error param');
   });
 
   it('redirects with error for missing code or state', async () => {
@@ -146,8 +146,8 @@ describe('GET /facebook/callback', () => {
     const res = await request(app)
       .get('/facebook/callback')
       .query({ code: 'abc' });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=missing_params'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=missing_params'));
   });
 
   it('redirects with error for an invalid state', async () => {
@@ -156,8 +156,8 @@ describe('GET /facebook/callback', () => {
     const res = await request(app)
       .get('/facebook/callback')
       .query({ code: 'abc123', state: 'deadbeef'.repeat(6) });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=invalid_state'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=invalid_state'));
   });
 
   it('redirects with error for an already-used state', async () => {
@@ -172,8 +172,8 @@ describe('GET /facebook/callback', () => {
     const res = await request(app)
       .get('/facebook/callback')
       .query({ code: 'abc123', state });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=state_already_used'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=state_already_used'));
   });
 
   it('stores page tokens and redirects to app scheme on success', async () => {
@@ -198,9 +198,9 @@ describe('GET /facebook/callback', () => {
       .get('/facebook/callback')
       .query({ code: 'auth_code_xyz', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('success=true'));
-    assert.ok(res.headers.location.includes('page_count=2'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'));
+    assert.ok(res.text.includes('page_count=2'));
 
     const { rows: pages } = await getPool().query(
       `SELECT account_id, account_name, selected FROM connected_platforms
@@ -274,8 +274,8 @@ describe('GET /facebook/callback', () => {
       .get('/facebook/callback')
       .query({ code: 'code_xyz', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=no_manageable_pages'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=no_manageable_pages'));
   });
 
   it('redirects with insufficient_permissions when Graph API returns permission error', async () => {
@@ -298,10 +298,10 @@ describe('GET /facebook/callback', () => {
       .get('/facebook/callback')
       .query({ code: 'code_xyz', state });
 
-    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.status, 200);
     assert.ok(
-      res.headers.location.includes('error=insufficient_permissions'),
-      `expected insufficient_permissions, got: ${res.headers.location}`
+      res.text.includes('error=insufficient_permissions'),
+      `expected insufficient_permissions, got: ${res.text}`
     );
   });
 });

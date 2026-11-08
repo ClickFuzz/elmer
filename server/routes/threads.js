@@ -17,7 +17,7 @@ const {
   prepareCarouselForInstagram,
   generateBeforeAfterComposite,
 } = require('./media-utils');
-const { resolveReturnScheme } = require('./oauth-helpers');
+const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
 
 const THREADS_AUTHORIZE_URL      = 'https://threads.net/oauth/authorize';
 const THREADS_TOKEN_URL          = 'https://graph.threads.net/oauth/access_token';
@@ -169,15 +169,15 @@ function createThreadsRouter({
     console.log('[threads] callback — code:', !!code, '| state:', !!state, '| error:', threadsError ?? 'none');
 
     if (threadsError) {
-      return res.redirect(`${returnBase}?platform=threads&error=${encodeURIComponent(String(threadsError))}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=threads&error=${encodeURIComponent(String(threadsError))}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${returnBase}?platform=threads&error=missing_params`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=threads&error=missing_params`);
     }
 
     if (!appId || !appSecret || !redirectUri) {
-      return res.redirect(`${returnBase}?platform=threads&error=server_not_configured`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=threads&error=server_not_configured`);
     }
 
     try {
@@ -199,16 +199,16 @@ function createThreadsRouter({
 
         if (!stateRow) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=threads&error=invalid_state`);
+          return sendOAuthRedirect(res, `${returnBase}?platform=threads&error=invalid_state`);
         }
         const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=threads&error=state_already_used`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=threads&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${stateBase}?platform=threads&error=state_expired`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=threads&error=state_expired`);
         }
 
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -286,11 +286,11 @@ function createThreadsRouter({
         [stateRow.user_id, accountName, threadsUserId, tokenEnc, now + expiresMs, now, now]
       );
 
-      return res.redirect(`${returnBase}?platform=threads&success=true`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=threads&success=true`);
 
     } catch (err) {
       console.error('[threads] callback error:', err.message);
-      return res.redirect(`${returnBase}?platform=threads&error=auth_failed`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=threads&error=auth_failed`);
     }
   });
 

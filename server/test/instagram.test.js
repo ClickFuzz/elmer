@@ -167,9 +167,9 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ error: 'access_denied' });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error='), 'location should include error param');
-    assert.ok(res.headers.location.includes('platform=instagram'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error='), 'location should include error param');
+    assert.ok(res.text.includes('platform=instagram'));
   });
 
   it('redirects with error for missing code or state', async () => {
@@ -178,8 +178,8 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ code: 'abc' });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=missing_params'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=missing_params'));
   });
 
   it('redirects with error for an invalid state', async () => {
@@ -188,8 +188,8 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ code: 'abc123', state: 'deadbeef'.repeat(6) });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=invalid_state'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=invalid_state'));
   });
 
   it('redirects with error for an already-used state', async () => {
@@ -204,8 +204,8 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ code: 'abc123', state });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=state_already_used'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=state_already_used'));
   });
 
   it('redirects with error for an expired state', async () => {
@@ -221,8 +221,8 @@ describe('GET /instagram/callback', () => {
     const res = await request(app)
       .get('/instagram/callback')
       .query({ code: 'abc123', state });
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=state_expired'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=state_expired'));
   });
 
   it('stores account and redirects to app scheme on success', async () => {
@@ -246,9 +246,9 @@ describe('GET /instagram/callback', () => {
       .get('/instagram/callback')
       .query({ code: 'auth_code_xyz', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('success=true'));
-    assert.ok(res.headers.location.includes('platform=instagram'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'));
+    assert.ok(res.text.includes('platform=instagram'));
 
     const { rows } = await getPool().query(
       `SELECT account_id, account_name, selected FROM connected_platforms
@@ -302,8 +302,8 @@ describe('GET /instagram/callback', () => {
       .get('/instagram/callback')
       .query({ code: 'code_xyz', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=personal_account_not_supported'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=personal_account_not_supported'));
   });
 
   it('accepts Creator accounts', async () => {
@@ -324,8 +324,8 @@ describe('GET /instagram/callback', () => {
       .get('/instagram/callback')
       .query({ code: 'creator_code', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('success=true'), 'Creator account should be accepted');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'), 'Creator account should be accepted');
 
     const { rows } = await getPool().query(
       `SELECT account_name FROM connected_platforms WHERE user_id = $1 AND platform = 'instagram'`,
@@ -353,8 +353,8 @@ describe('GET /instagram/callback', () => {
       .get('/instagram/callback')
       .query({ code: 'code_unknown', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=personal_account_not_supported'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=personal_account_not_supported'));
   });
 
   it('reconnecting updates the token without duplicating the row', async () => {
@@ -402,8 +402,8 @@ describe('GET /instagram/callback', () => {
       .get('/instagram/callback')
       .query({ code: 'bad_code', state });
 
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('error=auth_failed'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=auth_failed'));
   });
 });
 

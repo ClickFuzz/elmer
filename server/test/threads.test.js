@@ -144,22 +144,22 @@ describe('GET /threads/callback', () => {
   it('redirects with error when igError param present', async () => {
     app = createApp();
     const res = await request(app).get('/threads/callback?error=access_denied');
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location?.includes('error=access_denied'));
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('error=access_denied'));
   });
 
   it('redirects with missing_params when code/state absent', async () => {
     app = createApp();
     const res = await request(app).get('/threads/callback');
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location?.includes('missing_params'));
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('missing_params'));
   });
 
   it('redirects with invalid_state for unknown state', async () => {
     app = createApp();
     const res = await request(app).get('/threads/callback?code=abc&state=unknownstate');
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location?.includes('invalid_state'));
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('invalid_state'));
   });
 
   it('completes OAuth flow and stores encrypted token', async () => {
@@ -180,9 +180,9 @@ describe('GET /threads/callback', () => {
     const state = new URL(stateRes.body.authUrl).searchParams.get('state');
 
     const res = await request(app).get(`/threads/callback?code=testcode&state=${state}`);
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location?.includes('success=true'));
-    assert.ok(res.headers.location?.includes('platform=threads'));
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('success=true'));
+    assert.ok(res.text.includes('platform=threads'));
 
     const { rows } = await getPool().query(
       `SELECT * FROM connected_platforms WHERE user_id = $1 AND platform = 'threads'`,
@@ -208,8 +208,8 @@ describe('GET /threads/callback', () => {
 
     await request(app).get(`/threads/callback?code=testcode&state=${state}`);
     const res2 = await request(app).get(`/threads/callback?code=testcode&state=${state}`);
-    assert.equal(res2.status, 302);
-    assert.ok(res2.headers.location?.includes('state_already_used'));
+    assert.equal(res2.status, 200);
+    assert.ok(res2.text.includes('state_already_used'));
   });
 });
 
