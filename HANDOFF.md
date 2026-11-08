@@ -2,65 +2,75 @@
 
 ## Goal
 
-Complete Google Play internal testing of Android RevenueCat billing. Upload the signed AAB to Google Play Console and run an end-to-end purchase/restore test on a real Android device.
+Two parallel work items on staging:
+1. Android registration fix (committed, needs EAS build + test)
+2. Android RevenueCat billing test (AAB built, needs Google Play upload + purchase test)
 
-## Current Problem
+## Current Problem (Registration Fix)
 
-Build is complete and committed. No code blockers remain. The AAB has not yet been uploaded to Google Play Console or tested on device.
+Diagnosed and fixed. Root cause: `SecureStore.setItemAsync` on Android 15 emulators throws
+when the Keystore is unavailable (no hardware backing or no device lock screen). The old
+single `catch` block treated every post-registration exception as a network error, showing
+"Could not reach the server" after a successful server-side account creation.
+
+Fix committed `5e1bd4d` — not yet EAS-built or tested on device.
 
 ## Proven Facts
 
-- `react-native-purchases@10.16.0` supports Google Play base plans/offers (uses GPBL v5+). No SDK upgrade needed.
-- `staging-google-play` EAS profile builds with package `com.clickfuzz.elmer` (no `APP_VARIANT` set → `app.config.js` uses production values).
-- `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM` added to `staging-google-play` env in `eas.json` and committed (`5d68bff`).
-- Signed AAB built successfully: versionCode 3, keystore `8E6K3E1KGm`.
-- Server already handles `PLAY_STORE` → `google` provider mapping in `/billing/rc-verify-purchase` and `/billing/rc-webhook`.
-- `SubscriptionScreen.tsx` already shows Google Play trial disclosure text on Android and opens the Google Play subscriptions URL for `provider === 'google'` in Manage Subscription.
-- Staging API (`https://api-staging.getelmer.com`) is live with `REVENUECAT_SECRET_KEY` and `REVENUECAT_WEBHOOK_SECRET` set.
-- **Previous iOS work**: TestFlight build 23 (`com.clickfuzz.elmer`) submitted Nov 6; sandbox Apple purchase test still pending.
+- Server creates the account on the first attempt (second attempt returns 409 "email exists")
+- The error was thrown by `setSession → SecureStore.setItemAsync` AFTER a successful 201 response
+- `setSession` now falls back to SQLite when SecureStore throws — `setSession` no longer throws
+- `handleAuth` now has separate catch blocks: network errors vs. local storage errors
+- If registration returns 409, `handleAuth` auto-retries as login (recovers lost-response scenario)
+- RC Android RC key: `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM`
+- Server handles PLAY_STORE → `google` provider in rc-verify-purchase and rc-webhook
 
 ## Ruled Out
 
-- Package name mismatch (`com.clickfuzz.elmer.staging`) — not an issue; `staging-google-play` omits `APP_VARIANT`.
-- Preview API mode on Android — resolved by adding the RC Android key.
-- SDK incompatibility with base plans — SDK v10.16.0 supports them natively.
+- Network connectivity issue (second attempt reaches server and gets 409)
+- Server not creating the account (confirmed by 409 on retry)
+- TLS/certificate issue (second fetch succeeds)
 
-## Changed (staging — 14 commits ahead of main)
+## Changed (staging — 15 commits ahead of main)
 
-- `eas.json` — `EXPO_PUBLIC_RC_API_KEY_ANDROID` added to `staging-google-play` env. Committed `5d68bff`.
-- All prior RC integration changes from `fd73554` through `5d68bff` (services/purchases.ts, SubscriptionScreen.tsx, App.tsx, etc.) — see PASSDOWN for full list.
+- `screens/SignInScreen.tsx` — split try/catch; network error vs. storage error; 409 auto-login
+- `storage/database.ts` — `setSession`, `getSessionToken`, `clearSession` all handle SecureStore failures
 
 ## Production / Deployment State
 
-- AAB artifact: https://expo.dev/artifacts/eas/V1UkbYeUrAP8UuUt4sqctvg7fTlOem_Hm1whRphGiIU.aab
-- Build dashboard: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/d0531a6d-9071-4614-98dd-9f6462480f7c
-- Not yet uploaded to Google Play Console. Not yet installed or tested on Android.
-- TestFlight build 23 still in TestFlight; iOS sandbox test also still pending.
+- Registration fix: committed `5e1bd4d`, not yet built or deployed
+- RC Android AAB (versionCode 3): https://expo.dev/artifacts/eas/V1UkbYeUrAP8UuUt4sqctvg7fTlOem_Hm1whRphGiIU.aab
+  - Not yet uploaded to Google Play Console
+- TestFlight build 23 still in TestFlight; iOS sandbox purchase test still pending
 
 ## Exact Next Step
 
-Upload the AAB to Google Play Console → `com.clickfuzz.elmer` → Internal testing track → Create new release → upload AAB → add test accounts → publish internal track.
+1. **For registration fix**: Run `bunx eas-cli build --profile staging-google-play --platform android`
+   then test registration on Android 15 emulator.
 
-Then: install via internal testing link on Android device, sign in, tap Subscribe, verify 14-day trial offer appears (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`), complete purchase, verify server grants `hasAccess = true`.
+2. **For RC Android**: Upload existing AAB (versionCode 3) to Google Play Console →
+   Internal testing → install → sign in → subscribe → verify server grants hasAccess.
 
 ## Do Not Repeat
 
-- RC SDK version audit — confirmed v10.16.0 is compatible with base plans.
-- Package name verification — confirmed `com.clickfuzz.elmer` for `staging-google-play`.
-- Server PLAY_STORE handler check — already implemented.
+- RC SDK version audit — confirmed v10.16.0 compatible with base plans
+- Package name verification — confirmed `com.clickfuzz.elmer` for staging-google-play
+- Server PLAY_STORE handler check — already implemented
+- Network connectivity investigation — confirmed issue is client-side storage, not network
 
 ## Relevant Files
 
-- `eas.json` — `staging-google-play` profile (key now set)
+- `screens/SignInScreen.tsx` — `handleAuth` (lines 27–88)
+- `storage/database.ts` — `setSession`, `getSessionToken`, `clearSession` (lines ~213–280)
+- `eas.json` — `staging-google-play` profile
 - `services/purchases.ts` — `initPurchases`, `purchaseSubscription`, `restorePurchases`
-- `screens/SubscriptionScreen.tsx` — `handleStartTrial`, `verifyPurchaseWithServer`, `handleManageSubscription`
-- `server/routes/billing.js` — `/billing/rc-verify-purchase` (line 1009), `/billing/rc-webhook` (line 986)
+- `screens/SubscriptionScreen.tsx` — `handleStartTrial`, `verifyPurchaseWithServer`
 
 ## Git State
 
-- Branch: `staging`, 14 commits ahead of `main`
-- HEAD: `5d68bff` — Add EXPO_PUBLIC_RC_API_KEY_ANDROID to staging-google-play EAS profile
+- Branch: `staging`, 15 commits ahead of `main`
+- HEAD: `5e1bd4d` — Fix Android registration showing false network error
 - Working tree: clean
-- **Do not merge to main until both Android purchase test AND iOS sandbox test pass**
+- **Do not merge to main until registration test + both iOS/Android purchase tests pass**
 
-## MERGE STATUS: INCOMPLETE — staging contains unmerged RC integration (iOS + Android); merge after both purchase tests pass.
+## MERGE STATUS: INCOMPLETE — staging contains unmerged RC integration + registration fix; merge after all tests pass.
