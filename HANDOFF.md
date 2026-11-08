@@ -1,67 +1,66 @@
 # HANDOFF
 
 ## Goal
-Complete real Apple sandbox subscription purchase against Railway staging, then merge staging → main.
+
+Complete Google Play internal testing of Android RevenueCat billing. Upload the signed AAB to Google Play Console and run an end-to-end purchase/restore test on a real Android device.
 
 ## Current Problem
-Build 23 (staging-testflight profile) is in TestFlight pending install and testing. No code changes needed — purely a testing step. Install, sign in, subscribe, verify unlock.
+
+Build is complete and committed. No code blockers remain. The AAB has not yet been uploaded to Google Play Console or tested on device.
 
 ## Proven Facts
-- **TestFlight build 23**: bundle `com.clickfuzz.elmer`, v1.0.0, submitted 6:09 PM Nov 6
-- **API**: build connects to `https://api-staging.getelmer.com` (not production)
-- **RC SDK key**: `appl_qiMBWYvElXNhKitKwqFWXExCYsq` baked into the build env
-- **Railway staging RC vars**: `REVENUECAT_SECRET_KEY` and `REVENUECAT_WEBHOOK_SECRET` live (verified: webhook returns 401 without token; verify-purchase returns 401 not 503)
-- **EAS submission**: `e701288d-1e8b-411a-a4dc-547affeab019`, status: finished
-- **react-native-purchases**: pinned at `10.16.0` — `PurchasesHybridCommon 20.4.0` (required by 11.0.1) was not published to CocoaPods CDN or git specs during the Nov 2–6 RevenueCat disruption; `19.17.0` used by 10.16.0 is unaffected; API is fully compatible
+
+- `react-native-purchases@10.16.0` supports Google Play base plans/offers (uses GPBL v5+). No SDK upgrade needed.
+- `staging-google-play` EAS profile builds with package `com.clickfuzz.elmer` (no `APP_VARIANT` set → `app.config.js` uses production values).
+- `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM` added to `staging-google-play` env in `eas.json` and committed (`5d68bff`).
+- Signed AAB built successfully: versionCode 3, keystore `8E6K3E1KGm`.
+- Server already handles `PLAY_STORE` → `google` provider mapping in `/billing/rc-verify-purchase` and `/billing/rc-webhook`.
+- `SubscriptionScreen.tsx` already shows Google Play trial disclosure text on Android and opens the Google Play subscriptions URL for `provider === 'google'` in Manage Subscription.
+- Staging API (`https://api-staging.getelmer.com`) is live with `REVENUECAT_SECRET_KEY` and `REVENUECAT_WEBHOOK_SECRET` set.
+- **Previous iOS work**: TestFlight build 23 (`com.clickfuzz.elmer`) submitted Nov 6; sandbox Apple purchase test still pending.
 
 ## Ruled Out
-- `withGitPodSource` plugin: cloned the git specs repo successfully, pod still not found — 20.4.0 genuinely unpublished
-- `podInstallCommand: "pod install --repo-update"`: no effect on EAS (agents have no local git specs repo)
-- `com.clickfuzz.elmer.staging` internal distribution build: cannot be submitted to TestFlight (no ASC app for that bundle ID)
 
-## Changed (staging — 12 commits ahead of main)
-- `services/purchases.ts` (NEW) — RC SDK wrapper: configure, purchase, restore, logIn/logOut
-- `screens/SubscriptionScreen.tsx` — native StoreKit purchase flow, `verifyPurchaseWithServer()` fast path, provider-aware manage (Apple→Account Settings, Google→Play, Stripe→Portal), Restore Purchases button, IAP disclosure text; Stripe AppState listener removed
-- `App.tsx` — `initPurchases()` on startup, `switchPurchasesUser()` after sign-in, `logOutPurchases()` on sign-out
-- `eas.json` — `staging-testflight` build + submit profiles added; `EXPO_PUBLIC_RC_API_KEY_IOS` in staging env; `react-native-purchases` pinned to `10.16.0`
-- `server/routes/billing.js` — `provider` field in `/billing/subscription` response
-- `docs/ARCHITECTURE.md` — Phase 14 (RevenueCat) fully documented
-- `server/.env.example` — `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET` added
-- `app.json` — `expo-build-properties` plugin added (kept; harmless)
+- Package name mismatch (`com.clickfuzz.elmer.staging`) — not an issue; `staging-google-play` omits `APP_VARIANT`.
+- Preview API mode on Android — resolved by adding the RC Android key.
+- SDK incompatibility with base plans — SDK v10.16.0 supports them natively.
+
+## Changed (staging — 14 commits ahead of main)
+
+- `eas.json` — `EXPO_PUBLIC_RC_API_KEY_ANDROID` added to `staging-google-play` env. Committed `5d68bff`.
+- All prior RC integration changes from `fd73554` through `5d68bff` (services/purchases.ts, SubscriptionScreen.tsx, App.tsx, etc.) — see PASSDOWN for full list.
+
+## Production / Deployment State
+
+- AAB artifact: https://expo.dev/artifacts/eas/V1UkbYeUrAP8UuUt4sqctvg7fTlOem_Hm1whRphGiIU.aab
+- Build dashboard: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/d0531a6d-9071-4614-98dd-9f6462480f7c
+- Not yet uploaded to Google Play Console. Not yet installed or tested on Android.
+- TestFlight build 23 still in TestFlight; iOS sandbox test also still pending.
 
 ## Exact Next Step
-1. Install build 23 from TestFlight on device
-2. Sign in to Elmer account (connects to `api-staging.getelmer.com`)
-3. Tap Subscribe → Apple sandbox purchase sheet → complete with sandbox Apple ID
-4. Verify app unlocks within seconds (`rc-verify-purchase` polls RC immediately after purchase)
-5. RC webhook fires asynchronously — check Railway staging logs if needed
-6. If purchase test passes → merge `staging` → `main`
+
+Upload the AAB to Google Play Console → `com.clickfuzz.elmer` → Internal testing track → Create new release → upload AAB → add test accounts → publish internal track.
+
+Then: install via internal testing link on Android device, sign in, tap Subscribe, verify 14-day trial offer appears (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`), complete purchase, verify server grants `hasAccess = true`.
 
 ## Do Not Repeat
-- Do not re-investigate the CocoaPods disruption or add pod workarounds
-- Do not use the `staging` profile (internal distribution, `com.clickfuzz.elmer.staging`) for purchase testing — wrong bundle ID
-- `com.clickfuzz.elmer.staging` has no App Store Connect entry — cannot go to TestFlight
+
+- RC SDK version audit — confirmed v10.16.0 is compatible with base plans.
+- Package name verification — confirmed `com.clickfuzz.elmer` for `staging-google-play`.
+- Server PLAY_STORE handler check — already implemented.
 
 ## Relevant Files
-- `services/purchases.ts` — `purchaseSubscription()`, `restorePurchases()`, `initPurchases()`
-- `screens/SubscriptionScreen.tsx` — `handleStartTrial()`, `verifyPurchaseWithServer()`, `pollForActivation()`
-- `App.tsx` — RC lifecycle (search `initPurchases`)
-- `server/routes/billing.js:986` — `POST /billing/rc-webhook`
-- `server/routes/billing.js:1009` — `POST /billing/rc-verify-purchase`
-- `eas.json` — `staging-testflight` profile
 
-## Post-Test Upgrade
-After Nov 6 CocoaPods disruption clears, upgrade react-native-purchases back to latest 11.x:
-```bash
-npx expo install react-native-purchases@latest
-npx tsc --noEmit
-# build new staging-testflight build to confirm, then production
-```
+- `eas.json` — `staging-google-play` profile (key now set)
+- `services/purchases.ts` — `initPurchases`, `purchaseSubscription`, `restorePurchases`
+- `screens/SubscriptionScreen.tsx` — `handleStartTrial`, `verifyPurchaseWithServer`, `handleManageSubscription`
+- `server/routes/billing.js` — `/billing/rc-verify-purchase` (line 1009), `/billing/rc-webhook` (line 986)
 
 ## Git State
-- Branch: `staging`, 12 commits ahead of `main`
-- Working tree: clean
-- Last commit: `fd73554` — Add staging-testflight EAS profile
-- **Do not merge to main until sandbox purchase test passes**
 
-## MERGE STATUS: INCOMPLETE — staging contains unmerged RC integration; merge after sandbox test passes.
+- Branch: `staging`, 14 commits ahead of `main`
+- HEAD: `5d68bff` — Add EXPO_PUBLIC_RC_API_KEY_ANDROID to staging-google-play EAS profile
+- Working tree: clean
+- **Do not merge to main until both Android purchase test AND iOS sandbox test pass**
+
+## MERGE STATUS: INCOMPLETE — staging contains unmerged RC integration (iOS + Android); merge after both purchase tests pass.
