@@ -36,29 +36,55 @@ export default function SignInScreen({ onSignIn }: Props) {
     }
     setLoading(true);
     setError(null);
+
+    // ── Network request ────────────────────────────────────────────────────────
+    let res: Response;
+    let data: { token?: string; userId?: number; expiresAt?: number; error?: string };
     try {
       const endpoint = mode === 'register' ? '/auth/register' : '/auth/login';
-      const res  = await fetch(`${API_URL}${endpoint}`, {
+      res  = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: emailTrimmed, password }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? 'Sign-in failed. Check your credentials and try again.');
-        return;
-      }
-      await setSession(data.token, emailTrimmed, data.userId ?? undefined);
-      if (data.userId) Analytics.identify(data.userId);
-      if (mode === 'register') {
-        Analytics.signup_completed({ signup_method: 'email', platform: 'mobile' });
-      }
-      onSignIn();
+      data = await res.json();
     } catch {
       setError('Could not reach the server. Check your connection.');
-    } finally {
       setLoading(false);
+      return;
     }
+
+    // ── Server-side error ──────────────────────────────────────────────────────
+    if (!res.ok) {
+      // If the account already exists and we tried to register, the server
+      // created it on a prior attempt whose response was lost (e.g. device
+      // storage failure). Silently retry as a login so the user gets in.
+      if (mode === 'register' && res.status === 409) {
+        setLoading(false);
+        handleAuth('login');
+        return;
+      }
+      setError(data.error ?? 'Sign-in failed. Check your credentials and try again.');
+      setLoading(false);
+      return;
+    }
+
+    // ── Save session locally ───────────────────────────────────────────────────
+    try {
+      await setSession(data.token!, emailTrimmed, data.userId ?? undefined);
+    } catch {
+      // Local storage failed — registration/login succeeded on the server.
+      setError('Signed in but could not save session. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    if (data.userId) Analytics.identify(data.userId);
+    if (mode === 'register') {
+      Analytics.signup_completed({ signup_method: 'email', platform: 'mobile' });
+    }
+    setLoading(false);
+    onSignIn();
   };
 
   return (

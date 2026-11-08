@@ -211,19 +211,30 @@ export async function deleteSetting(key: string): Promise<void> {
 }
 
 // ── Session token (Elmer account) ─────────────────────────────────────────────
-// Token is stored in SecureStore (Keychain/Keystore); email stays in SQLite.
+// Token is stored in SecureStore (Keychain/Keystore) with SQLite as fallback.
+// Android Keystore can be unavailable on emulators (API 35) or hardware that
+// lacks a secure lock screen; we silently fall back rather than throwing.
 
 const SECURE_TOKEN_KEY = 'elmer_session_token';
 
 export async function getSessionToken(): Promise<string | null> {
-  const token = await SecureStore.getItemAsync(SECURE_TOKEN_KEY);
-  if (token) return token;
-  // One-time migration: move any plaintext token left in SQLite to SecureStore.
+  try {
+    const token = await SecureStore.getItemAsync(SECURE_TOKEN_KEY);
+    if (token) return token;
+  } catch {
+    // SecureStore unavailable; fall through to SQLite
+  }
+  // Legacy/fallback: token stored in SQLite settings row.
   const legacy = await getSetting('session_token');
   if (legacy) {
-    await SecureStore.setItemAsync(SECURE_TOKEN_KEY, legacy);
-    const db = await getDb();
-    await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+    // Attempt one-time promotion to SecureStore; ignore if it fails.
+    try {
+      await SecureStore.setItemAsync(SECURE_TOKEN_KEY, legacy);
+      const db = await getDb();
+      await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+    } catch {
+      // Keystore still unavailable; stay in SQLite mode.
+    }
     return legacy;
   }
   return null;
@@ -241,16 +252,29 @@ export async function getSessionUserId(): Promise<number | null> {
 }
 
 export async function setSession(token: string, email: string, userId?: number): Promise<void> {
-  await SecureStore.setItemAsync(SECURE_TOKEN_KEY, token);
+  let savedToSecureStore = false;
+  try {
+    await SecureStore.setItemAsync(SECURE_TOKEN_KEY, token);
+    savedToSecureStore = true;
+  } catch {
+    // Android Keystore unavailable; persist token in SQLite instead.
+    await setSetting('session_token', token);
+  }
   await setSetting('session_email', email);
   if (userId != null) await setSetting('session_user_id', String(userId));
-  // Remove any legacy plaintext token that may exist from a prior install.
-  const db = await getDb();
-  await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+  if (savedToSecureStore) {
+    // Clean up any legacy plaintext token now that SecureStore is working.
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM settings WHERE key = 'session_token'`);
+  }
 }
 
 export async function clearSession(): Promise<void> {
-  await SecureStore.deleteItemAsync(SECURE_TOKEN_KEY);
+  try {
+    await SecureStore.deleteItemAsync(SECURE_TOKEN_KEY);
+  } catch {
+    // Ignore — might not exist or Keystore unavailable.
+  }
   const db = await getDb();
   await db.runAsync(`DELETE FROM settings WHERE key IN ('session_token', 'session_email', 'session_user_id')`);
 }
