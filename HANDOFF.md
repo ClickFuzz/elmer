@@ -38,18 +38,19 @@ Fix committed `5e1bd4d` — not yet EAS-built or tested on device.
 
 ## Production / Deployment State
 
-- Registration fix: committed `5e1bd4d`, not yet built or deployed
-- RC Android AAB (versionCode 3): https://expo.dev/artifacts/eas/V1UkbYeUrAP8UuUt4sqctvg7fTlOem_Hm1whRphGiIU.aab
-  - Not yet uploaded to Google Play Console
+- Android AAB versionCode 4 (includes registration fix `5e1bd4d`):
+  https://expo.dev/artifacts/eas/9ZaJkNs_arNqi9Bd_YFV_HISVXoOVqIn48HF7pJrKXc.aab
+  Build dashboard: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/247c402d-ee9b-4dee-b71b-dbb7c53194bf
+  Keystore: 8E6K3E1KGm — NOT yet uploaded to Google Play Console
 - TestFlight build 23 still in TestFlight; iOS sandbox purchase test still pending
 
 ## Exact Next Step
 
-1. **For registration fix**: Run `bunx eas-cli build --profile staging-google-play --platform android`
-   then test registration on Android 15 emulator.
-
-2. **For RC Android**: Upload existing AAB (versionCode 3) to Google Play Console →
-   Internal testing → install → sign in → subscribe → verify server grants hasAccess.
+Upload AAB (versionCode 4) to Google Play Console → `com.clickfuzz.elmer` →
+Internal testing track → Create new release → upload AAB → publish.
+Then install on Android 15 emulator/device and run two tests:
+1. Registration: new account → should succeed without "network error"
+2. Billing: sign in → tap Subscribe → 14-day trial → verify hasAccess = true
 
 ## Do Not Repeat
 
