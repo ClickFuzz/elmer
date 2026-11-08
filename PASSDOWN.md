@@ -33,17 +33,18 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
-| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; iOS sandbox test pending; Android AAB built (versionCode 3), upload to Play Console pending |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; iOS sandbox test pending; Android AAB built (versionCode 4), upload to Play Console pending |
 | — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
+| — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `5d68bff` (14 commits ahead of main — RC integration + OAuth fix + Android RC key)
+- **Staging branch:** `staging` — HEAD `56ecdf8` (16 commits ahead of main — RC integration + OAuth fix + Android RC key + registration fix)
 - **Last known TestFlight build:** #24 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026 — includes OAuth return scheme fix)
-- **Last Android AAB build:** versionCode 3 (staging-google-play profile; `com.clickfuzz.elmer`; connects to staging API; built Nov 8 2026 — includes Android RC key) — artifact: https://expo.dev/artifacts/eas/V1UkbYeUrAP8UuUt4sqctvg7fTlOem_Hm1whRphGiIU.aab
+- **Last Android AAB build:** versionCode 4 (staging-google-play profile; `com.clickfuzz.elmer`; connects to staging API; built Nov 8 2026 — includes Android registration fix + RC key) — artifact: https://expo.dev/artifacts/eas/9ZaJkNs_arNqi9Bd_YFV_HISVXoOVqIn48HF7pJrKXc.aab — build: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/247c402d-ee9b-4dee-b71b-dbb7c53194bf
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
@@ -187,7 +188,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 - **No PostgreSQL/Redis/Supabase/Firebase addition** without explicit requirement.
 - **Platform independence** — Facebook, Instagram, Threads, WordPress failures must not affect each other.
 - **iOS billing:** RevenueCat SDK (`react-native-purchases`) + native StoreKit. RC offering `default`, package `$rc_monthly`, entitlement `elmer-post-everywhere`, product `com.clickfuzz.elmer.monthly`. After purchase: `POST /billing/rc-verify-purchase` fast path; RC webhook confirms. Existing Stripe subscribers retain access (multi-provider `subscriptions` table, V15 migration).
-- **Android billing:** RevenueCat SDK + Google Play Billing. RC key `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM` set in `staging-google-play` EAS profile. AAB (versionCode 3) built; upload to Google Play Console internal testing track pending.
+- **Android billing:** RevenueCat SDK + Google Play Billing. RC key `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM` set in `staging-google-play` EAS profile. AAB (versionCode 4, includes registration fix) built; upload to Google Play Console internal testing track pending.
 - **Web/Stripe billing:** `Linking.openURL()` to Stripe Checkout (unchanged for web users on getelmer.com).
 
 ---
@@ -227,7 +228,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 ## Pending Actions Before App Store Release
 
 1. **Complete iOS sandbox purchase test** — Install TestFlight build 24, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock.
-2. **Complete Android purchase test** — Upload AAB (versionCode 3) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Subscribe, verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`), verify unlock. Test Restore Purchases.
+2. **Complete Android purchase + registration test** — Upload AAB (versionCode 4) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account → should succeed without false "network error"; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases.
 3. **Merge staging → main** — After both iOS and Android purchase tests pass; 14 commits of RC integration.
 4. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
 4. **New production iOS build** — Required after merging RC integration (new native module; OTA alone is not sufficient). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
