@@ -370,10 +370,11 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.logoRow}>
-          <Text style={styles.logoText}>elmer</Text>
-          <Text style={styles.logoPeriod}>.</Text>
-        </View>
+        <Image
+          source={require('../assets/logo.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+        />
         <Text style={styles.headline}>Share More. Grow More.</Text>
         <Text style={styles.subheadline}>Take a minute to spread the word</Text>
       </View>
@@ -387,7 +388,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionIconWrap}>
-              <Ionicons name="camera" size={18} color={colors.cyan} />
+              <Ionicons name="camera" size={18} color={colors.blue} />
             </View>
             <View style={styles.sectionLabelGroup}>
               <Text style={styles.sectionLabel}>Photos</Text>
@@ -452,7 +453,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         {/* Audio */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <View style={styles.sectionIconWrap}>
+            <View style={[styles.sectionIconWrap, styles.sectionIconWrapMic]}>
               <Ionicons name="mic" size={18} color={colors.cyan} />
             </View>
             <View style={styles.sectionLabelGroup}>
@@ -574,10 +575,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  logoRow: { flexDirection: 'row', alignItems: 'baseline' },
-  logoText: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.textPrimary, letterSpacing: -1 },
-  logoPeriod: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.cyan, letterSpacing: -1 },
-  headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary, marginTop: 10, lineHeight: 30 },
+  logoImage: { height: 36, width: 160, marginBottom: 2 },
+  headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.navy, marginTop: 10, lineHeight: 30 },
   subheadline: { fontSize: 15, fontFamily: 'Inter_400Regular', color: colors.textSecondary, marginTop: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20 },
@@ -594,10 +593,13 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 9,
-    backgroundColor: 'rgba(83,219,243,0.12)',
+    backgroundColor: 'rgba(37,99,166,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+  },
+  sectionIconWrapMic: {
+    backgroundColor: 'rgba(228,0,109,0.1)',
   },
   sectionLabelGroup: { flex: 1 },
   sectionLabel: { fontSize: 17, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary },
@@ -673,7 +675,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.error,
     borderColor: colors.error,
   },
-  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.error },
+  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.cyan },
   recordDotActive: { backgroundColor: '#fff' },
   recordBtnText: { color: colors.textSecondary, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
   recordBtnTextActive: { color: '#fff' },
@@ -775,12 +777,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  radioSelected: { borderColor: colors.cyan },
+  radioSelected: { borderColor: colors.blue },
   radioDot: {
     width: 11,
     height: 11,
     borderRadius: 5.5,
-    backgroundColor: colors.cyan,
+    backgroundColor: colors.blue,
   },
   modalDivider: {
     height: 1,

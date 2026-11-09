@@ -905,7 +905,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             {publishState.results.map((r, i) => {
               const cfg = PLATFORM_CFG[r.platform] ?? PLATFORM_CFG.default;
               const canOpen = r.ok && !!r.postUrl;
-              const btnBg = r.ok ? cfg.bg : '#2A3347';
+              const btnBg = r.ok ? cfg.bg : colors.surfaceAlt;
               const iconColor = r.ok ? cfg.iconColor : colors.textMuted;
               return (
                 <TouchableOpacity
@@ -1415,7 +1415,7 @@ const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string
   instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
   threads:   { bg: '#fff',    iconColor: '#101010',        icon: 'logo-threads'   },
   twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
-  default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
+  default:   { bg: colors.surface, iconColor: colors.blue, icon: 'globe-outline' },
 };
 
 function truncateForThreads(text: string): string {
@@ -1665,7 +1665,7 @@ const styles = StyleSheet.create({
   destinationName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary, marginBottom: 2 },
   destinationSub: { fontSize: 12, color: colors.textMuted },
   connectedChip: {
-    backgroundColor: 'rgba(82,214,164,0.15)',
+    backgroundColor: 'rgba(67,227,160,0.15)',
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -1818,22 +1818,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(82,214,164,0.08)',
+    backgroundColor: 'rgba(67,227,160,0.08)',
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(82,214,164,0.2)',
+    borderColor: 'rgba(67,227,160,0.2)',
   },
   publishingText: { fontSize: 14, color: colors.success, fontWeight: '500' },
 
   publishSuccessBanner: {
-    backgroundColor: 'rgba(82,214,164,0.08)',
+    backgroundColor: 'rgba(67,227,160,0.08)',
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(82,214,164,0.2)',
+    borderColor: 'rgba(67,227,160,0.2)',
   },
   publishResultRow: {
     flexDirection: 'row',
@@ -1843,7 +1843,7 @@ const styles = StyleSheet.create({
   },
   publishResultBorder: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(82,214,164,0.2)',
+    borderTopColor: 'rgba(67,227,160,0.2)',
   },
   publishResultIcon: { fontSize: 14, fontWeight: '700', color: colors.success, lineHeight: 20 },
   publishResultIconError: { color: colors.error },

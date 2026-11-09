@@ -1100,16 +1100,16 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     && igAccount.token_expires_at < now + EXPIRY_WARN_MS;
 
   // 'connected' | 'warning' (expiring ≤7d) | 'error' (expired) | 'disconnected'
-  const fbDot  = isFbConnected ? '#52D6A4' : colors.textMuted;
+  const fbDot  = isFbConnected ? colors.success : colors.textMuted;
   const igDot  = !isIgConnected ? colors.textMuted
-    : igAccount!.token_expires_at != null && igAccount!.token_expires_at < now ? '#FF5050'
+    : igAccount!.token_expires_at != null && igAccount!.token_expires_at < now ? colors.error
     : igTokenExpiringSoon ? '#C8A040'
-    : '#52D6A4';
+    : colors.success;
   const thDot  = thAccount === null ? colors.textMuted
-    : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? '#FF5050'
+    : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? colors.error
     : thAccount.token_expires_at != null && thAccount.token_expires_at < now + EXPIRY_WARN_MS ? '#C8A040'
-    : '#52D6A4';
-  const wpDot  = isWpConnected ? '#52D6A4' : colors.textMuted;
+    : colors.success;
+  const wpDot  = isWpConnected ? colors.success : colors.textMuted;
 
   return (
     <View style={styles.container}>
@@ -1454,8 +1454,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                 <View style={styles.platformInfo}>
                   <Text style={[styles.platformName, !isIgConnected && styles.platformNameDim]}>Instagram</Text>
                   {isIgConnected && (
-                    <Text style={[styles.platformSub, igDot !== '#52D6A4' && { color: igDot }]}>
-                      {igDot === '#FF5050' ? 'Token expired — reconnect'
+                    <Text style={[styles.platformSub, igDot !== colors.success && { color: igDot }]}>
+                      {igDot === colors.error ? 'Token expired — reconnect'
                         : igDot === '#C8A040' ? 'Token expiring soon'
                         : igAccount!.account_name}
                     </Text>
@@ -1503,8 +1503,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             <View style={styles.platformInfo}>
               <Text style={[styles.platformName, thAccount === null && styles.platformNameDim]}>Threads</Text>
               {thAccount !== null && (
-                <Text style={[styles.platformSub, thDot !== '#52D6A4' && { color: thDot }]}>
-                  {thDot === '#FF5050' ? 'Token expired — reconnect'
+                <Text style={[styles.platformSub, thDot !== colors.success && { color: thDot }]}>
+                  {thDot === colors.error ? 'Token expired — reconnect'
                     : thDot === '#C8A040' ? 'Token expiring soon'
                     : thAccount.account_name}
                 </Text>
@@ -1960,8 +1960,8 @@ const styles = StyleSheet.create({
   actionBtnDisabled: { backgroundColor: colors.border },
   actionBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
   actionBtnTextDisabled: { color: colors.textMuted },
-  actionBtnDanger: { backgroundColor: 'rgba(255,80,80,0.12)', borderWidth: 1, borderColor: 'rgba(255,80,80,0.3)' },
-  actionBtnTextDanger: { color: '#FF5050' },
+  actionBtnDanger: { backgroundColor: 'rgba(255,90,60,0.1)', borderWidth: 1, borderColor: 'rgba(255,90,60,0.25)' },
+  actionBtnTextDanger: { color: colors.error },
 
   // Manage pages panel
   managePagesPanel: { paddingBottom: 4 },
@@ -1989,12 +1989,12 @@ const styles = StyleSheet.create({
   fbDisconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 
   connectedChipInline: {
-    backgroundColor: 'rgba(82,214,164,0.15)',
+    backgroundColor: 'rgba(67,227,160,0.15)',
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: '#52D6A4' },
+  connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: colors.success },
 
   // Platform rows
   platformRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
@@ -2007,7 +2007,7 @@ const styles = StyleSheet.create({
   manageBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
 
   // Expand panel
-  managePanelInner: { backgroundColor: 'rgba(0,0,0,0.15)', paddingBottom: 2 },
+  managePanelInner: { backgroundColor: 'rgba(37,99,166,0.06)', paddingBottom: 2 },
   managePanelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
   managePanelSubText: { fontSize: 13, color: colors.textMuted },
   tokenWarnText: { fontSize: 12, fontWeight: '600', color: '#C8A040' },

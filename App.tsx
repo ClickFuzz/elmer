@@ -325,13 +325,13 @@ function AppShell() {
 
   // Blank while SecureStore resolves on first render, or while subscription / onboarding state is being fetched
   if (isAuthed === null || (isAuthed && (subscriptionStatus === null || isOnboarded === null))) {
-    return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="light" /></SafeAreaView>;
+    return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="dark" /></SafeAreaView>;
   }
 
   if (!isAuthed) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <SignInScreen onSignIn={() => handleAuthChange(true)} />
       </SafeAreaView>
     );
@@ -346,7 +346,7 @@ function AppShell() {
   if (!hasSubscriptionAccess && !hasFreeAccess) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <SubscriptionScreen
           onSubscribed={handleSubscribed}
           onSignOut={handleSubscriptionSignOut}
@@ -360,7 +360,7 @@ function AppShell() {
   if (!isOnboarded) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <OnboardingWizard
           sessionToken={authToken}
           onComplete={handleOnboardingComplete}
@@ -371,7 +371,7 @@ function AppShell() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <View style={styles.content}>
         {screen === 'home' && (
           <HomeScreen

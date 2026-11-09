@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -94,8 +95,7 @@ export default function SignInScreen({ onSignIn }: Props) {
     >
       <View style={styles.inner}>
         <View style={styles.logoRow}>
-          <Text style={styles.logoText}>elmer</Text>
-          <Text style={styles.logoPeriod}>.</Text>
+          <Image source={require('../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
         </View>
         <Text style={styles.tagline}>Sign in to get started</Text>
 
@@ -170,23 +170,11 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   logoRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
   },
-  logoText: {
-    fontSize: 42,
-    fontFamily: 'DMSans_700Bold',
-    color: colors.textPrimary,
-    letterSpacing: -1,
-  },
-  logoPeriod: {
-    fontSize: 42,
-    fontFamily: 'DMSans_700Bold',
-    color: colors.cyan,
-    letterSpacing: -1,
-  },
+  logoImage: { height: 36, width: 160 },
   tagline: {
     fontSize: 15,
     fontFamily: 'Inter_400Regular',

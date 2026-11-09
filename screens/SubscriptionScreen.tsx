@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Platform,
   ScrollView,
@@ -363,8 +364,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       {/* Logo (gate mode only) */}
       {!isManageMode && (
         <View style={styles.logoRow}>
-          <Text style={styles.logoText}>elmer</Text>
-          <Text style={styles.logoPeriod}>.</Text>
+          <Image source={require('../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
         </View>
       )}
 
@@ -501,23 +501,11 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   logoRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 36,
   },
-  logoText: {
-    fontSize: 42,
-    fontFamily: 'DMSans_700Bold',
-    color: colors.textPrimary,
-    letterSpacing: -1,
-  },
-  logoPeriod: {
-    fontSize: 42,
-    fontFamily: 'DMSans_700Bold',
-    color: colors.cyan,
-    letterSpacing: -1,
-  },
+  logoImage: { height: 36, width: 160 },
 
   // Offer card
   offerCard: {
