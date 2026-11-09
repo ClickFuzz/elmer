@@ -164,7 +164,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **564 automated tests passing** — `cd server && npm test`
+- **566 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -237,7 +237,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 ## Pending Actions Before App Store Release
 
 1. **Complete iOS sandbox purchase test** — Install TestFlight build 24, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock.
-2. **Complete Android purchase + registration test** — Upload AAB (versionCode 6) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases. Install OTA update group `df153e23` or confirm it auto-applies.
+2. **Complete Android purchase + registration test** — Upload AAB (versionCode 6) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases. Install OTA update group `28049482` or confirm it auto-applies.
 2a. **Confirm Android audio transcription fix** — On versionCode 6 with Railway staging deployed, record voice + tap Generate. Confirm no "Transcription failed" error. Check Railway logs for `[Generate] Audio received: X bytes` (expect 50 KB+).
 3. **Merge staging → main** — After both iOS and Android purchase tests pass; 20+ commits of RC integration + App Links + audio fix.
 4. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
@@ -280,7 +280,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ```bash
 cd server && npm test
-# 564 tests: db, auth, platforms, facebook, instagram, threads,
+# 566 tests: db, auth, platforms, facebook, instagram, threads,
 #             media-utils, generation, account-isolation, wordpress,
 #             billing, google, free-publication, analytics, device,
 #             security, settings, testmode, meta-callbacks
