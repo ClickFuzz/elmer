@@ -340,8 +340,8 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       ? 'Payment will be charged to your Apple ID account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage subscriptions in your Account Settings after purchase.'
       : 'Payment will be charged to your Google Play account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage your subscription in Google Play.'
     : Platform.OS === 'ios'
-      ? 'A 14-day free trial is available to new subscribers. Payment will be charged to your Apple ID account when the trial ends ($19/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage subscriptions in your Account Settings.'
-      : 'A 14-day free trial is available to new subscribers. Payment will be charged to your Google Play account when the trial ends ($19/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage your subscription in Google Play.';
+      ? 'A 14-day free trial is available to new subscribers. Payment will be charged to your Apple ID account when the trial ends ($19.99/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage subscriptions in your Account Settings.'
+      : 'A 14-day free trial is available to new subscribers. Payment will be charged to your Google Play account when the trial ends ($19.99/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage your subscription in Google Play.';
 
   return (
     <ScrollView
@@ -372,7 +372,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       {!isSubscribed || isCanceled ? (
         <View style={styles.offerCard}>
           <Text style={styles.offerHeadline}>
-            {freePostUsed ? 'Keep posting with Elmer.' : '14 days free, then $19/month.'}
+            {freePostUsed ? 'Keep posting with Elmer.' : '14 days free, then $19.99/month.'}
           </Text>
           <Text style={styles.offerBody}>
             {freePostUsed
@@ -394,7 +394,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
               activeOpacity={0.85}
             >
               <Text style={styles.ctaBtnText}>
-                {trialUsed ? 'Subscribe — $19/month' : 'Start My Free Trial'}
+                {trialUsed ? 'Subscribe — $19.99/month' : 'Start My Free Trial'}
               </Text>
             </TouchableOpacity>
           )}
@@ -429,7 +429,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
           <View style={styles.statusRow}>
             <View style={[styles.statusDot, { backgroundColor: isTrialing || isActive ? colors.success : colors.error }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.statusPlan}>Elmer — $19/month</Text>
+              <Text style={styles.statusPlan}>Elmer — $19.99/month</Text>
               {statusLabel() && <Text style={styles.statusSub}>{statusLabel()}</Text>}
             </View>
           </View>

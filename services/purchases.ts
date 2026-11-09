@@ -14,13 +14,19 @@ let _configured = false;
 export function initPurchases(userId: string | null): void {
   const apiKey = Platform.OS === 'ios' ? RC_KEY_IOS : RC_KEY_ANDROID;
   if (!apiKey) {
-    // No key configured — RC runs in Preview API Mode (simulated purchases).
-    // This is expected in Expo Go and CI builds.
+    // No key — RC not initialized. Expected in Expo Go and CI builds.
+    console.log(`[Purchases] No RC API key for platform=${Platform.OS} — skipping (Expo Go / CI build)`);
+    return;
+  }
+  if (_configured) {
+    // SDK already running — switch user identity without reinitializing.
+    if (userId) Purchases.logIn(userId).catch(() => {});
     return;
   }
   if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
   Purchases.configure({ apiKey, appUserID: userId ?? undefined });
   _configured = true;
+  console.log(`[Purchases] SDK configured; platform=${Platform.OS} userId=${userId ? 'set' : 'anonymous'}`);
 }
 
 // Call after sign-in to associate purchases with the authenticated user.
@@ -50,7 +56,8 @@ export type PurchaseResult =
 
 export async function purchaseSubscription(): Promise<PurchaseResult> {
   if (!_configured) {
-    return { success: false, error: 'Purchases not available in this build. Use a development or distribution build.' };
+    console.warn(`[Purchases] purchaseSubscription called but SDK not configured; iOS key present=${!!RC_KEY_IOS} Android key present=${!!RC_KEY_ANDROID}`);
+    return { success: false, error: 'In-app purchases are not available. Please restart the app and try again.' };
   }
   try {
     const offerings = await Purchases.getOfferings();
@@ -77,7 +84,8 @@ export type RestoreResult =
 
 export async function restorePurchases(): Promise<RestoreResult> {
   if (!_configured) {
-    return { success: false, error: 'Purchases not available in this build.' };
+    console.warn('[Purchases] restorePurchases called but SDK not configured');
+    return { success: false, error: 'In-app purchases are not available. Please restart the app and try again.' };
   }
   try {
     const customerInfo = await Purchases.restorePurchases();

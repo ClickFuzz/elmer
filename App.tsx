@@ -199,7 +199,10 @@ function AppShell() {
         ]);
         if (storedUserId) {
           Analytics.identify(storedUserId);
+          initPurchases(String(storedUserId));
           switchPurchasesUser(String(storedUserId)).catch(() => {});
+        } else {
+          initPurchases(null);
         }
         setSubscriptionStatus(status);
         const localProfile = await getBusinessProfile();
