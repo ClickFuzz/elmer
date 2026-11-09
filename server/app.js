@@ -17,6 +17,7 @@ const { createInstagramRouter }               = require('./routes/instagram');
 const { createThreadsRouter }                 = require('./routes/threads');
 const { createWordPressRouter }               = require('./routes/wordpress');
 const { createGoogleRouter }                  = require('./routes/google');
+const { sendOAuthRedirect }                   = require('./routes/oauth-helpers');
 
 // ── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -288,6 +289,34 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, aiEnabled: !!process.env.OPENAI_API_KEY });
+  });
+
+  // ── Android App Link infrastructure ────────────────────────────────────────
+
+  // Digital Asset Links file — required for Android App Link verification.
+  // Android fetches this at install time to verify com.clickfuzz.elmer owns
+  // the api-staging.getelmer.com / api.getelmer.com domains.
+  app.get('/.well-known/assetlinks.json', (_req, res) => {
+    res.json([{
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: 'com.clickfuzz.elmer',
+        sha256_cert_fingerprints: [
+          '87:FB:5B:BE:30:7D:80:63:C7:46:A0:75:D6:50:89:4A:F3:AE:90:1F:EE:57:3D:A1:5E:84:1A:97:92:73:E4:C9'
+        ]
+      }
+    }]);
+  });
+
+  // OAuth return landing page — the Android App Link target.
+  // On Android with verified App Links, the OS intercepts navigation to this URL
+  // and opens Elmer before this handler runs (happy path).
+  // If the page does load (App Link not verified, or desktop browser), render the
+  // HTML fallback using the custom scheme so the user can manually return to the app.
+  app.get('/oauth/return', (req, res) => {
+    const params = new URLSearchParams(req.query).toString();
+    sendOAuthRedirect(res, `elmer://oauth/callback?${params}`);
   });
 
   // ── POST /api/generate ─────────────────────────────────────────────────────

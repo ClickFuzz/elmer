@@ -15,6 +15,15 @@ function resolveReturnScheme(requested, envFallback = 'elmer') {
   return envFallback;
 }
 
+// Validates an optional HTTPS App Link return URL sent by the mobile client.
+// Only allows our known API domains — prevents open redirect to external URLs.
+// Returns the URL if valid, null otherwise (caller falls back to custom scheme).
+const RETURN_URL_RE = /^https:\/\/api(?:-staging)?\.getelmer\.com\/oauth\/return$/;
+function resolveReturnUrl(url) {
+  if (url && typeof url === 'string' && RETURN_URL_RE.test(url)) return url;
+  return null;
+}
+
 // Converts a custom-scheme URL (e.g. elmer://oauth/callback?foo=bar) to an Android
 // intent:// URI (e.g. intent://oauth/callback?foo=bar#Intent;scheme=elmer;end).
 // Chrome on Android always dispatches intent:// URIs as Intents, even without a user
@@ -37,6 +46,14 @@ function toIntentUri(url) {
 // iOS: ASWebAuthenticationSession intercepts all custom scheme navigations natively, so
 // window.location.replace works directly there.
 function sendOAuthRedirect(res, url) {
+  // HTTPS App Link target — do a plain 302 redirect.
+  // On Android, the OS intercepts before Chrome loads the page (verified App Link).
+  // If interception fails, GET /oauth/return serves the HTML fallback below.
+  if (url.startsWith('https://')) {
+    return res.redirect(302, url);
+  }
+
+  // Custom scheme (iOS elmer://) — render the HTML page with intent:// fallback button.
   const intentUrl = toIntentUri(url);
   const safeUrl   = url.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const jsUrl     = JSON.stringify(url);
@@ -65,4 +82,4 @@ function sendOAuthRedirect(res, url) {
   );
 }
 
-module.exports = { resolveReturnScheme, sendOAuthRedirect };
+module.exports = { resolveReturnScheme, resolveReturnUrl, sendOAuthRedirect };

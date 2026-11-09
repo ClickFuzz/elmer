@@ -11,7 +11,7 @@ const { requireAuth } = require('../auth');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
 const { orderWithFeaturedFirst, prepareForGbp } = require('./media-utils');
-const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
+const { resolveReturnScheme, resolveReturnUrl, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage';
@@ -130,13 +130,14 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         req.body?.returnScheme,
         process.env.GOOGLE_OAUTH_RETURN_SCHEME ?? 'elmer'
       );
+      const returnUrl = resolveReturnUrl(req.body?.returnUrl);
       const state = randomBytes(24).toString('hex');
       const now   = Date.now();
 
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme)
-         VALUES ($1, $2, 'google', $3, $4, $5)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme, return_url)
+         VALUES ($1, $2, 'google', $3, $4, $5, $6)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme, returnUrl]
       );
 
       const params = new URLSearchParams({
@@ -188,7 +189,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
     try {
       await client.query('BEGIN');
       const { rows } = await client.query(
-        `SELECT id, user_id, expires_at, used_at, return_scheme
+        `SELECT id, user_id, expires_at, used_at, return_scheme, return_url
          FROM oauth_states WHERE state = $1 AND platform = 'google'
          FOR UPDATE`,
         [state]
@@ -199,7 +200,7 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
         await client.query('ROLLBACK');
         return sendOAuthRedirect(res, `${fallbackBase}?platform=google&error=invalid_state`);
       }
-      const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+      const stateBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
       if (stateRow.used_at) {
         await client.query('ROLLBACK');
         return sendOAuthRedirect(res, `${stateBase}?platform=google&error=state_already_used`);
@@ -218,8 +219,8 @@ function createGoogleRouter({ apiFetch = (...args) => fetch(...args) } = {}) {
       client.release();
     }
 
-    // Use the return scheme stored with this state token (sent by the mobile app at connect time)
-    const returnBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+    // Use the return URL/scheme stored with this state token (sent by the mobile app at connect time)
+    const returnBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
     try {
       // Step 1 — Exchange code for tokens

@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 let _pool        = null;
 let _initialized = false;
@@ -537,6 +537,23 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [16, Date.now()]
+      );
+    }
+
+    if (!applied.has(17)) {
+      // Store an optional full HTTPS return URL for Android App Link-based OAuth.
+      // When present (Android staging/production builds), the callback does a plain
+      // HTTP 302 to this URL; Android intercepts via verified App Links and opens
+      // the app directly without a browser button.  NULL = fall back to return_scheme.
+      try {
+        await client.query(
+          `ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_url TEXT`
+        );
+      } catch { /* pg-mem */ }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [17, Date.now()]
       );
     }
 

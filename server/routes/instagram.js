@@ -17,7 +17,7 @@ const {
   orderWithFeaturedFirst,
   parseIntArray,
 } = require('./media-utils');
-const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
+const { resolveReturnScheme, resolveReturnUrl, sendOAuthRedirect } = require('./oauth-helpers');
 
 // When INSTAGRAM_ENABLED=false the server blocks new connections and publishing
 // while keeping compliance endpoints (uninstall, delete, deletion-status) active.
@@ -96,13 +96,14 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         req.body?.returnScheme,
         process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer'
       );
+      const returnUrl = resolveReturnUrl(req.body?.returnUrl);
       const state = randomBytes(24).toString('hex');
       const now   = Date.now();
 
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme)
-         VALUES ($1, $2, 'instagram', $3, $4, $5)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme, return_url)
+         VALUES ($1, $2, 'instagram', $3, $4, $5, $6)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme, returnUrl]
       );
 
       const params = new URLSearchParams({
@@ -153,7 +154,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
       try {
         await client.query('BEGIN');
         const { rows } = await client.query(
-          `SELECT id, user_id, expires_at, used_at, return_scheme
+          `SELECT id, user_id, expires_at, used_at, return_scheme, return_url
            FROM oauth_states WHERE state = $1 AND platform = 'instagram'
            FOR UPDATE`,
           [state]
@@ -164,7 +165,7 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
           await client.query('ROLLBACK');
           return sendOAuthRedirect(res, `${returnBase}?platform=instagram&error=invalid_state`);
         }
-        const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+        const stateBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
           return sendOAuthRedirect(res, `${stateBase}?platform=instagram&error=state_already_used`);
@@ -183,8 +184,8 @@ function createInstagramRouter({ igFetch = (...args) => fetch(...args) } = {}) {
         client.release();
       }
 
-      // Update returnBase to the scheme the mobile app requested at connect time
-      returnBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+      // Update returnBase to the URL/scheme the mobile app requested at connect time
+      returnBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
       // Step 1 — Exchange code for short-lived token
       const tokenForm = new URLSearchParams({

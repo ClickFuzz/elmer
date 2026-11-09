@@ -11,7 +11,7 @@ const { requireAuth } = require('../auth');
 const { orderWithFeaturedFirst } = require('./media-utils');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
-const { resolveReturnScheme, sendOAuthRedirect } = require('./oauth-helpers');
+const { resolveReturnScheme, resolveReturnUrl, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -126,13 +126,14 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         req.body?.returnScheme,
         process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer'
       );
+      const returnUrl = resolveReturnUrl(req.body?.returnUrl);
       const state = randomBytes(24).toString('hex');
       const now   = Date.now();
 
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme)
-         VALUES ($1, $2, 'facebook', $3, $4, $5)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme, return_url)
+         VALUES ($1, $2, 'facebook', $3, $4, $5, $6)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme, returnUrl]
       );
 
       const params = new URLSearchParams({
@@ -184,7 +185,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       try {
         await client.query('BEGIN');
         const { rows } = await client.query(
-          `SELECT id, user_id, expires_at, used_at, return_scheme
+          `SELECT id, user_id, expires_at, used_at, return_scheme, return_url
            FROM oauth_states WHERE state = $1 AND platform = 'facebook'
            FOR UPDATE`,
           [state]
@@ -195,7 +196,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
           await client.query('ROLLBACK');
           return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=invalid_state`);
         }
-        const stateBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+        const stateBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
           return sendOAuthRedirect(res, `${stateBase}?platform=facebook&error=state_already_used`);
@@ -214,8 +215,8 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         client.release();
       }
 
-      // Update returnBase to the scheme the mobile app requested at connect time
-      returnBase = `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
+      // Update returnBase to the URL/scheme the mobile app requested at connect time
+      returnBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
       // Step 1 — Exchange code for short-lived user access token
       const tokenParams = new URLSearchParams({
