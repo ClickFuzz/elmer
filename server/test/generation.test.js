@@ -60,6 +60,7 @@ function installOpenAIMock({ extractionResult = {}, generatedText = 'Generated p
     }
   }
 
+  MockOpenAI.toFile = async (stream) => stream;
   require.cache[OPENAI_RESOLVE] = { exports: MockOpenAI };
   return calls;
 }

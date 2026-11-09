@@ -373,26 +373,36 @@ function createApp({ facebookRouter, instagramRouter, threadsRouter, wordpressRo
     }
 
     const OpenAI = require('openai');
+    const { toFile } = require('openai');
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
     // Step 1 — Transcribe
     let transcription = '';
+    let renamedPath = null;
     try {
       if (audioFile) {
-        const renamedPath = audioFile.path + '.m4a';
+        renamedPath = audioFile.path + '.m4a';
         fs.renameSync(audioFile.path, renamedPath);
-        const audioStream = fs.createReadStream(renamedPath);
+        const fileSize = fs.statSync(renamedPath).size;
+        console.log(`[Generate] Audio received: ${fileSize} bytes`);
+        // Use toFile() with explicit MIME type so Whisper correctly identifies
+        // Android MPEG-4/AAC files (which use mp42/isom ftyp brand, not M4A).
+        const audioFileObj = await toFile(
+          fs.createReadStream(renamedPath),
+          'audio.m4a',
+          { type: 'audio/mp4' }
+        );
         const result = await openai.audio.transcriptions.create({
-          file:     audioStream,
+          file:     audioFileObj,
           model:    'whisper-1',
           language: 'en',
         });
-        audioStream.destroy();
         transcription = result.text ?? '';
         fs.unlink(renamedPath, () => {});
       }
     } catch (err) {
-      if (audioFile) fs.unlink(audioFile.path, () => {});
+      if (renamedPath) fs.unlink(renamedPath, () => {});
+      else if (audioFile) fs.unlink(audioFile.path, () => {});
       console.error('Transcription error:', err);
       return res.status(500).json({ error: 'Transcription failed', detail: String(err) });
     }
