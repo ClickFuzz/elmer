@@ -71,36 +71,34 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
   } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
-  // Prevents expo-audio's persisted recorder.uri from falsely showing "Recording saved"
-  // on fresh app open. Set to true only when the user actually starts a recording.
+  // Prevents the status listener from processing stale events on fresh app open.
+  // Set to true only when the user actually starts a recording this session.
   const hasRecordedThisSession = useRef(false);
-  // Tracks the last recorder.uri we already copied/processed to avoid duplicate work.
-  const lastProcessedRecorderUri = useRef<string | null>(null);
+
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY, (status) => {
+    // Event-driven: fires exactly once after recorder.stop() completes with the final file.
+    // Avoids the race condition where recorder.uri is set during prepareToRecordAsync()
+    // (before recording starts) but recorderState.isRecording hasn't updated yet (500ms poll lag),
+    // which caused a useEffect to copy an empty file and mark it as processed.
+    if (!status.isFinished || status.hasError || !status.url || !hasRecordedThisSession.current) return;
+    const rawUri = status.url;
+    (async () => {
+      let uri = rawUri;
+      try {
+        const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
+        await FileSystem.copyAsync({ from: rawUri, to: dest });
+        uri = dest;
+      } catch { /* use original path */ }
+      setAudioUri(uri);
+    })();
+  });
+  const recorderState = useAudioRecorderState(recorder);
 
   useEffect(() => {
     return () => {
       playerRef.current?.remove();
     };
   }, []);
-
-  useEffect(() => {
-    if (!hasRecordedThisSession.current) return;
-    if (!recorderState.isRecording && recorder.uri && recorder.uri !== lastProcessedRecorderUri.current) {
-      lastProcessedRecorderUri.current = recorder.uri;
-      // Copy to document dir so the URI survives app restarts
-      (async () => {
-        let uri = recorder.uri!;
-        try {
-          const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
-          await FileSystem.copyAsync({ from: uri, to: dest });
-          uri = dest;
-        } catch { /* use original path */ }
-        setAudioUri(uri);
-      })();
-    }
-  }, [recorderState.isRecording, recorder.uri]);
 
   // Persist photos + audio so state survives app restarts
   useEffect(() => {
@@ -257,7 +255,6 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
       await recorder.prepareToRecordAsync();
       recorder.record();
       hasRecordedThisSession.current = true;
-      lastProcessedRecorderUri.current = null; // reset so re-record always captures the new URI
       setAudioUri(null);
     } catch (err) {
       console.error('Failed to start recording', err);
