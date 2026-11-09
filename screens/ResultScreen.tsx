@@ -122,6 +122,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [publishState, setPublishState] = useState<PublishState>({ status: 'idle' });
   const [savedJobId, setSavedJobId] = useState<number | null>(draftJob?.id ?? null);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
+  const [isManualFallback, setIsManualFallback] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isGenerating = useRef(false);
   const wasFirstFreePost = useRef(false);
@@ -259,6 +260,31 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         let loc = data.location ? `${data.location.city}, ${data.location.state}` : '';
         if (!loc && profile.location) loc = profile.location;
 
+        // Detect silent audio: transcription completed but returned no usable speech.
+        // Only applies when audio was present — not for text-only or draft flows.
+        if (payload.audioUri && !data.transcription?.trim()) {
+          isGenerating.current = false;
+          Alert.alert(
+            'No voice detected',
+            "We couldn't detect your voice. Check your microphone and try again.",
+            [
+              { text: 'Go Back and Record', style: 'cancel', onPress: onBack },
+              {
+                text: 'Continue Without Recording',
+                onPress: () => {
+                  setIsManualFallback(true);
+                  setState({
+                    status: 'success',
+                    googlePost: '', socialPost: '', webContent: '',
+                    transcription: '', location: loc, seoMetadata: null, isMock: false,
+                  });
+                },
+              },
+            ]
+          );
+          break;
+        }
+
         setState({
           status: 'success',
           googlePost: data.googlePost ?? '',
@@ -388,6 +414,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
 
+    if (!editedSocial.trim()) {
+      return [{ pageId: 'fb', pageName: 'Facebook', platform: 'facebook', ok: false, error: 'No post content. Add a description in the main editor before publishing.' }];
+    }
+
     const formData = new FormData();
     formData.append('message', editedSocial);
     formData.append('job_id', jobId);
@@ -452,7 +482,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const businessUrl = profile.inquiryUrl || profile.website || '';
 
     const formData = new FormData();
-    formData.append('message', editedGoogle.trim() || editedSocial);
+    const effectiveGoogleMessage = editedGoogle.trim() ? editedGoogle : editedSocial;
+    if (!effectiveGoogleMessage.trim()) {
+      return [{ pageId: 'gbp', pageName: 'Google Business', platform: 'google', ok: false, error: 'No post content. Add a description in the main editor before publishing.' }];
+    }
+    formData.append('message', effectiveGoogleMessage);
     formData.append('job_id', jobId);
     formData.append('featured_index', String(Math.max(0, featuredIndex)));
     formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
@@ -516,6 +550,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   };
 
   const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
+    if (!editedSocial.trim()) {
+      return { pageId: 'ig', pageName: 'Instagram', platform: 'instagram', ok: false, error: 'No post content. Add a description in the main editor before publishing.' };
+    }
+
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
@@ -572,11 +610,16 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
 
-    const formData = new FormData();
-    if (editedThreads.length > 500) {
+    const effectiveThreadsText = editedThreads.trim() ? editedThreads : editedSocial;
+    if (!effectiveThreadsText.trim()) {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'No post content. Add a description in the main editor before publishing.' };
+    }
+    if (effectiveThreadsText.length > 500) {
       return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'Post exceeds 500 character limit. Please shorten the Threads post.' };
     }
-    formData.append('text', editedThreads);
+
+    const formData = new FormData();
+    formData.append('text', effectiveThreadsText);
     formData.append('job_id', jobId);
     formData.append('featured_index', String(Math.max(0, featuredIndex)));
     formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
@@ -641,9 +684,15 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const results: PageResult[] = [];
     for (const ch of wpChannels) {
       const wpSiteId = ch.id;
+      const effectiveWpContent = editedWordpress.trim() ? editedWordpress : editedSocial;
+      if (!effectiveWpContent.trim()) {
+        results.push({ pageId: `wp_${wpSiteId}`, pageName: ch.accountName, platform: 'wordpress', ok: false, error: 'No post content. Add a description in the main editor before publishing.' });
+        continue;
+      }
+
       const formData = new FormData();
-      formData.append('title',       editedWordpressTitle || extractMarkdownTitle(editedWordpress) || 'New Post');
-      formData.append('content',     editedWordpress);
+      formData.append('title',       editedWordpressTitle || extractMarkdownTitle(effectiveWpContent) || 'New Post');
+      formData.append('content',     effectiveWpContent);
       formData.append('job_id',      jobId);
       formData.append('wp_site_id',  wpSiteId);
       formData.append('featured_index', String(Math.max(0, featuredIndex)));
@@ -1008,15 +1057,19 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               <TextInput
                 style={styles.postInput}
                 value={editedSocial}
-                onChangeText={setEditedSocial}
+                onChangeText={text => setEditedSocial(isManualFallback ? text.slice(0, 500) : text)}
                 multiline
                 textAlignVertical="top"
                 autoCorrect
                 scrollEnabled={false}
+                placeholder="Describe what you'd like to share..."
+                placeholderTextColor={colors.textMuted}
                 inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
               />
               <View style={styles.postCardFooter}>
-                <Text style={styles.metaCount}>{editedSocial.length} characters</Text>
+                <Text style={[styles.metaCount, isManualFallback && editedSocial.length > 450 && styles.threadsCountWarn]}>
+                  {isManualFallback ? `${editedSocial.length}/500` : `${editedSocial.length} characters`}
+                </Text>
                 <TouchableOpacity
                   onPress={() => copyItem('social')}
                   hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}

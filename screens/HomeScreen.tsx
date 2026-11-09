@@ -328,8 +328,13 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
       }
     }
 
-    if (!finalAudioUri && photos.length === 0) {
-      Alert.alert('Nothing to generate', 'Add at least one photo or record a description.');
+    if (photos.length === 0) {
+      Alert.alert('Missing photos', 'Please add photos to continue.', [{ text: 'OK' }]);
+      return;
+    }
+
+    if (!finalAudioUri) {
+      Alert.alert('Missing recording', 'Please record a voice description to continue.', [{ text: 'OK' }]);
       return;
     }
 
