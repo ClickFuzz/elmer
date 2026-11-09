@@ -77,6 +77,11 @@
       "ios": {
         "ascAppId": "6824199734"
       }
+    },
+    "staging-google-play": {
+      "android": {
+        "track": "internal"
+      }
     }
   }
 }
