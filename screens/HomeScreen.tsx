@@ -252,7 +252,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
       }
 
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
+      await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
       recorder.record();
       hasRecordedThisSession.current = true;
       setAudioUri(null);
