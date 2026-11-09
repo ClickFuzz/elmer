@@ -37,14 +37,14 @@ function toIntentUri(url) {
 // iOS: ASWebAuthenticationSession intercepts all custom scheme navigations natively, so
 // window.location.replace works directly there.
 function sendOAuthRedirect(res, url) {
+  const intentUrl = toIntentUri(url);
   const safeUrl   = url.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const jsUrl     = JSON.stringify(url);
-  const jsIntent  = JSON.stringify(toIntentUri(url));
+  const jsIntent  = JSON.stringify(intentUrl);
   res.set('Content-Type', 'text/html; charset=utf-8').send(
     `<!DOCTYPE html><html><head>` +
     `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<title>Connecting...</title>` +
-    `<meta http-equiv="refresh" content="3;url=${safeUrl}">` +
     `<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;` +
     `display:flex;flex-direction:column;align-items:center;justify-content:center;` +
     `min-height:100vh;margin:0;background:#0f172a;color:#fff;text-align:center;padding:24px}` +
@@ -59,7 +59,7 @@ function sendOAuthRedirect(res, url) {
     `var url=${jsUrl};var intent=${jsIntent};` +
     `var android=/Android/.test(navigator.userAgent);` +
     `try{window.location.replace(android?intent:url);}catch(e){}` +
-    `document.getElementById('btn').href=url;` +
+    `document.getElementById('btn').href=android?intent:url;` +
     `</script>` +
     `</body></html>`
   );
