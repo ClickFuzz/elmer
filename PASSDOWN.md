@@ -33,18 +33,23 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
-| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; iOS sandbox test pending; Android AAB built (versionCode 4), upload to Play Console pending |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; iOS sandbox test pending; Android AAB versionCode 6 built + App Links + OTA active |
 | — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
 | — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
+| — | Fix RC init order (initPurchases before switchPurchasesUser); fix $19.99/month price display | COMPLETE — staging OTA `df153e23` |
+| — | Android App Links: HTTPS intent filters, `assetlinks.json` endpoint, V17 migration (`oauth_states.return_url`), `returnUrl` in all 5 OAuth routes + mobile `OAUTH_RETURN_URL` constant | COMPLETE — staging `1efff86` / versionCode 6 |
+| — | Fix RC Android SDK key missing from OTA bundle (added to EAS `preview` environment) | COMPLETE — staging OTA `df153e23` |
+| — | Fix Android audio transcription: `toFile()` with explicit `audio/mp4` MIME type, file size log, stale-path cleanup fix | COMPLETE — staging `d4d2f60`; Railway deployed; device test pending |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `56ecdf8` (16 commits ahead of main — RC integration + OAuth fix + Android RC key + registration fix)
+- **Staging branch:** `staging` — HEAD `d4d2f60` (20+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix)
 - **Last known TestFlight build:** #24 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026 — includes OAuth return scheme fix)
-- **Last Android AAB build:** versionCode 4 (staging-google-play profile; `com.clickfuzz.elmer`; connects to staging API; built Nov 8 2026 — includes Android registration fix + RC key) — artifact: https://expo.dev/artifacts/eas/9ZaJkNs_arNqi9Bd_YFV_HISVXoOVqIn48HF7pJrKXc.aab — build: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/247c402d-ee9b-4dee-b71b-dbb7c53194bf
+- **Last Android AAB build:** versionCode 6 (staging-google-play profile; `com.clickfuzz.elmer`; connects to staging API; built Nov 9 2026 — includes Android App Links, RC init fix, App Links intent filters) — artifact: https://expo.dev/artifacts/eas/6Udn72XWEIzZQItqn77D5DZ0CYpHSur9l2Gi8GXVQ-o.aab — build: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/3a2f6cae-12c7-4600-b5b9-a772d41df665
+- **Active staging OTA update:** group `df153e23` (RC init order fix + $19.99 pricing + RC Android SDK key) — targets staging channel, runtime 1.0.0
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
@@ -88,7 +93,9 @@ Staging infrastructure is fully live. Railway staging environment is running.
 
 The staging app uses scheme `elmer-staging://` (set in `app.config.js`). The staging server has `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging` as fallback defaults.
 
-**OAuth return scheme fix (f1b47ef):** Mobile now passes `returnScheme: EXPO_PUBLIC_APP_SCHEME ?? 'elmer'` in every connect-url request. The server validates against `ALLOWED_OAUTH_RETURN_SCHEMES` (staging: `elmer,elmer-staging`) and stores the scheme in `oauth_states.return_scheme` (V16 DB migration). The callback reads it back and redirects to the correct app. TestFlight builds (no `APP_SCHEME` set → `elmer`) and staging builds (`APP_SCHEME=elmer-staging`) now correctly return to their respective apps even when both point at `api-staging.getelmer.com`.
+**OAuth return scheme fix (f1b47ef):** Mobile now passes `returnScheme: EXPO_PUBLIC_APP_SCHEME ?? 'elmer'` in every connect-url request. The server validates against `ALLOWED_OAUTH_RETURN_SCHEMES` (staging: `elmer,elmer-staging`) and stores the scheme in `oauth_states.return_scheme` (V16 DB migration). The callback reads it back and redirects to the correct app.
+
+**Android App Links (1efff86):** V17 migration adds `oauth_states.return_url TEXT`. All 5 OAuth connect-url routes accept `returnUrl` body param and store it; callbacks read `return_url` and do a plain 302 redirect for HTTPS URLs (Android App Link) or render an intent:// HTML page for custom scheme URLs. Mobile sends `OAUTH_RETURN_URL = Platform.OS === 'android' ? \`${API_URL}/oauth/return\` : \`${RETURN_SCHEME}://oauth/callback\``. Server serves `assetlinks.json` at `/.well-known/assetlinks.json` (Google Play App Signing SHA-256: `87:FB:5B:BE:30:...`). `app.json` has `intentFilters` for `api-staging.getelmer.com` and `api.getelmer.com` with `autoVerify: true`. Helper module: `server/routes/oauth-helpers.js` (`resolveReturnScheme`, `resolveReturnUrl`, `sendOAuthRedirect`).
 
 ---
 
@@ -156,7 +163,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **524 automated tests passing** — `cd server && npm test`
+- **564 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -220,6 +227,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 | `REVENUECAT_WEBHOOK_SECRET` | Bearer token RC sends in `Authorization` header; must match Railway env var; Railway only |
 | `APP_URL` | `https://api.getelmer.com` (production); `https://api-staging.getelmer.com` (staging) |
 | `APP_SCHEME` | `elmer` (production); `elmer-staging` (staging) — used for Stripe + OAuth deep-link returns |
+| `ALLOWED_OAUTH_RETURN_SCHEMES` | Comma-separated allowlist for custom-scheme OAuth returns; staging: `elmer,elmer-staging`; production: `elmer` |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
 
@@ -228,8 +236,9 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 ## Pending Actions Before App Store Release
 
 1. **Complete iOS sandbox purchase test** — Install TestFlight build 24, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock.
-2. **Complete Android purchase + registration test** — Upload AAB (versionCode 4) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account → should succeed without false "network error"; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases.
-3. **Merge staging → main** — After both iOS and Android purchase tests pass; 14 commits of RC integration.
+2. **Complete Android purchase + registration test** — Upload AAB (versionCode 6) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases. Install OTA update group `df153e23` or confirm it auto-applies.
+2a. **Confirm Android audio transcription fix** — On versionCode 6 with Railway staging deployed, record voice + tap Generate. Confirm no "Transcription failed" error. Check Railway logs for `[Generate] Audio received: X bytes` (expect 50 KB+).
+3. **Merge staging → main** — After both iOS and Android purchase tests pass; 20+ commits of RC integration + App Links + audio fix.
 4. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
 4. **New production iOS build** — Required after merging RC integration (new native module; OTA alone is not sufficient). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
 5. **Set `EXPO_PUBLIC_RC_API_KEY_IOS` in production `eas.json` env** — Only after RC sandbox test passes on staging; use the same key `appl_qiMBWYvElXNhKitKwqFWXExCYsq`.
@@ -270,7 +279,7 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ```bash
 cd server && npm test
-# 524 tests: db, auth, platforms, facebook, instagram, threads,
+# 564 tests: db, auth, platforms, facebook, instagram, threads,
 #             media-utils, generation, account-isolation, wordpress,
 #             billing, google, free-publication, analytics, device,
 #             security, settings, testmode, meta-callbacks

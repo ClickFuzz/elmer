@@ -1,55 +1,56 @@
 # HANDOFF
 
 ## Goal
-Fix Android Google OAuth callback — browser stays on loading screen instead of returning to Elmer.
+Confirm Android audio transcription fix works on-device with versionCode 6.
 
 ## Current Problem
-Stage 2 fix deployed (`bdf94e6`). Waiting for Railway staging deploy + Android retest.
-
-The first fix (JS `window.location.replace`) was insufficient: Chrome Custom Tabs on Android may silently block custom scheme JS navigation without a user gesture. Stage 2 adds:
-1. `intent://` URI for auto-redirect on Android (Chrome always dispatches these as Intents)
-2. Visible "Open Elmer" button (user-gesture fallback)
+Android recording → Generate → "Transcription failed" (OpenAI Whisper 400 "audio file could not be decoded").
+Fix was deployed to Railway staging (`d4d2f60`) but not yet confirmed by device test.
 
 ## Proven Facts
-- Chrome Custom Tabs on Android does NOT fire Android Intents for server-side HTTP 302 redirects to custom URL schemes (`elmer://`).
-- `window.location.replace("elmer://...")` also silently blocked by Chrome on Android without user gesture.
-- iOS works fine: `ASWebAuthenticationSession` intercepts all custom scheme navigations natively.
-- Server confirms Google auth/token exchange/DB persistence works (user shows as Connected after manually closing Chrome).
-- `staging-google-play` build (versionCode 4) uses `elmer` scheme natively and `EXPO_PUBLIC_APP_SCHEME` defaults to `'elmer'` — scheme is NOT `elmer-staging`.
-- 564 tests pass locally.
+- Android MediaRecorder with `mpeg4` output + `aac` encoder creates valid MPEG-4/AAC `.m4a` files.
+- `RecordingPresets.HIGH_QUALITY` on Android → `MediaRecorder.OutputFormat.MPEG_4` + `AudioEncoder.AAC` (confirmed in `AudioRecords.kt`).
+- File plays back successfully on device (confirmed by user), so file is not empty.
+- Root cause: without an explicit MIME type, the OpenAI SDK sends `Content-Type: ""` to Whisper. Android MPEG-4 files use `mp42`/`isom` ftyp brand (not Apple's `M4A `), so Whisper can't identify the format.
+- Fix deployed: `server/app.js` now uses `toFile(stream, 'audio.m4a', { type: 'audio/mp4' })` to send explicit MIME type.
+- Also added `[Generate] Audio received: X bytes` log to Railway.
+- Fix also repairs stale-path cleanup bug in catch block (was unlinking `audioFile.path` after rename).
 
 ## Ruled Out
-- Android intent filters / app.json scheme config — correct (`elmer` scheme)
-- Mobile app OAuth code — correct
-- Server token exchange / callback logic — works
-- New Android build requirement — not needed; fix is server-only
-- Scheme mismatch — staging-google-play sends `returnScheme: 'elmer'` and server uses it correctly
+- Format mismatch — Android HIGH_QUALITY preset confirmed MPEG-4/AAC.
+- Empty file — playback works.
+- Upload corruption — OkHttp reads raw bytes without encoding.
+- Multer misconfiguration — same config serves iOS fine.
 
-## Changed Files
-- `server/routes/oauth-helpers.js` — stage 1: `sendOAuthRedirect(res, url)` helper; stage 2: `toIntentUri()`, intent:// for Android, button
+## Current Hypothesis
+Fix is correct. Whisper needed explicit `audio/mp4` content-type to identify Android's MPEG-4 file.
+
+## Changed
+- `server/app.js` — `toFile()` with explicit MIME type, file size log, stale-path cleanup fix
+- `server/test/generation.test.js` — added `MockOpenAI.toFile = async (stream) => stream`
+- Committed `d4d2f60`, pushed `staging`, Railway auto-deployed. 564 tests pass.
 
 ## Production / Deployment State
-- `staging` branch: `bdf94e6` — pushed to origin, Railway deploying
-- Existing Android install (versionCode 4 from Google Play internal testing) ready to test — no rebuild needed
+Railway staging deployed `d4d2f60`. versionCode 6 (staging-google-play AAB) with OTA `df153e23` active on the staging channel.
 
 ## Exact Next Step
-1. Wait for Railway staging deploy of `bdf94e6` (~2 min)
-2. Confirm: `curl https://api-staging.getelmer.com/google/callback?error=test_check` returns HTML with `intent://` and button
-3. Test Google OAuth on Android versionCode 4
-4. If passes: also test Facebook, Instagram, Threads, WordPress OAuth on Android
-5. After all passing: merge `staging` → `main`
+1. User: open Elmer on Android versionCode 6 → record voice → tap Generate.
+2. If it works: transcription succeeds → task complete; delete HANDOFF.md.
+3. If still fails: check Railway logs for `[Generate] Audio received: X bytes`.
+   - If bytes > 50 KB: file format still wrong → try sending with extension `.mp4` instead of `.m4a` in `toFile()`.
+   - If bytes < 1 KB: upload broken → investigate `FileSystem.uploadAsync` on Android with `file://` URI.
 
 ## Do Not Repeat
-- Do not investigate Android intent filters or app.json — already confirmed correct
-- Do not look for more `res.redirect` calls — all 6 OAuth routes use `sendOAuthRedirect`
-- Do not rebuild Android AAB — no mobile code changed
+- Traced full Android recording stack: `RecordingPresets` → `AudioRecords.kt` → `MediaRecorder` → MPEG_4/AAC.
+- Traced OkHttp upload path (`FileSystemUploadTask.kt`) — raw bytes, no encoding.
+- Confirmed OpenAI SDK `toFile()` behavior — creates `File` with no type from `ReadStream`, which is why iOS happened to work (Apple `M4A ` brand is unambiguous) but Android didn't.
 
 ## Relevant Files / Functions
-- `server/routes/oauth-helpers.js` — `sendOAuthRedirect(res, url)` + `toIntentUri(url)` (the core fix)
-- `server/routes/google.js` — `GET /google/callback`
+- `server/app.js:375–410` — transcription block with the fix
+- `screens/HomeScreen.tsx:74,88–103,241–266` — recording + file copy path
+- `screens/ResultScreen.tsx:187–213` — `FileSystem.uploadAsync` with `mimeType: 'audio/m4a'`
+- `node_modules/expo-audio/src/RecordingConstants.ts:69` — HIGH_QUALITY preset (android: mpeg4/aac)
+- `node_modules/expo-audio/android/.../AudioRecords.kt:61–88` — `toMediaOutputFormat()` / `toMediaEncoding()`
 
 ## Git State
-- Branch: `staging`
-- Latest commit: `bdf94e6` (pushed to origin)
-- Working tree: clean
-- Not yet merged to `main` — waiting for Android test
+Branch: `staging`. Last commit: `d4d2f60`. All 564 server tests pass. Working tree clean.
