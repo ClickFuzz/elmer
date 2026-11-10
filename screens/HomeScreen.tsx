@@ -71,27 +71,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
   } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
 
-  // Prevents the status listener from processing stale events on fresh app open.
-  // Set to true only when the user actually starts a recording this session.
-  const hasRecordedThisSession = useRef(false);
-
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY, (status) => {
-    // Event-driven: fires exactly once after recorder.stop() completes with the final file.
-    // Avoids the race condition where recorder.uri is set during prepareToRecordAsync()
-    // (before recording starts) but recorderState.isRecording hasn't updated yet (500ms poll lag),
-    // which caused a useEffect to copy an empty file and mark it as processed.
-    if (!status.isFinished || status.hasError || !status.url || !hasRecordedThisSession.current) return;
-    const rawUri = status.url;
-    (async () => {
-      let uri = rawUri;
-      try {
-        const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
-        await FileSystem.copyAsync({ from: rawUri, to: dest });
-        uri = dest;
-      } catch { /* use original path */ }
-      setAudioUri(uri);
-    })();
-  });
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
 
   useEffect(() => {
@@ -251,11 +231,10 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         setIsPlayingBack(false);
       }
 
+      setAudioUri(null);
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
       recorder.record();
-      hasRecordedThisSession.current = true;
-      setAudioUri(null);
     } catch (err) {
       console.error('Failed to start recording', err);
       Alert.alert('Error', 'Could not start recording. Please try again.');
@@ -265,6 +244,15 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
   const stopRecording = async () => {
     try {
       await recorder.stop();
+      const rawUri = recorder.uri;
+      if (!rawUri) return;
+      let uri = rawUri;
+      try {
+        const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
+        await FileSystem.copyAsync({ from: rawUri, to: dest });
+        uri = dest;
+      } catch { /* use original path */ }
+      setAudioUri(uri);
     } catch (err) {
       console.error('Failed to stop recording', err);
     }
