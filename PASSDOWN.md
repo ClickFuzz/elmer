@@ -41,15 +41,17 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Fix RC Android SDK key missing from OTA bundle (added to EAS `preview` environment) | COMPLETE — staging OTA `df153e23` |
 | — | Fix Android audio transcription: `toFile()` with explicit `audio/mp4` MIME type, file size log, stale-path cleanup fix | COMPLETE — staging `d4d2f60`; Railway deployed; device test pending |
 | — | MVP input validation and manual text fallback: photo+audio pre-generation guards, silent transcription detection, 500-char manual cap, per-platform verbatim fallback, empty-text blocking | COMPLETE — staging `ea631de`; OTA `28049482` |
+| — | UI redesign: tomato-red brand (#DB1200), charcoal text (#252932), warm off-white bg (#F7F6F3), white floating cards with soft shadows, removed all header/footer dividers, floating rounded nav bar with active-item pill | COMPLETE — staging `0d696d0` |
+| — | New logo.png (380×100) and icon.png assets from getelmer.com; logo left-aligned at correct aspect ratio | COMPLETE — staging `0d696d0` |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `ea631de` (21+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation)
-- **Last known TestFlight build:** #24 (staging-testflight profile; `com.clickfuzz.elmer`; connects to staging API; submitted Nov 6 2026 — includes OAuth return scheme fix)
-- **Last Android AAB build:** versionCode 6 (staging-google-play profile; `com.clickfuzz.elmer`; connects to staging API; built Nov 9 2026 — includes Android App Links, RC init fix, App Links intent filters) — artifact: https://expo.dev/artifacts/eas/6Udn72XWEIzZQItqn77D5DZ0CYpHSur9l2Gi8GXVQ-o.aab — build: https://expo.dev/accounts/clickfuzz-team/projects/elmer/builds/3a2f6cae-12c7-4600-b5b9-a772d41df665
+- **Staging branch:** `staging` — HEAD `0d696d0` (23+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign)
+- **Last known TestFlight build:** submitted Nov 10 2026 — EAS build `58ebf62f` (staging-testflight; full UI redesign + new logo/icon + floating nav bar)
+- **Last Android AAB build:** versionCode 8 — EAS build `0cd37927` (staging-google-play; full UI redesign + new logo/icon + floating nav bar; submitted Nov 10 2026)
 - **Active staging OTA update:** group `28049482` (MVP validation + manual text fallback; RC Android key confirmed in bundle) — targets staging channel, runtime 1.0.0
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
