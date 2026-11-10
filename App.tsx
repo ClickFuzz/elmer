@@ -57,8 +57,10 @@ type NavItemProps = {
 function NavItem({ iconActive, iconInactive, label, active, onPress }: NavItemProps) {
   return (
     <TouchableOpacity style={navStyles.item} onPress={onPress} activeOpacity={0.7}>
-      <Ionicons name={active ? iconActive : iconInactive} size={24} color={active ? colors.cyan : colors.textMuted} />
-      <Text style={[navStyles.label, active && navStyles.labelActive]}>{label}</Text>
+      <View style={[navStyles.itemInner, active && navStyles.itemInnerActive]}>
+        <Ionicons name={active ? iconActive : iconInactive} size={24} color={active ? colors.cyan : colors.textMuted} />
+        <Text style={[navStyles.label, active && navStyles.labelActive]}>{label}</Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -434,28 +436,30 @@ function AppShell() {
           />
         )}
       </View>
-      <View style={[navStyles.bar, { paddingBottom: Math.max(bottomInset, 10) }]}>
-        <NavItem
-          iconActive="home"
-          iconInactive="home-outline"
-          label="Home"
-          active={screen === 'home' || screen === 'result'}
-          onPress={() => setScreen('home')}
-        />
-        <NavItem
-          iconActive="time"
-          iconInactive="time-outline"
-          label="History"
-          active={screen === 'history'}
-          onPress={() => setScreen('history')}
-        />
-        <NavItem
-          iconActive="settings-sharp"
-          iconInactive="settings-outline"
-          label="Settings"
-          active={screen === 'settings' || screen === 'subscription' || screen === 'managedata'}
-          onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
-        />
+      <View style={[navStyles.wrapper, { paddingBottom: Math.max(bottomInset, 8) }]}>
+        <View style={navStyles.bar}>
+          <NavItem
+            iconActive="home"
+            iconInactive="home-outline"
+            label="Home"
+            active={screen === 'home' || screen === 'result'}
+            onPress={() => setScreen('home')}
+          />
+          <NavItem
+            iconActive="time"
+            iconInactive="time-outline"
+            label="History"
+            active={screen === 'history'}
+            onPress={() => setScreen('history')}
+          />
+          <NavItem
+            iconActive="settings-sharp"
+            iconInactive="settings-outline"
+            label="Settings"
+            active={screen === 'settings' || screen === 'subscription' || screen === 'managedata'}
+            onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
+          />
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -488,23 +492,38 @@ const styles = StyleSheet.create({
 });
 
 const navStyles = StyleSheet.create({
+  wrapper: {
+    backgroundColor: colors.bg,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
   bar: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    paddingTop: 10,
+    borderRadius: 20,
+    paddingVertical: 6,
     paddingHorizontal: 8,
     shadowColor: '#101828',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 8,
   },
   item: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 2,
+  },
+  itemInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+  },
+  itemInnerActive: {
+    backgroundColor: colors.iconBg,
   },
   label: { fontSize: 11, fontFamily: 'Inter_500Medium', color: colors.textMuted },
   labelActive: { color: colors.cyan },
