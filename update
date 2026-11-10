@@ -72,6 +72,16 @@ EXPO_PUBLIC_INSTAGRAM_ENABLED=true
 EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq
 ENVEOF
 
+# Also export as real shell env vars — eas update may not load .env files
+# in all code paths, but always inherits the shell environment.
+export APP_VARIANT=staging
+export EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
+export EXPO_PUBLIC_APP_SCHEME=elmer-staging
+export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+export EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
+export EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+export EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq
+
 # ── 6. Validate required staging settings in the .env ─────────────────────────
 check_env_value() {
   local key="$1" expected="$2"

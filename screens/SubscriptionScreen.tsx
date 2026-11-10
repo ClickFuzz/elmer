@@ -355,7 +355,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
         const d = getPurchaseDiagnostics();
         return (
           <View style={diagStyles.banner}>
-            <Text style={diagStyles.title}>RC Diagnostics (staging)</Text>
+            <Text style={diagStyles.title}>RC Diagnostics (staging) · build 7</Text>
             <Text style={diagStyles.line}>configured: {String(d.configured)}</Text>
             <Text style={diagStyles.line}>platform: {d.platform}</Text>
             <Text style={diagStyles.line}>iOS key: {d.iosKeyPresent ? d.iosKeyPrefix : '⚠ MISSING'}</Text>
