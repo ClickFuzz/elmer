@@ -39,8 +39,8 @@ fi
 echo "Verified: eas.json staging profile maps to channel 'staging', environment 'preview'."
 
 # ── 4. EAS CLI configuration ──────────────────────────────────────────────────
-USE_ENVIRONMENT_FLAG=true
-echo "Using EAS CLI with --environment preview."
+USE_ENVIRONMENT_FLAG=false
+echo "Using EAS CLI without --environment (EAS env overrides local vars; relying on .env block instead)."
 
 # ── 5. Write staging .env (backup production .env; restore on exit) ────────────
 # @expo/env loads .env.local first then .env, with .env winning (override mode).
