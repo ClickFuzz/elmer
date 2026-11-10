@@ -39,8 +39,9 @@ fi
 echo "Verified: eas.json staging profile maps to channel 'staging', environment 'preview'."
 
 # ── 4. EAS CLI configuration ──────────────────────────────────────────────────
-USE_ENVIRONMENT_FLAG=false
-echo "Using EAS CLI without --environment (EAS env overrides local vars; relying on .env block instead)."
+# --environment is intentionally omitted: EAS environment overrides shell vars
+# (and replaces the local .env), so we rely on the .env block written below.
+# --non-interactive is omitted because it requires --environment in recent EAS CLI.
 
 # ── 5. Write staging .env (backup production .env; restore on exit) ────────────
 # @expo/env loads .env.local first then .env, with .env winning (override mode).
@@ -126,20 +127,10 @@ echo "Publishing Elmer Staging OTA update..."
 echo "Message: $MESSAGE"
 echo ""
 
-if [[ "$USE_ENVIRONMENT_FLAG" == "true" ]]; then
-  npx eas-cli@latest update \
-    --branch staging \
-    --environment preview \
-    --platform ios \
-    --message "$MESSAGE" \
-    --non-interactive
-else
-  npx eas-cli@latest update \
-    --branch staging \
-    --platform ios \
-    --message "$MESSAGE" \
-    --non-interactive
-fi
+npx eas-cli@latest update \
+  --branch staging \
+  --platform ios \
+  --message "$MESSAGE"
 
 echo ""
 echo "Staging OTA update published successfully."
