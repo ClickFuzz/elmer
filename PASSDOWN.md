@@ -43,6 +43,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | MVP input validation and manual text fallback: photo+audio pre-generation guards, silent transcription detection, 500-char manual cap, per-platform verbatim fallback, empty-text blocking | COMPLETE — staging `ea631de`; OTA `28049482` |
 | — | UI redesign: tomato-red brand (#DB1200), charcoal text (#252932), warm off-white bg (#F7F6F3), white floating cards with soft shadows, removed all header/footer dividers, floating rounded nav bar with active-item pill | COMPLETE — staging `0d696d0` |
 | — | New logo.png (380×100) and icon.png assets from getelmer.com; logo left-aligned at correct aspect ratio | COMPLETE — staging `0d696d0` |
+| — | Fix audio re-recording silent failure (4th+ attempt): `keepAudioSessionActive:true` prevents 100ms deactivateSession race; remove `setAudioModeAsync(allowsRecording:false)` from playback; capture URI immediately after prepare; clean ExpoAudio cache on each record | COMPLETE — staging OTA `ff1db83c` |
 
 ---
 
@@ -52,7 +53,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 - **Staging branch:** `staging` — HEAD `0d696d0` (23+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign)
 - **Last known TestFlight build:** submitted Nov 10 2026 — EAS build `58ebf62f` (staging-testflight; full UI redesign + new logo/icon + floating nav bar)
 - **Last Android AAB build:** versionCode 8 — EAS build `0cd37927` (staging-google-play; full UI redesign + new logo/icon + floating nav bar; submitted Nov 10 2026)
-- **Active staging OTA update:** group `28049482` (MVP validation + manual text fallback; RC Android key confirmed in bundle) — targets staging channel, runtime 1.0.0
+- **Active staging OTA update:** group `ff1db83c` (audio re-recording fix; built on `c912012`) — targets staging channel, runtime 1.0.0
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`

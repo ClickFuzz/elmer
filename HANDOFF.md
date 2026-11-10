@@ -1,56 +1,68 @@
 # HANDOFF
 
 ## Goal
-Confirm Android audio transcription fix works on-device with versionCode 6.
+Verify two staging fixes on physical devices before merging to main.
 
-## Current Problem
-Android recording → Generate → "Transcription failed" (OpenAI Whisper 400 "audio file could not be decoded").
-Fix was deployed to Railway staging (`d4d2f60`) but not yet confirmed by device test.
+---
 
-## Proven Facts
-- Android MediaRecorder with `mpeg4` output + `aac` encoder creates valid MPEG-4/AAC `.m4a` files.
-- `RecordingPresets.HIGH_QUALITY` on Android → `MediaRecorder.OutputFormat.MPEG_4` + `AudioEncoder.AAC` (confirmed in `AudioRecords.kt`).
-- File plays back successfully on device (confirmed by user), so file is not empty.
-- Root cause: without an explicit MIME type, the OpenAI SDK sends `Content-Type: ""` to Whisper. Android MPEG-4 files use `mp42`/`isom` ftyp brand (not Apple's `M4A `), so Whisper can't identify the format.
-- Fix deployed: `server/app.js` now uses `toFile(stream, 'audio.m4a', { type: 'audio/mp4' })` to send explicit MIME type.
-- Also added `[Generate] Audio received: X bytes` log to Railway.
-- Fix also repairs stale-path cleanup bug in catch block (was unlinking `audioFile.path` after rename).
+## Task A — iOS audio re-recording fix (just deployed)
 
-## Ruled Out
-- Format mismatch — Android HIGH_QUALITY preset confirmed MPEG-4/AAC.
-- Empty file — playback works.
-- Upload corruption — OkHttp reads raw bytes without encoding.
-- Multer misconfiguration — same config serves iOS fine.
+### Current Problem
+On repeated re-records (3rd+ attempt), the new recording plays back as ~2 seconds of silence.
 
-## Current Hypothesis
-Fix is correct. Whisper needed explicit `audio/mp4` content-type to identify Android's MPEG-4 file.
+### Root Cause (confirmed)
+Race condition in expo-audio's native iOS layer:
+- When `AudioPlayer` finishes playback, it schedules `deactivateSession()` with a 100ms delay
+- If the user taps Re-record and `prepareToRecordAsync()` calls `setActive(true)`, the deactivation task fires shortly after and silently kills the `AVAudioRecorder`
+- `setAudioModeAsync({ allowsRecording: false })` in `togglePlayback` was also unnecessary — `playAndRecord + defaultToSpeaker` already routes audio to the speaker
 
-## Changed
-- `server/app.js` — `toFile()` with explicit MIME type, file size log, stale-path cleanup fix
-- `server/test/generation.test.js` — added `MockOpenAI.toFile = async (stream) => stream`
-- Committed `d4d2f60`, pushed `staging`, Railway auto-deployed. 564 tests pass.
+### Fix Deployed (staging OTA `ff1db83c`, commit `c912012`)
+- `keepAudioSessionActive: true` on `createAudioPlayer` — prevents `deactivateSession()` from firing
+- Removed `setAudioModeAsync({ allowsRecording: false })` from `togglePlayback`
+- `pendingUriRef` captures `recorder.uri` immediately after `prepareToRecordAsync()`
+- Cleans old `elmer_pending_audio_*.m4a` and `ExpoAudio/recording-*.m4a` before each record
 
-## Production / Deployment State
-Railway staging deployed `d4d2f60`. versionCode 6 (staging-google-play AAB) with OTA `df153e23` active on the staging channel.
+### Next Step
+1. User: open Elmer Staging on iOS → record → play back → re-record → repeat 5+ times
+2. If all recordings play back correctly: task complete; merge `staging → main`
+3. If still silent: check whether it's reproducible consistently or on specific attempt number
 
-## Exact Next Step
-1. User: open Elmer on Android versionCode 6 → record voice → tap Generate.
-2. If it works: transcription succeeds → task complete; delete HANDOFF.md.
-3. If still fails: check Railway logs for `[Generate] Audio received: X bytes`.
-   - If bytes > 50 KB: file format still wrong → try sending with extension `.mp4` instead of `.m4a` in `toFile()`.
-   - If bytes < 1 KB: upload broken → investigate `FileSystem.uploadAsync` on Android with `file://` URI.
+### Changed
+- `screens/HomeScreen.tsx` — `startRecording`, `stopRecording`, `togglePlayback`, `handleGenerate`
+
+---
+
+## Task B — Android audio transcription fix (pending device test from prior session)
+
+### Current Problem
+Android: record voice → Generate → "Transcription failed" (OpenAI Whisper 400 "audio file could not be decoded").
+
+### Root Cause (confirmed)
+Without an explicit MIME type, OpenAI SDK sends `Content-Type: ""` to Whisper. Android MPEG-4 files use `mp42`/`isom` ftyp brand (not Apple's `M4A`), so Whisper can't identify the format.
+
+### Fix Deployed (Railway staging `d4d2f60`)
+`server/app.js` — `toFile(stream, 'audio.m4a', { type: 'audio/mp4' })` to send explicit MIME type.
+Also added `[Generate] Audio received: X bytes` log to Railway.
+
+### Next Step
+1. User: open Elmer on Android versionCode 6 → record voice → tap Generate
+2. If works: task complete
+3. If still fails: check Railway logs for `[Generate] Audio received: X bytes`
+   - If bytes > 50 KB: try extension `.mp4` in `toFile()` instead of `.m4a`
+   - If bytes < 1 KB: upload broken — investigate `FileSystem.uploadAsync` on Android
+
+---
 
 ## Do Not Repeat
-- Traced full Android recording stack: `RecordingPresets` → `AudioRecords.kt` → `MediaRecorder` → MPEG_4/AAC.
-- Traced OkHttp upload path (`FileSystemUploadTask.kt`) — raw bytes, no encoding.
-- Confirmed OpenAI SDK `toFile()` behavior — creates `File` with no type from `ReadStream`, which is why iOS happened to work (Apple `M4A ` brand is unambiguous) but Android didn't.
+- iOS: Traced full `AudioModule.swift` + `AudioRecorder.swift` native state machine; `AVAudioRecorder.record()` returns `false` silently when session is deactivated by the 100ms deactivation task
+- Android: Traced `RecordingPresets` → `AudioRecords.kt` → `MediaRecorder` MPEG_4/AAC; traced OkHttp upload path; confirmed OpenAI SDK `toFile()` behavior without MIME type
 
-## Relevant Files / Functions
-- `server/app.js:375–410` — transcription block with the fix
-- `screens/HomeScreen.tsx:74,88–103,241–266` — recording + file copy path
-- `screens/ResultScreen.tsx:187–213` — `FileSystem.uploadAsync` with `mimeType: 'audio/m4a'`
-- `node_modules/expo-audio/src/RecordingConstants.ts:69` — HIGH_QUALITY preset (android: mpeg4/aac)
-- `node_modules/expo-audio/android/.../AudioRecords.kt:61–88` — `toMediaOutputFormat()` / `toMediaEncoding()`
+## Relevant Files
+- `screens/HomeScreen.tsx` — full re-recording fix (Task A)
+- `server/app.js:375–410` — transcription block with Android MIME fix (Task B)
 
 ## Git State
-Branch: `staging`. Last commit: `d4d2f60`. All 564 server tests pass. Working tree clean.
+Branch: `staging`. HEAD: `c912012`. Working tree clean.
+Staging OTA active: group `ff1db83c`.
+Android transcription fix: Railway staging auto-deployed `d4d2f60`.
+566 server tests pass.
