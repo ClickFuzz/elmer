@@ -70,6 +70,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     isFeatured: boolean;
   } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
+  const pendingUriRef = useRef<string | null>(null);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
@@ -232,8 +233,37 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
       }
 
       setAudioUri(null);
+      pendingUriRef.current = null;
+
+      // Delete old pending audio files from document directory
+      try {
+        const docDir = FileSystem.documentDirectory!;
+        const contents = await FileSystem.readDirectoryAsync(docDir);
+        await Promise.all(
+          contents
+            .filter(f => f.startsWith('elmer_pending_audio_') && f.endsWith('.m4a'))
+            .map(f => FileSystem.deleteAsync(docDir + f, { idempotent: true }))
+        );
+      } catch { /* non-fatal */ }
+
+      // Delete stale recorder cache files from ExpoAudio directory
+      try {
+        const expoAudioDir = `${FileSystem.cacheDirectory}ExpoAudio/`;
+        const dirInfo = await FileSystem.getInfoAsync(expoAudioDir);
+        if (dirInfo.exists) {
+          const files = await FileSystem.readDirectoryAsync(expoAudioDir);
+          await Promise.all(
+            files
+              .filter(f => f.startsWith('recording-') && f.endsWith('.m4a'))
+              .map(f => FileSystem.deleteAsync(expoAudioDir + f, { idempotent: true }))
+          );
+        }
+      } catch { /* non-fatal */ }
+
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+      // Capture the URI immediately — before any state can change between prepare and stop
+      pendingUriRef.current = recorder.uri;
       recorder.record();
     } catch (err) {
       console.error('Failed to start recording', err);
@@ -244,7 +274,9 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
   const stopRecording = async () => {
     try {
       await recorder.stop();
-      const rawUri = recorder.uri;
+      // Prefer the URI captured right after prepare — more reliable than reading post-stop
+      const rawUri = pendingUriRef.current ?? recorder.uri;
+      pendingUriRef.current = null;
       if (!rawUri) return;
       let uri = rawUri;
       try {
@@ -272,8 +304,14 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         playerRef.current = null;
       }
 
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-      const player = createAudioPlayer({ uri: audioUri });
+      // keepAudioSessionActive: true prevents the 100ms deactivation task that fires when
+      // playback completes. Without it, deactivateSession() can race with the next
+      // prepareToRecordAsync() call and silently kill the new recording.
+      //
+      // No setAudioModeAsync({ allowsRecording: false }) needed here — the session is
+      // already in playAndRecord + defaultToSpeaker mode (set during startRecording),
+      // so audio routes to the speaker without switching away from recording mode.
+      const player = createAudioPlayer({ uri: audioUri }, { keepAudioSessionActive: true });
       playerRef.current = player;
 
       player.addListener('playbackStatusUpdate', (status: { didJustFinish?: boolean }) => {
@@ -307,7 +345,8 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     if (isRecording) {
       try {
         await recorder.stop();
-        finalAudioUri = recorder.uri;
+        finalAudioUri = pendingUriRef.current ?? recorder.uri;
+        pendingUriRef.current = null;
       } catch (err) {
         console.error('Failed to stop recording before generate', err);
       }
