@@ -68,6 +68,7 @@ EXPO_PUBLIC_APP_SCHEME=elmer-staging
 EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
 EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq
 ENVEOF
 
 # ── 6. Validate required staging settings in the .env ─────────────────────────
