@@ -78,6 +78,16 @@ export async function purchaseSubscription(): Promise<PurchaseResult> {
   }
 }
 
+export function getPurchaseDiagnostics(): { configured: boolean; iosKeyPresent: boolean; iosKeyPrefix: string; androidKeyPresent: boolean; platform: string } {
+  return {
+    configured: _configured,
+    iosKeyPresent: !!RC_KEY_IOS,
+    iosKeyPrefix: RC_KEY_IOS ? RC_KEY_IOS.slice(0, 12) + '…' : '(empty)',
+    androidKeyPresent: !!RC_KEY_ANDROID,
+    platform: Platform.OS,
+  };
+}
+
 export type RestoreResult =
   | { success: true; hasEntitlement: boolean }
   | { success: false; error: string };
