@@ -1884,7 +1884,7 @@ const tagStyles = StyleSheet.create({
   inputFlex: { flex: 1 },
   addBtn: { backgroundColor: colors.cyan, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 9 },
   addBtnDisabled: { backgroundColor: colors.border },
-  addBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  addBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   addBtnTextDim: { color: colors.textMuted },
 });
 
@@ -1900,8 +1900,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   backBtn: { width: 80 },
   backBtnText: { color: colors.cyan, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
@@ -1912,7 +1910,18 @@ const styles = StyleSheet.create({
   groupLabel: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 28, marginBottom: 8, marginLeft: 4 },
   groupNote: { fontSize: 12, color: colors.textMuted, lineHeight: 17, marginTop: 8, marginBottom: 28, marginHorizontal: 4 },
 
-  card: { backgroundColor: colors.surface, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
 
   cardToggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
   cardToggleLeft: { flex: 1, marginRight: 12 },
@@ -1937,7 +1946,7 @@ const styles = StyleSheet.create({
 
   saveBtn: { backgroundColor: colors.cyan, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
   saveBtnDisabled: { opacity: 0.6 },
-  saveBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  saveBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   saveErrorText: { fontSize: 13, color: colors.error, marginTop: 6, marginHorizontal: 4 },
 
   // Auth form
@@ -1945,7 +1954,7 @@ const styles = StyleSheet.create({
   authButtons: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 14 },
   authBtn: { flex: 1, backgroundColor: colors.cyan, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   authBtnDisabled: { opacity: 0.5 },
-  authBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  authBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   authBtnSecondary: { flex: 1, backgroundColor: colors.border, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   authBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
 
@@ -1958,7 +1967,7 @@ const styles = StyleSheet.create({
 
   actionBtn: { backgroundColor: colors.cyan, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14 },
   actionBtnDisabled: { backgroundColor: colors.border },
-  actionBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  actionBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   actionBtnTextDisabled: { color: colors.textMuted },
   actionBtnDanger: { backgroundColor: 'rgba(255,90,60,0.1)', borderWidth: 1, borderColor: 'rgba(255,90,60,0.25)' },
   actionBtnTextDanger: { color: colors.error },
@@ -1974,10 +1983,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   checkboxChecked: { backgroundColor: colors.cyan, borderColor: colors.cyan },
-  checkmark: { fontSize: 13, color: colors.bg, fontWeight: '700', lineHeight: 16 },
+  checkmark: { fontSize: 13, color: '#FFFFFF', fontWeight: '700', lineHeight: 16 },
   managePagesActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 14 },
   savePagesBtn: { flex: 1, backgroundColor: colors.cyan, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
-  savePagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  savePagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   cancelPagesBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
   cancelPagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 

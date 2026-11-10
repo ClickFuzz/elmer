@@ -174,7 +174,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 8,
   },
-  logoImage: { height: 36, width: 160 },
+  logoImage: { height: 40, width: 152 },
   tagline: {
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
@@ -186,8 +186,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     overflow: 'hidden',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   fieldRow: {
     flexDirection: 'row',
@@ -235,7 +240,7 @@ const styles = StyleSheet.create({
   btnPrimaryText: {
     fontSize: 15,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   btnSecondary: {
     flex: 1,

@@ -388,7 +388,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionIconWrap}>
-              <Ionicons name="camera" size={18} color={colors.blue} />
+              <Ionicons name="camera" size={18} color={colors.cyan} />
             </View>
             <View style={styles.sectionLabelGroup}>
               <Text style={styles.sectionLabel}>Photos</Text>
@@ -437,7 +437,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
 
             {photos.length < MAX_PHOTOS && (
               <TouchableOpacity style={styles.addPhotoBtn} onPress={addPhotos} activeOpacity={0.7}>
-                <Ionicons name="add" size={28} color={colors.textMuted} />
+                <Ionicons name="add" size={28} color={colors.cyan} />
                 <Text style={styles.addPhotoBtnLabel}>
                   {photos.length === 0 ? 'Add Photo' : 'Add More'}
                 </Text>
@@ -572,34 +572,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 24,
     paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
-  logoImage: { height: 36, width: 160, marginBottom: 2 },
-  headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.navy, marginTop: 10, lineHeight: 30 },
+  logoImage: { height: 40, width: 152, marginBottom: 2, alignSelf: 'flex-start' },
+  headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary, marginTop: 10, lineHeight: 30 },
   subheadline: { fontSize: 15, fontFamily: 'Inter_400Regular', color: colors.textSecondary, marginTop: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20 },
   section: {
-    backgroundColor: colors.surface,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 18,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   sectionIconWrap: {
     width: 36,
     height: 36,
     borderRadius: 9,
-    backgroundColor: 'rgba(37,99,166,0.12)',
+    backgroundColor: colors.iconBg,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
   },
   sectionIconWrapMic: {
-    backgroundColor: 'rgba(228,0,109,0.1)',
+    backgroundColor: colors.iconBg,
   },
   sectionLabelGroup: { flex: 1 },
   sectionLabel: { fontSize: 17, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary },
@@ -650,7 +653,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: colors.border,
+    borderColor: '#D0D5DD',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.bg,
@@ -693,22 +696,27 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 24,
     backgroundColor: colors.bg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
   generateBtn: {
     backgroundColor: colors.cyan,
     borderRadius: 16,
     paddingVertical: 20,
     alignItems: 'center',
+    shadowColor: colors.cyan,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 2,
   },
   generateBtnDisabled: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   generateBtnText: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
     letterSpacing: 0.2,
@@ -777,12 +785,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  radioSelected: { borderColor: colors.blue },
+  radioSelected: { borderColor: colors.cyan },
   radioDot: {
     width: 11,
     height: 11,
     borderRadius: 5.5,
-    backgroundColor: colors.blue,
+    backgroundColor: colors.cyan,
   },
   modalDivider: {
     height: 1,
@@ -807,6 +815,6 @@ const styles = StyleSheet.create({
   modalDoneBtnText: {
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
 });

@@ -489,8 +489,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
     marginBottom: 24,
   },
   backBtn: { width: 80 },
@@ -505,16 +503,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 36,
   },
-  logoImage: { height: 36, width: 160 },
+  logoImage: { height: 40, width: 152 },
 
   // Offer card
   offerCard: {
     backgroundColor: colors.surface,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     padding: 24,
     gap: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   offerHeadline: {
     fontSize: 22,
@@ -538,7 +541,7 @@ const styles = StyleSheet.create({
   ctaBtnText: {
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   disclosure: {
     fontSize: 12,

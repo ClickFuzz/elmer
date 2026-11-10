@@ -491,10 +491,13 @@ const navStyles = StyleSheet.create({
   bar: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
     paddingTop: 10,
     paddingHorizontal: 8,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 4,
   },
   item: {
     flex: 1,

@@ -832,9 +832,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     overflow: 'hidden',
     marginBottom: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
 
   fieldRow: {
@@ -891,7 +896,7 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   saveError: {
     fontSize: 13,
@@ -968,7 +973,7 @@ const styles = StyleSheet.create({
   connectBtnText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   connectedChip: {
     backgroundColor: 'rgba(67,227,160,0.15)',
@@ -1013,7 +1018,7 @@ const styles = StyleSheet.create({
   wpConnectBtnText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   wpCancelBtn: {
     flex: 1,
@@ -1034,10 +1039,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     padding: 20,
     gap: 16,
     marginBottom: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   stepItemRow: {
     flexDirection: 'row',
@@ -1129,7 +1139,7 @@ const styles = StyleSheet.create({
     borderColor: colors.cyan,
   },
   selectionCheckmark: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
   },
@@ -1151,7 +1161,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   selectionSaveBtnText: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
   },
