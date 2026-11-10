@@ -351,7 +351,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       keyboardShouldPersistTaps="handled"
     >
       {/* Staging-only RC diagnostics */}
-      {process.env.EXPO_PUBLIC_APP_SCHEME === 'elmer-staging' && (() => {
+      {true && (() => {
         const d = getPurchaseDiagnostics();
         return (
           <View style={diagStyles.banner}>
