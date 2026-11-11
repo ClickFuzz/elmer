@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in — elmer.</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+
+    <div class="card">
+      <div style="text-align:center;margin-bottom:24px;">
+        <span class="wordmark">elmer<span class="wordmark-period">.</span></span>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" id="tabLogin" type="button">Log in</button>
+        <button class="tab-btn" id="tabSignup" type="button">Sign up</button>
+      </div>
+
+      <!-- Log in form -->
+      <div id="loginPanel">
+        <form id="loginForm" novalidate autocomplete="on">
+          <div class="form-group">
+            <label for="loginEmail">Email</label>
+            <input type="email" id="loginEmail" name="email" autocomplete="email"
+              placeholder="you@example.com" required>
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" name="password" autocomplete="current-password"
+              placeholder="Your password" required>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-full" id="loginBtn"
+              data-loading-text="Logging in…">Log in</button>
+          </div>
+          <div class="form-footer" style="margin-top:14px;">
+            <a href="forgot-password.html">Forgot your password?</a>
+          </div>
+        </form>
+        <div id="loginAlert" class="alert alert-hidden" role="alert"></div>
+      </div>
+
+      <!-- Sign up panel (hidden by default) -->
+      <div id="signupPanel" class="hidden">
+        <form id="signupForm" novalidate autocomplete="on">
+          <div class="form-group">
+            <label for="signupEmail">Email</label>
+            <input type="email" id="signupEmail" name="email" autocomplete="email"
+              placeholder="you@example.com" required>
+          </div>
+          <div class="form-group">
+            <label for="signupPassword">Password</label>
+            <input type="password" id="signupPassword" name="password" autocomplete="new-password"
+              placeholder="At least 8 characters" required minlength="8">
+          </div>
+          <div class="form-group">
+            <label for="signupConfirm">Confirm password</label>
+            <input type="password" id="signupConfirm" name="confirm" autocomplete="new-password"
+              placeholder="Repeat your password" required>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-full" id="signupBtn"
+              data-loading-text="Creating account…">Create account</button>
+          </div>
+        </form>
+        <div id="signupAlert" class="alert alert-hidden" role="alert"></div>
+      </div>
+
+    </div>
+
+    <div style="margin-top:20px;text-align:center;font-size:12px;color:var(--muted);">
+      <a href="https://getelmer.com/privacy-policy" style="color:var(--muted);margin-right:12px;">Privacy</a>
+      <a href="https://getelmer.com/terms-and-conditions" style="color:var(--muted);">Terms</a>
+    </div>
+
+  </div>
+
+  <script src="common.js"></script>
+  <script src="login.js"></script>
+</body>
+</html>

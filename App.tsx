@@ -302,6 +302,13 @@ function AppShell() {
   };
 
   const handlePublishSuccess = () => {
+    // Clear home state as soon as any platform succeeds so both the Back header
+    // and the Done button return to a fresh Home — not just the Done path.
+    // Skip when publishing a history draft: the user may have an active job on Home.
+    if (!draftJob) {
+      savePendingHomeState(null);
+      setSavedHomeState(null);
+    }
     // Refresh entitlement so hasFreePublicationAvailable reflects the redeemed state.
     if (authToken) {
       fetchSubscriptionStatus(authToken).then(status => {

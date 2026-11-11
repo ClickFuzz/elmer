@@ -1,11 +1,26 @@
 'use strict';
 
-const { Router }      = require('express');
-const { randomBytes } = require('crypto');
-const bcrypt          = require('bcryptjs');
-const { getPool }     = require('../db');
+const { Router }               = require('express');
+const { randomBytes, createHash } = require('crypto');
+const bcrypt                   = require('bcryptjs');
+const rateLimit                = require('express-rate-limit');
+const { getPool }              = require('../db');
 const { requireAuth, SESSION_TTL_MS } = require('../auth');
-const { hasAccess }   = require('./billing');
+const { hasAccess }            = require('./billing');
+const { sendPasswordResetEmail } = require('../services/email');
+
+// Tighter rate limit for the forgot-password endpoint to limit email-bomb
+// and user-enumeration-via-timing attacks.  Disabled in tests via DISABLE_RATE_LIMIT.
+const forgotPasswordLimit = (() => {
+  if (process.env.DISABLE_RATE_LIMIT === 'true') return (_req, _res, next) => next();
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max:      5,
+    standardHeaders: true,
+    legacyHeaders:   false,
+    message: { error: 'Too many password reset requests, please try again later.' },
+  });
+})();
 
 const router = Router();
 const BCRYPT_ROUNDS = 12;
@@ -264,6 +279,129 @@ router.delete('/account', requireAuth, wrap(async (req, res) => {
     return res.status(404).json({ error: 'Account not found' });
   }
   return res.json({ ok: true });
+}));
+
+// ── POST /auth/forgot-password ─────────────────────────────────────────────
+// Initiates the password reset flow by emailing a one-time reset link.
+// Always returns 200 regardless of whether the email address is registered,
+// to prevent user enumeration.  The raw token is never logged.
+router.post('/forgot-password', forgotPasswordLimit, wrap(async (req, res) => {
+  const { email } = req.body ?? {};
+
+  // Return early for obviously invalid input — still 200 to avoid enumeration.
+  if (!email || typeof email !== 'string') {
+    return res.json({ ok: true });
+  }
+
+  const pool            = getPool();
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const { rows } = await pool.query(
+    'SELECT id FROM users WHERE email = $1',
+    [normalizedEmail]
+  );
+
+  if (rows.length === 0) {
+    return res.json({ ok: true }); // unknown email — silent no-op
+  }
+
+  const userId = rows[0].id;
+  const now    = Date.now();
+
+  // Invalidate any existing unused tokens for this user so older links stop
+  // working immediately — avoids confusion when a user requests multiple times.
+  await pool.query(
+    'DELETE FROM password_reset_tokens WHERE user_id = $1 AND used_at IS NULL',
+    [userId]
+  );
+
+  const rawToken   = randomBytes(32).toString('hex');
+  const tokenHash  = createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt  = now + 60 * 60 * 1000; // 1 hour
+
+  await pool.query(
+    'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+    [userId, tokenHash, expiresAt]
+  );
+
+  const portalUrl  = process.env.BILLING_PORTAL_URL ?? 'https://billing.getelmer.com';
+  const resetUrl   = `${portalUrl}/reset-password?token=${rawToken}`;
+
+  // sendPasswordResetEmail is a no-op when RESEND_API_KEY is absent (dev/test).
+  await sendPasswordResetEmail(normalizedEmail, resetUrl);
+
+  return res.json({ ok: true });
+}));
+
+// ── POST /auth/reset-password ──────────────────────────────────────────────
+// Consumes a one-time reset token, updates the password, and invalidates all
+// existing sessions.  Returns a fresh session token so the portal can
+// auto-sign-in the user without an extra round trip.
+router.post('/reset-password', wrap(async (req, res) => {
+  const { token, newPassword } = req.body ?? {};
+
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'invalid_or_expired_token' });
+  }
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const now       = Date.now();
+  const pool      = getPool();
+  const client    = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Lock the row to prevent concurrent redemptions.
+    const { rows } = await client.query(
+      `SELECT id, user_id FROM password_reset_tokens
+       WHERE token_hash = $1 AND expires_at > $2 AND used_at IS NULL
+       FOR UPDATE`,
+      [tokenHash, now]
+    );
+
+    if (rows.length === 0) {
+      await client.query('COMMIT');
+      return res.status(400).json({ error: 'invalid_or_expired_token' });
+    }
+
+    const { id: tokenId, user_id: userId } = rows[0];
+
+    // Mark token used — prevents replay even if someone retains the raw token.
+    await client.query(
+      'UPDATE password_reset_tokens SET used_at = $1 WHERE id = $2',
+      [now, tokenId]
+    );
+
+    // Update password.
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    await client.query(
+      'UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3',
+      [passwordHash, now, userId]
+    );
+
+    // Invalidate all existing sessions (compromised credentials are revoked).
+    await client.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+
+    // Issue a new session so the portal can auto-sign-in.
+    const newToken = randomBytes(32).toString('hex');
+    await client.query(
+      'INSERT INTO sessions (user_id, token, created_at, expires_at) VALUES ($1, $2, $3, $4)',
+      [userId, newToken, now, now + SESSION_TTL_MS]
+    );
+
+    await client.query('COMMIT');
+
+    return res.json({ ok: true, token: newToken, expiresAt: now + SESSION_TTL_MS });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }));
 
 module.exports = router;

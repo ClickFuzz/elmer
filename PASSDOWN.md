@@ -33,7 +33,8 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
-| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; **iOS purchase confirmed working** (Nov 11); Android AAB versionCode 8 built + App Links + OTA active |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | COMPLETE — merged main `6c51897` (Nov 11); iOS + Android purchase confirmed working |
+| — | Production build preparation: staging→main merge, production RC keys, Android icon fix, Android buildType, EAS production env | COMPLETE — main `6c51897` (Nov 11) |
 | — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
 | — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
 | — | Fix RC init order (initPurchases before switchPurchasesUser); fix $19.99/month price display | COMPLETE — staging OTA `df153e23` |
@@ -50,21 +51,35 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `5f8dfaf` (25+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign + iOS RC OTA fix)
-- **Last known TestFlight build:** submitted Nov 10 2026 — EAS build `58ebf62f` (staging-testflight; full UI redesign + new logo/icon + floating nav bar)
-- **Last Android AAB build:** versionCode 8 — EAS build `0cd37927` (staging-google-play; full UI redesign + new logo/icon + floating nav bar; submitted Nov 10 2026)
-- **Active staging OTA update:** built on `5f8dfaf` (RC diagnostics cleanup; iOS purchase confirmed working) — targets staging channel via EAS Preview environment, runtime 1.0.0
+- **Production branch:** `main` — HEAD `6c51897` (Nov 11 — staging→main merge complete)
+- **Staging branch:** `staging` — HEAD `81bf0b9` (up to date with main; in sync after icon fix + eas.json update)
+- **Last production iOS build:** PENDING — awaiting GitHub Actions `ios-build.yml` dispatch from `main` (manual trigger required at https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml)
+- **Last staging TestFlight build:** EAS `58ebf62f` versionCode 28 (staging-testflight; Nov 10)
+- **Production Android AAB:** EAS `cfecc61f` versionCode 12 — **FINISHED** (profile `production`, channel `production`, built from main `6c51897`; AAB ready for Google Play upload)
+- **Last staging Android build:** EAS `8ca6fecb` versionCode 8 (staging-google-play; Nov 10)
+- **Active staging OTA update:** targets staging channel; iOS purchase confirmed working Nov 11
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
-- **Production bundle ID:** `com.clickfuzz.elmer`
-- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (internal distribution only; no ASC app)
+- **Production bundle ID:** `com.clickfuzz.elmer` / Android package `com.clickfuzz.elmer`
+- **Staging bundle ID:** `com.clickfuzz.elmer` (iOS) / `com.clickfuzz.elmer.staging` (Android, via app.config.js)
 - **Production API:** `https://api.getelmer.com` (Railway)
 - **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET`, `ALLOWED_OAUTH_RETURN_SCHEMES=elmer,elmer-staging` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
-- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions (exception: `npx eas-cli@latest build` still works for staging-testflight ad-hoc builds)
-- **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
-- **react-native-purchases**: pinned at `10.16.0` on staging (downgraded from `11.0.1` — `PurchasesHybridCommon 20.4.0` unpublished Nov 2–6 2026 CocoaPods disruption); upgrade back to `11.x` after disruption clears
+- **EAS production environment** (expo.dev): `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_POSTHOG_API_KEY`, `EXPO_PUBLIC_POSTHOG_HOST`, `EXPO_PUBLIC_RC_API_KEY_IOS`, `EXPO_PUBLIC_RC_API_KEY_ANDROID` — all set Nov 11
+- **react-native-purchases**: pinned at `10.16.0` (downgraded from `11.0.1` — `PurchasesHybridCommon 20.4.0` unpublished Nov 2–6 2026 CocoaPods disruption); upgrade back to `11.x` after disruption clears
+
+### Reviewer Account
+
+- Email: `review@clickfuzz.com`
+- Password: **`ElmerReview2026!`** (set via SQL below — plaintext documented here, not committed as a hash)
+- Subscription: active bypass until 2099 (V10 migration, `sub_review_bypass`)
+- **SQL to run in Railway PostgreSQL console to activate this password:**
+  ```sql
+  UPDATE users
+  SET password_hash = '$2a$12$Lky.ITuzamf9E6vfPxHfu.4Dpbs0cMNjvoyg0FLFMAbD/9H0MwAme',
+      updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000
+  WHERE email = 'review@clickfuzz.com';
+  ```
 
 ## Staging Environment
 
@@ -256,22 +271,50 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ## Pending Actions Before App Store Release
 
-1. **Complete iOS sandbox purchase test** — Install TestFlight build 24, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock.
-2. **Complete Android purchase + registration test** — Upload AAB (versionCode 6) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases. Install OTA update group `28049482` or confirm it auto-applies.
-2a. **Confirm Android audio transcription fix** — On versionCode 6 with Railway staging deployed, record voice + tap Generate. Confirm no "Transcription failed" error. Check Railway logs for `[Generate] Audio received: X bytes` (expect 50 KB+).
-3. **Merge staging → main** — After both iOS and Android purchase tests pass; 20+ commits of RC integration + App Links + audio fix.
-4. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
-4. **New production iOS build** — Required after merging RC integration (new native module; OTA alone is not sufficient). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
-5. **Set `EXPO_PUBLIC_RC_API_KEY_IOS` in production `eas.json` env** — Only after RC sandbox test passes on staging; use the same key `appl_qiMBWYvElXNhKitKwqFWXExCYsq`.
-6. **Set `REVENUECAT_SECRET_KEY` + `REVENUECAT_WEBHOOK_SECRET` on Railway production** — After staging test passes; configure RC production webhook at `https://api.getelmer.com/billing/rc-webhook`.
-3. **OTA update (interim):** if shipping before a new binary, push `34fe198` to `production` channel — `bunx eas-cli update --branch production --message "Fix subscription manage screen: no flash, back button, Invalid Date"` — but note this does NOT include the Instagram flag (that requires a build with the new `EXPO_PUBLIC_INSTAGRAM_ENABLED` env var absent).
-4. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
-5. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway. **Do not set `STRIPE_TEST_MODE=true` when live key is present** — the billing.js startup guard will crash the server.
-6. **Stripe webhook endpoint:** register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard and verify checkout → subscription activation end-to-end.
-7. **Meta App Review:** Elmer v2 is currently under Meta review. After TestFlight verification passes, configure the Meta dashboard callback URLs (see Meta Compliance section above). Do not modify the pending review submission.
-8. **Google Cloud Console:** add `https://api.getelmer.com/google/callback` to authorized redirect URIs for the OAuth 2.0 client in project `elmer-511511`. Add `https://api.getelmer.com` to authorized JavaScript origins.
-9. **Railway GBP env vars:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in the Elmer Server service and redeploy.
-10. **GBP API library approval:** `My Business API`, `My Business Account Management API`, `My Business Business Information API` must be enabled in GCP console; may require Google's GBP API access verification process.
+> Items 1–5 from the Nov 11 2026 production build prep session are **COMPLETE**. The remaining items are console/manual steps.
+
+**COMPLETE (Nov 11):**
+- ✅ iOS + Android purchase tests confirmed working
+- ✅ staging → main merged (`6c51897`)
+- ✅ Production RC keys set in EAS production env + `eas.json` production profile
+- ✅ Android `buildType: app-bundle` added to production profile
+- ✅ Android icon Gradle fix committed (replaced missing adaptive icon assets)
+- ✅ Android EAS production build submitted (EAS `cfecc61f`, versionCode 12, IN PROGRESS)
+
+**REMAINING:**
+
+1. **[REQUIRED BEFORE iOS REVIEW SUBMISSION] Trigger production iOS build** — GitHub Actions → `https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml` → "Run workflow" → Branch: `main`. Builds locally, signs, submits to TestFlight automatically. Then submit for App Review from App Store Connect.
+
+2. **[REQUIRED BEFORE BOTH] Reviewer password SQL** — Run in Railway PostgreSQL console:
+   ```sql
+   UPDATE users
+   SET password_hash = '$2a$12$Lky.ITuzamf9E6vfPxHfu.4Dpbs0cMNjvoyg0FLFMAbD/9H0MwAme',
+       updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT * 1000
+   WHERE email = 'review@clickfuzz.com';
+   ```
+   Reviewer credentials: `review@clickfuzz.com` / `ElmerReview2026!`
+
+3. **[REQUIRED] Android AAB upload** — Once EAS `cfecc61f` completes, download AAB from expo.dev and upload to Google Play Console → Internal testing track.
+
+4. **[REQUIRED] App Store Connect listing** — Complete: app description, screenshots, support URL (`https://getelmer.com`), privacy policy URL (`https://getelmer.com/privacy`), age rating, US-only territory restriction, subscription product linked to build.
+
+5. **[REQUIRED] Google Play listing** — Complete: description, screenshots, content rating questionnaire, data safety form.
+
+6. **[PRE-RELEASE] Upgrade react-native-purchases to 11.x** — CocoaPods disruption cleared; run `npx expo install react-native-purchases@latest`, typecheck, staging build to confirm, then new production builds.
+
+7. **[PRE-RELEASE] Stripe production keys** — Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway production. **Do not set `STRIPE_TEST_MODE=true` when live key is present** — billing.js startup guard will crash the server.
+
+8. **[PRE-RELEASE] Stripe webhook** — Register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
+
+9. **[PRE-RELEASE] Set `REVENUECAT_SECRET_KEY` + `REVENUECAT_WEBHOOK_SECRET` on Railway production** — Configure RC production webhook at `https://api.getelmer.com/billing/rc-webhook`.
+
+10. **[PRE-RELEASE] Meta App Review** — Currently in progress. Do not modify the pending review submission. After approval, configure callback URLs per Meta Compliance section above.
+
+11. **[PRE-RELEASE] Google Cloud Console** — Add `https://api.getelmer.com/google/callback` to authorized redirect URIs in project `elmer-511511`; add `https://api.getelmer.com` to authorized JavaScript origins.
+
+12. **[PRE-RELEASE] Railway GBP env vars** — Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in Elmer Server service and redeploy.
+
+13. **[PRE-RELEASE] GBP API library approval** — Enable My Business API, My Business Account Management API, My Business Business Information API in GCP console.
 
 ## Instagram Activation (when Meta approves publishing permissions)
 
