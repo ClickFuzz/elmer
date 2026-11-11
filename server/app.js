@@ -67,7 +67,7 @@ if (DISABLE_AUTH) {
 // ── Multer upload ─────────────────────────────────────────────────────────────
 
 const TMP_DIR = path.join(__dirname, 'tmp');
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
+fs.mkdirSync(TMP_DIR, { recursive: true }); // idempotent; safe under parallel test workers
 const upload = multer({ dest: TMP_DIR, limits: { fileSize: 50 * 1024 * 1024 } });
 
 const optionalAudioUpload = (req, res, next) => {
