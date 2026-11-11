@@ -588,7 +588,7 @@ async function migrate(pool) {
       }
 
       // Allow stripe_customer_id to be NULL for non-Stripe providers.
-      // Wrapped in try/catch because pg-mem does not support ALTER COLUMN DROP NOT NULL.
+      // Wrapped in try/catch because pg-mem may reject this on some versions.
       try {
         await client.query(
           `ALTER TABLE subscriptions ALTER COLUMN stripe_customer_id DROP NOT NULL`
@@ -605,13 +605,32 @@ async function migrate(pool) {
         );
       } catch { /* pg-mem */ }
 
-      // Add composite unique constraint (may already exist from a successful V14 run).
-      try {
-        await client.query(
-          `ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_user_provider_sub_unique
-           UNIQUE(user_id, provider, provider_subscription_id)`
-        );
-      } catch { /* already exists or pg-mem */ }
+      // Add composite unique constraint only if it doesn't already exist.
+      // V14 may have already added it on instances where V14 succeeded.
+      //
+      // A bare try/catch is NOT safe on real PostgreSQL: a failed DDL statement
+      // inside a transaction leaves the transaction in an aborted state (25P02),
+      // and catching the JS exception does NOT un-abort the transaction.
+      //
+      // Fix: pre-check via information_schema (reliable on real PostgreSQL).
+      // The inner try/catch is a pg-mem fallback only: pg-mem's
+      // information_schema.table_constraints does not reflect ADD CONSTRAINT
+      // results, so the check may return a false zero on pg-mem.  pg-mem does NOT
+      // implement PostgreSQL's transaction-abort-on-DDL-error behaviour, so a
+      // bare try/catch remains safe there.
+      const { rows: ucRows } = await client.query(
+        `SELECT 1 FROM information_schema.table_constraints
+         WHERE table_schema = 'public' AND table_name = 'subscriptions'
+         AND constraint_name = 'subscriptions_user_provider_sub_unique'`
+      );
+      if (ucRows.length === 0) {
+        try {
+          await client.query(
+            `ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_user_provider_sub_unique
+             UNIQUE(user_id, provider, provider_subscription_id)`
+          );
+        } catch { /* pg-mem: constraint already exists but not visible via information_schema */ }
+      }
 
       // Drop legacy UNIQUE(user_id) constraint (may already be absent from V15).
       try {
