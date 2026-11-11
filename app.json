@@ -19,11 +19,7 @@
     },
     "android": {
       "package": "com.clickfuzz.elmer",
-      "adaptiveIcon": {
-        "backgroundColor": "#E4006D",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
+      "icon": "./assets/icon-android.png",
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
