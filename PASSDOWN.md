@@ -53,10 +53,10 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 
 - **Production branch:** `main` — HEAD `6c51897` (Nov 11 — staging→main merge complete)
 - **Staging branch:** `staging` — HEAD `81bf0b9` (up to date with main; in sync after icon fix + eas.json update)
-- **Last production iOS build:** PENDING — awaiting GitHub Actions `ios-build.yml` dispatch from `main` (manual trigger required)
+- **Last production iOS build:** PENDING — awaiting GitHub Actions `ios-build.yml` dispatch from `main` (manual trigger required at https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml)
 - **Last staging TestFlight build:** EAS `58ebf62f` versionCode 28 (staging-testflight; Nov 10)
-- **Production Android AAB build:** EAS `cfecc61f` versionCode 12 — **IN PROGRESS** (triggered Nov 11; profile `production`, channel `production`)
-- **Last staging Android build:** EAS `8ca6fecb` versionCode 8 (staging-google-play; Nov 10; last successful; build 9 errored — now fixed)
+- **Production Android AAB:** EAS `cfecc61f` versionCode 12 — **FINISHED** (profile `production`, channel `production`, built from main `6c51897`; AAB ready for Google Play upload)
+- **Last staging Android build:** EAS `8ca6fecb` versionCode 8 (staging-google-play; Nov 10)
 - **Active staging OTA update:** targets staging channel; iOS purchase confirmed working Nov 11
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
