@@ -301,16 +301,17 @@ function AppShell() {
     setSavedHomeState(null);
   };
 
-  const handlePublishSuccess = () => {
-    // Clear home state as soon as any platform succeeds so both the Back header
-    // and the Done button return to a fresh Home — not just the Done path.
+  const handlePublishSuccess = (anySuccess: boolean) => {
+    // Clear home state whenever a publish attempt finishes (success, partial, or
+    // complete failure). Content is already in History (saved at generation time),
+    // so it is always safe to clear here.
     // Skip when publishing a history draft: the user may have an active job on Home.
     if (!draftJob) {
       savePendingHomeState(null);
       setSavedHomeState(null);
     }
-    // Refresh entitlement so hasFreePublicationAvailable reflects the redeemed state.
-    if (authToken) {
+    // Refresh entitlement only when at least one platform actually published.
+    if (anySuccess && authToken) {
       fetchSubscriptionStatus(authToken).then(status => {
         if (status) setSubscriptionStatus(status);
       }).catch(() => {});
