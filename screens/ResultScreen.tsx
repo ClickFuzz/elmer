@@ -55,7 +55,7 @@ type Props = {
   draftJob?: Job | null;
   onBack: () => void;
   onPublishComplete?: () => void;
-  onPublishSuccess?: () => void;
+  onPublishSuccess?: (anySuccess: boolean) => void;
   onShowSettings: () => void;
   onShowSubscription?: () => void;
   hasFreePublicationAvailable?: boolean;
@@ -816,8 +816,8 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         }
       }
       const anySuccess = allResults.some(r => r.ok);
-      if (anySuccess) onPublishSuccess?.();
       setPublishState({ status: 'success', results: allResults, isFirstFreePost: wasFirstFreePost.current });
+      onPublishSuccess?.(anySuccess);
 
       if (savedJobId != null) {
         const platformsRecord: Record<string, JobPlatformResult> = {};
