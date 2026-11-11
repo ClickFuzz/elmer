@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 let _pool        = null;
 let _initialized = false;
@@ -645,6 +645,29 @@ async function migrate(pool) {
       );
     }
 
+    // ── V19: password reset tokens ────────────────────────────────────────────
+    // Creates the password_reset_tokens table required by POST /auth/forgot-password
+    // and POST /auth/reset-password.  This table was documented in ARCHITECTURE.md
+    // as being added in V14 but was accidentally omitted from the migration code.
+    if (!applied.has(19)) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id          BIGSERIAL PRIMARY KEY,
+          user_id     BIGINT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash  TEXT    NOT NULL UNIQUE,
+          expires_at  BIGINT  NOT NULL,
+          used_at     BIGINT
+        )
+      `);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash)`
+      );
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [19, Date.now()]
+      );
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -668,6 +691,9 @@ async function initDb() {
     cleanStaleFreePublicationReservations().catch(err =>
       console.warn('[elmer] reservation cleanup error:', err.message)
     );
+    cleanExpiredPasswordResetTokens().catch(err =>
+      console.warn('[elmer] password reset token cleanup error:', err.message)
+    );
   }
   return pool;
 }
@@ -683,6 +709,13 @@ async function closeDb() {
 async function cleanExpiredSessions() {
   await getPool().query(
     'DELETE FROM sessions WHERE expires_at < $1',
+    [Date.now()]
+  );
+}
+
+async function cleanExpiredPasswordResetTokens() {
+  await getPool().query(
+    'DELETE FROM password_reset_tokens WHERE expires_at < $1',
     [Date.now()]
   );
 }
@@ -745,4 +778,4 @@ function _setPoolForTesting(pool) {
   _initialized = false;
 }
 
-module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, _setPoolForTesting };
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, cleanExpiredPasswordResetTokens, _setPoolForTesting };

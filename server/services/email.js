@@ -27,7 +27,7 @@ async function sendPasswordResetEmail(toEmail, resetUrl) {
   const { Resend } = require('resend');
   const resend = new Resend(apiKey);
 
-  const from = process.env.EMAIL_FROM ?? 'Elmer <noreply@getelmer.com>';
+  const from = process.env.EMAIL_FROM ?? 'Elmer <noreply@notify.getelmer.com>';
 
   await resend.emails.send({
     from,
