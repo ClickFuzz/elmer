@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 let _pool        = null;
 let _initialized = false;
@@ -554,6 +554,75 @@ async function migrate(pool) {
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [17, Date.now()]
+      );
+    }
+
+    if (!applied.has(18)) {
+      // Repair: V14 wrapped every ALTER TABLE in a broad try/catch that silently swallowed
+      // DDL failures on production databases.  As a result, some production instances have
+      // V14 recorded in schema_migrations but the multi-provider columns never added to the
+      // subscriptions table.  This migration checks column existence explicitly via
+      // information_schema (compatible with both PostgreSQL and pg-mem) and adds only the
+      // columns that are genuinely missing — with no error-swallowing for the critical DDL.
+      const { rows: colRows } = await client.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'subscriptions'
+         AND column_name IN ('provider', 'provider_subscription_id', 'provider_event_at')`
+      );
+      const existingCols = new Set(colRows.map(r => r.column_name));
+
+      if (!existingCols.has('provider')) {
+        await client.query(
+          `ALTER TABLE subscriptions ADD COLUMN provider TEXT NOT NULL DEFAULT 'stripe'`
+        );
+      }
+      if (!existingCols.has('provider_subscription_id')) {
+        await client.query(
+          `ALTER TABLE subscriptions ADD COLUMN provider_subscription_id TEXT`
+        );
+      }
+      if (!existingCols.has('provider_event_at')) {
+        await client.query(
+          `ALTER TABLE subscriptions ADD COLUMN provider_event_at BIGINT`
+        );
+      }
+
+      // Allow stripe_customer_id to be NULL for non-Stripe providers.
+      // Wrapped in try/catch because pg-mem does not support ALTER COLUMN DROP NOT NULL.
+      try {
+        await client.query(
+          `ALTER TABLE subscriptions ALTER COLUMN stripe_customer_id DROP NOT NULL`
+        );
+      } catch { /* pg-mem */ }
+
+      // Backfill provider_subscription_id for any existing Stripe rows that need it.
+      // Wrapped in try/catch because pg-mem may not support complex UPDATE column references.
+      try {
+        await client.query(
+          `UPDATE subscriptions
+           SET provider_subscription_id = COALESCE(stripe_subscription_id, 'legacy_' || id::text)
+           WHERE provider_subscription_id IS NULL`
+        );
+      } catch { /* pg-mem */ }
+
+      // Add composite unique constraint (may already exist from a successful V14 run).
+      try {
+        await client.query(
+          `ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_user_provider_sub_unique
+           UNIQUE(user_id, provider, provider_subscription_id)`
+        );
+      } catch { /* already exists or pg-mem */ }
+
+      // Drop legacy UNIQUE(user_id) constraint (may already be absent from V15).
+      try {
+        await client.query(
+          `ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_user_id_key`
+        );
+      } catch { /* pg-mem */ }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [18, Date.now()]
       );
     }
 
