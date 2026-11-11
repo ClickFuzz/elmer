@@ -33,7 +33,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
-| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; iOS sandbox test pending; Android AAB versionCode 6 built + App Links + OTA active |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; **iOS purchase confirmed working** (Nov 11); Android AAB versionCode 8 built + App Links + OTA active |
 | — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
 | — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
 | — | Fix RC init order (initPurchases before switchPurchasesUser); fix $19.99/month price display | COMPLETE — staging OTA `df153e23` |
@@ -44,16 +44,17 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | UI redesign: tomato-red brand (#DB1200), charcoal text (#252932), warm off-white bg (#F7F6F3), white floating cards with soft shadows, removed all header/footer dividers, floating rounded nav bar with active-item pill | COMPLETE — staging `0d696d0` |
 | — | New logo.png (380×100) and icon.png assets from getelmer.com; logo left-aligned at correct aspect ratio | COMPLETE — staging `0d696d0` |
 | — | Fix audio re-recording silent failure (4th+ attempt): `keepAudioSessionActive:true` prevents 100ms deactivateSession race; remove `setAudioModeAsync(allowsRecording:false)` from playback; capture URI immediately after prepare; clean ExpoAudio cache on each record | COMPLETE — staging OTA `ff1db83c` |
+| — | Fix iOS RevenueCat OTA regression: `EXPO_PUBLIC_RC_API_KEY_IOS` added to EAS Preview environment; `update` script accepts interactive EAS login (no `EXPO_TOKEN` required) | COMPLETE — staging `5f8dfaf`; iOS purchase confirmed Nov 11 |
 
 ---
 
 ## Current Build State
 
 - **Production branch:** `main` — HEAD `7551889`
-- **Staging branch:** `staging` — HEAD `0d696d0` (23+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign)
+- **Staging branch:** `staging` — HEAD `5f8dfaf` (25+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign + iOS RC OTA fix)
 - **Last known TestFlight build:** submitted Nov 10 2026 — EAS build `58ebf62f` (staging-testflight; full UI redesign + new logo/icon + floating nav bar)
 - **Last Android AAB build:** versionCode 8 — EAS build `0cd37927` (staging-google-play; full UI redesign + new logo/icon + floating nav bar; submitted Nov 10 2026)
-- **Active staging OTA update:** group `ff1db83c` (audio re-recording fix; built on `c912012`) — targets staging channel, runtime 1.0.0
+- **Active staging OTA update:** built on `5f8dfaf` (RC diagnostics cleanup; iOS purchase confirmed working) — targets staging channel via EAS Preview environment, runtime 1.0.0
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
@@ -82,6 +83,22 @@ Staging infrastructure is fully live. Railway staging environment is running.
 | `components/OtaBadge.tsx` | Staging-only OTA version badge; shows `OTA <7-char-id>` or `EMBEDDED`; guards on `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; never visible in production |
 | `docs/DEPLOYMENT-WORKFLOW.md` | Full dev/staging/production/rollback/hotfix procedures |
 | Railway staging | Live at `https://api-staging.getelmer.com`; `APP_SCHEME=elmer-staging`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set |
+
+### EAS Preview environment — critical rule for OTA variables
+
+The `staging` branch is permanently linked to the EAS **Preview** environment on expo.dev. All OTA updates to the staging channel use this environment's variables, regardless of `--environment` flags, shell exports, or `.env` files — the EAS server-side environment always wins.
+
+**Any `EXPO_PUBLIC_*` variable required in a staging OTA bundle must be present in the EAS Preview environment** (expo.dev → Project → Environment Variables → Preview). `eas.json` build profile `env` blocks apply to native builds only; they are ignored during OTA bundling.
+
+Current EAS Preview environment variables (all confirmed set):
+- `EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com`
+- `EXPO_PUBLIC_APP_SCHEME=elmer-staging`
+- `EXPO_PUBLIC_INSTAGRAM_ENABLED=true`
+- `EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq` ← added Nov 11 2026 (was missing; caused iOS purchase regression)
+- `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM`
+
+To inspect: `npx eas-cli@latest env:list --environment preview`
+To add: `npx eas-cli@latest env:set --environment preview --name KEY --value VALUE`
 
 ### Staging OTA workflow — important fix (19975be)
 
