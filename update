@@ -1,7 +1,8 @@
 #!/bin/bash
 # Staging OTA update script for Elmer.
-# Publishes an iOS OTA update to the EAS 'staging' branch with the EAS 'preview' environment.
+# Publishes an iOS OTA update to the EAS 'staging' branch (EAS 'preview' environment).
 # Usage: bash update
+# Authentication: uses EXPO_TOKEN if set (CI), otherwise falls back to interactive EAS login.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -12,11 +13,18 @@ if [[ "$(git branch --show-current)" != "staging" ]]; then
   exit 1
 fi
 
-# ── 2. EXPO_TOKEN check ───────────────────────────────────────────────────────
-if [[ -z "${EXPO_TOKEN:-}" ]]; then
-  echo "ERROR: EXPO_TOKEN is not set. Export it before running this script."
-  echo "       export EXPO_TOKEN=<your-token>"
-  exit 1
+# ── 2. EAS authentication check ───────────────────────────────────────────────
+if [[ -n "${EXPO_TOKEN:-}" ]]; then
+  echo "EAS auth: using EXPO_TOKEN."
+else
+  EAS_USER="$(npx eas-cli@latest whoami 2>/dev/null || true)"
+  if [[ -z "$EAS_USER" ]]; then
+    echo "ERROR: Not authenticated with EAS. Either:"
+    echo "       1. Run 'npx eas-cli@latest login' to sign in interactively, or"
+    echo "       2. Export EXPO_TOKEN before running this script."
+    exit 1
+  fi
+  echo "EAS auth: signed in as ${EAS_USER}."
 fi
 
 # ── 3. eas.json configuration check ──────────────────────────────────────────
