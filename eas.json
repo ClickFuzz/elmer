@@ -22,26 +22,70 @@
         "EXPO_PUBLIC_API_URL": "https://api-staging.getelmer.com",
         "EXPO_PUBLIC_APP_SCHEME": "elmer-staging",
         "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
-        "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true"
+        "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true",
+        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq",
+        "EXPO_USE_PRECOMPILED_MODULES": "0"
       }
     },
     "production": {
       "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.getelmer.com",
-        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq",
+        "EXPO_PUBLIC_RC_API_KEY_ANDROID": "goog_pwUUWIOHItSpOgrtZROpFiIJnjM"
       },
       "channel": "production"
     },
     "github": {
       "extends": "production",
       "credentialsSource": "remote"
+    },
+    "staging-testflight": {
+      "distribution": "store",
+      "channel": "staging",
+      "environment": "preview",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-staging.getelmer.com",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true",
+        "EXPO_PUBLIC_RC_API_KEY_IOS": "appl_qiMBWYvElXNhKitKwqFWXExCYsq"
+      }
+    },
+    "staging-google-play": {
+      "distribution": "store",
+      "channel": "staging",
+      "environment": "preview",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-staging.getelmer.com",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "EXPO_PUBLIC_INSTAGRAM_ENABLED": "true",
+        "EXPO_PUBLIC_RC_API_KEY_ANDROID": "goog_pwUUWIOHItSpOgrtZROpFiIJnjM"
+      }
     }
   },
   "submit": {
     "production": {
       "ios": {
         "ascAppId": "6824199734"
+      }
+    },
+    "staging-testflight": {
+      "ios": {
+        "ascAppId": "6824199734"
+      }
+    },
+    "staging-google-play": {
+      "android": {
+        "track": "internal"
       }
     }
   }

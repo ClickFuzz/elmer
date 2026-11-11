@@ -60,6 +60,7 @@ function installOpenAIMock({ extractionResult = {}, generatedText = 'Generated p
     }
   }
 
+  MockOpenAI.toFile = async (stream) => stream;
   require.cache[OPENAI_RESOLVE] = { exports: MockOpenAI };
   return calls;
 }
@@ -555,6 +556,51 @@ describe('Test J — Before/After photo handling', () => {
       promptsContaining(calls, 'Do NOT mention before/after'),
       'prompt should prohibit transformation reference when photos are absent'
     );
+  });
+});
+
+// ── Transcription response format ────────────────────────────────────────────
+
+describe('Transcription response format', () => {
+  it('returns 200 with transcription:"" when Whisper returns empty text', async () => {
+    // Whisper can return empty string for silent or unintelligible audio.
+    // The mobile client checks this field to detect silent recordings.
+    installOpenAIMock({ transcribedText: '' });
+
+    const res = await request(app)
+      .post('/api/generate')
+      .attach('audio', dummyAudioBuffer(), { filename: 'test.m4a', contentType: 'audio/m4a' })
+      .field('photoCount', '1')
+      .field('platforms', JSON.stringify(['social']));
+
+    assert.strictEqual(res.status, 200, 'empty transcription must still be 200, not an error');
+    assert.strictEqual(res.body.transcription, '', 'transcription field must be empty string');
+    assert.ok('socialPost' in res.body, 'socialPost field must be present even without speech');
+  });
+
+  it('returns 500 when the Whisper API throws, not an empty transcription', async () => {
+    // A genuine transcription error must surface as 500, not reach the mobile
+    // silent-audio detection path (which only triggers on 200 + empty transcription).
+    require.cache[require.resolve('openai')] = {
+      exports: class MockOpenAIError {
+        constructor() {
+          this.audio = {
+            transcriptions: { create: async () => { throw new Error('Whisper API unavailable'); } },
+          };
+          this.chat = { completions: { create: async () => ({ choices: [{ message: { content: '' } }] }) } };
+        }
+        static toFile = async (s) => s;
+      },
+    };
+
+    const res = await request(app)
+      .post('/api/generate')
+      .attach('audio', dummyAudioBuffer(), { filename: 'test.m4a', contentType: 'audio/m4a' })
+      .field('photoCount', '1')
+      .field('platforms', JSON.stringify(['social']));
+
+    assert.strictEqual(res.status, 500, 'Whisper failure must return 500');
+    assert.ok(res.body.error, 'error field must be present on 500');
   });
 });
 

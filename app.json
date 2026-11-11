@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.clickfuzz.elmer",
@@ -18,10 +18,8 @@
       }
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#0D1B2A",
-        "foregroundImage": "./assets/icon.png"
-      },
+      "package": "com.clickfuzz.elmer",
+      "icon": "./assets/icon-android.png",
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
@@ -39,6 +37,32 @@
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "api-staging.getelmer.com",
+              "pathPrefix": "/oauth/return"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        },
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "api.getelmer.com",
+              "pathPrefix": "/oauth/return"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "web": {
@@ -50,7 +74,8 @@
       "expo-font",
       "expo-web-browser",
       "expo-secure-store",
-      "expo-asset"
+      "expo-asset",
+      "expo-build-properties"
     ],
     "extra": {
       "eas": {

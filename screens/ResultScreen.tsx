@@ -122,6 +122,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   const [publishState, setPublishState] = useState<PublishState>({ status: 'idle' });
   const [savedJobId, setSavedJobId] = useState<number | null>(draftJob?.id ?? null);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
+  const [isManualFallback, setIsManualFallback] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isGenerating = useRef(false);
   const wasFirstFreePost = useRef(false);
@@ -259,6 +260,31 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
         let loc = data.location ? `${data.location.city}, ${data.location.state}` : '';
         if (!loc && profile.location) loc = profile.location;
 
+        // Detect silent audio: transcription completed but returned no usable speech.
+        // Only applies when audio was present — not for text-only or draft flows.
+        if (payload.audioUri && !data.transcription?.trim()) {
+          isGenerating.current = false;
+          Alert.alert(
+            'No voice detected',
+            "We couldn't detect your voice. Check your microphone and try again.",
+            [
+              { text: 'Go Back and Record', style: 'cancel', onPress: onBack },
+              {
+                text: 'Continue Without Recording',
+                onPress: () => {
+                  setIsManualFallback(true);
+                  setState({
+                    status: 'success',
+                    googlePost: '', socialPost: '', webContent: '',
+                    transcription: '', location: loc, seoMetadata: null, isMock: false,
+                  });
+                },
+              },
+            ]
+          );
+          break;
+        }
+
         setState({
           status: 'success',
           googlePost: data.googlePost ?? '',
@@ -388,6 +414,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
 
+    if (!editedSocial.trim()) {
+      return [{ pageId: 'fb', pageName: 'Facebook', platform: 'facebook', ok: false, error: 'No post content. Add a description in the main editor before publishing.' }];
+    }
+
     const formData = new FormData();
     formData.append('message', editedSocial);
     formData.append('job_id', jobId);
@@ -452,7 +482,11 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const businessUrl = profile.inquiryUrl || profile.website || '';
 
     const formData = new FormData();
-    formData.append('message', editedGoogle.trim() || editedSocial);
+    const effectiveGoogleMessage = editedGoogle.trim() ? editedGoogle : editedSocial;
+    if (!effectiveGoogleMessage.trim()) {
+      return [{ pageId: 'gbp', pageName: 'Google Business', platform: 'google', ok: false, error: 'No post content. Add a description in the main editor before publishing.' }];
+    }
+    formData.append('message', effectiveGoogleMessage);
     formData.append('job_id', jobId);
     formData.append('featured_index', String(Math.max(0, featuredIndex)));
     formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
@@ -516,6 +550,10 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
   };
 
   const runInstagramPublish = async (sessionToken: string): Promise<PageResult> => {
+    if (!editedSocial.trim()) {
+      return { pageId: 'ig', pageName: 'Instagram', platform: 'instagram', ok: false, error: 'No post content. Add a description in the main editor before publishing.' };
+    }
+
     const jobId = savedJobId != null ? String(savedJobId) : `tmp_${Date.now()}`;
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
@@ -572,11 +610,16 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const featuredIndex = payload.photos.findIndex(p => p.isFeatured);
     const deviceToken = await getDeviceCheckToken();
 
-    const formData = new FormData();
-    if (editedThreads.length > 500) {
+    const effectiveThreadsText = editedThreads.trim() ? editedThreads : editedSocial;
+    if (!effectiveThreadsText.trim()) {
+      return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'No post content. Add a description in the main editor before publishing.' };
+    }
+    if (effectiveThreadsText.length > 500) {
       return { pageId: 'th', pageName: 'Threads', platform: 'threads', ok: false, error: 'Post exceeds 500 character limit. Please shorten the Threads post.' };
     }
-    formData.append('text', editedThreads);
+
+    const formData = new FormData();
+    formData.append('text', effectiveThreadsText);
     formData.append('job_id', jobId);
     formData.append('featured_index', String(Math.max(0, featuredIndex)));
     formData.append('classifications', JSON.stringify(payload.photos.map(p => p.classification)));
@@ -641,9 +684,15 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
     const results: PageResult[] = [];
     for (const ch of wpChannels) {
       const wpSiteId = ch.id;
+      const effectiveWpContent = editedWordpress.trim() ? editedWordpress : editedSocial;
+      if (!effectiveWpContent.trim()) {
+        results.push({ pageId: `wp_${wpSiteId}`, pageName: ch.accountName, platform: 'wordpress', ok: false, error: 'No post content. Add a description in the main editor before publishing.' });
+        continue;
+      }
+
       const formData = new FormData();
-      formData.append('title',       editedWordpressTitle || extractMarkdownTitle(editedWordpress) || 'New Post');
-      formData.append('content',     editedWordpress);
+      formData.append('title',       editedWordpressTitle || extractMarkdownTitle(effectiveWpContent) || 'New Post');
+      formData.append('content',     effectiveWpContent);
       formData.append('job_id',      jobId);
       formData.append('wp_site_id',  wpSiteId);
       formData.append('featured_index', String(Math.max(0, featuredIndex)));
@@ -856,7 +905,7 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
             {publishState.results.map((r, i) => {
               const cfg = PLATFORM_CFG[r.platform] ?? PLATFORM_CFG.default;
               const canOpen = r.ok && !!r.postUrl;
-              const btnBg = r.ok ? cfg.bg : '#2A3347';
+              const btnBg = r.ok ? cfg.bg : colors.surfaceAlt;
               const iconColor = r.ok ? cfg.iconColor : colors.textMuted;
               return (
                 <TouchableOpacity
@@ -1008,15 +1057,19 @@ export default function ResultScreen({ payload, draftJob, onBack, onPublishCompl
               <TextInput
                 style={styles.postInput}
                 value={editedSocial}
-                onChangeText={setEditedSocial}
+                onChangeText={text => setEditedSocial(isManualFallback ? text.slice(0, 500) : text)}
                 multiline
                 textAlignVertical="top"
                 autoCorrect
                 scrollEnabled={false}
+                placeholder="Describe what you'd like to share..."
+                placeholderTextColor={colors.textMuted}
                 inputAccessoryViewID={Platform.OS === 'ios' ? DONE_BAR_ID : undefined}
               />
               <View style={styles.postCardFooter}>
-                <Text style={styles.metaCount}>{editedSocial.length} characters</Text>
+                <Text style={[styles.metaCount, isManualFallback && editedSocial.length > 450 && styles.threadsCountWarn]}>
+                  {isManualFallback ? `${editedSocial.length}/500` : `${editedSocial.length} characters`}
+                </Text>
                 <TouchableOpacity
                   onPress={() => copyItem('social')}
                   hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}
@@ -1362,7 +1415,7 @@ const PLATFORM_CFG: Record<string, { bg: string; iconColor: string; icon: string
   instagram: { bg: '#C13584', iconColor: '#fff',          icon: 'logo-instagram' },
   threads:   { bg: '#fff',    iconColor: '#101010',        icon: 'logo-threads'   },
   twitter:   { bg: '#1DA1F2', iconColor: '#fff',          icon: 'logo-twitter' },
-  default:   { bg: colors.surface, iconColor: colors.cyan, icon: 'globe-outline' },
+  default:   { bg: colors.surface, iconColor: colors.blue, icon: 'globe-outline' },
 };
 
 function truncateForThreads(text: string): string {
@@ -1429,8 +1482,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   backBtn: { width: 80 },
   backBtnText: { color: colors.cyan, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
@@ -1448,7 +1499,7 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 22, fontFamily: 'DMSans_600SemiBold', color: colors.error, marginBottom: 10 },
   errorMessage: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginBottom: 28, lineHeight: 20 },
   retryBtn: { backgroundColor: colors.cyan, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 40 },
-  retryBtnText: { color: colors.bg, fontSize: 17, fontFamily: 'Inter_600SemiBold' },
+  retryBtnText: { color: '#FFFFFF', fontSize: 17, fontFamily: 'Inter_600SemiBold' },
 
   mockBanner: {
     backgroundColor: 'rgba(200,160,40,0.12)',
@@ -1467,7 +1518,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   photoStrip: {
     flexDirection: 'row',
@@ -1514,7 +1570,12 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   postCardHeader: {
     flexDirection: 'row',
@@ -1553,7 +1614,12 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   customizeHeading: {
     fontSize: 15,
@@ -1589,8 +1655,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     paddingBottom: 4,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   destinationsTitle: {
     fontSize: 11,
@@ -1612,7 +1683,7 @@ const styles = StyleSheet.create({
   destinationName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary, marginBottom: 2 },
   destinationSub: { fontSize: 12, color: colors.textMuted },
   connectedChip: {
-    backgroundColor: 'rgba(82,214,164,0.15)',
+    backgroundColor: 'rgba(67,227,160,0.15)',
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -1638,7 +1709,12 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   threadsCountWarn: { color: '#C87A20' },
   variationLabel: {
@@ -1663,7 +1739,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: 28,
   },
-  connectBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  connectBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   divider: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
 
   // Website article card
@@ -1673,7 +1749,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   articleHeader: {
     flexDirection: 'row',
@@ -1757,30 +1838,28 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     gap: 10,
     backgroundColor: colors.bg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
 
   publishingBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(82,214,164,0.08)',
+    backgroundColor: 'rgba(67,227,160,0.08)',
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(82,214,164,0.2)',
+    borderColor: 'rgba(67,227,160,0.2)',
   },
   publishingText: { fontSize: 14, color: colors.success, fontWeight: '500' },
 
   publishSuccessBanner: {
-    backgroundColor: 'rgba(82,214,164,0.08)',
+    backgroundColor: 'rgba(67,227,160,0.08)',
     borderRadius: 10,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(82,214,164,0.2)',
+    borderColor: 'rgba(67,227,160,0.2)',
   },
   publishResultRow: {
     flexDirection: 'row',
@@ -1790,7 +1869,7 @@ const styles = StyleSheet.create({
   },
   publishResultBorder: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(82,214,164,0.2)',
+    borderTopColor: 'rgba(67,227,160,0.2)',
   },
   publishResultIcon: { fontSize: 14, fontWeight: '700', color: colors.success, lineHeight: 20 },
   publishResultIconError: { color: colors.error },
@@ -1820,8 +1899,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   postEverywhereBtnDim: { opacity: 0.4 },
-  postEverywhereBtnText: { color: colors.bg, fontSize: 19, fontFamily: 'Inter_600SemiBold' },
-  postEverywhereSubtext: { color: colors.bg, fontSize: 12, fontWeight: '500', marginTop: 3, opacity: 0.7 },
+  postEverywhereBtnText: { color: '#FFFFFF', fontSize: 19, fontFamily: 'Inter_600SemiBold' },
+  postEverywhereSubtext: { color: '#FFFFFF', fontSize: 12, fontWeight: '500', marginTop: 3, opacity: 0.7 },
   regenBtn: {
     backgroundColor: colors.surface,
     borderRadius: 14,
@@ -1980,6 +2059,6 @@ const styles = StyleSheet.create({
   confirmPostText: {
     fontSize: 15,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
 });

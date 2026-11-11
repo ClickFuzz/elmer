@@ -9,6 +9,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import { colors } from './constants/colors';
 import { getPendingHomeState, savePendingHomeState, savePendingGenerationFlag, getPendingGenerationFlag, getJobPhotos, getSessionToken, getSessionUserId, getBusinessProfile, saveBusinessProfile, saveSettingsVersion, runAutoCleanup, Job, clearSession } from './storage/database';
 import { Analytics } from './services/analytics';
+import { initPurchases, switchPurchasesUser, logOutPurchases } from './services/purchases';
 import OtaBadge from './components/OtaBadge';
 import HistoryScreen from './screens/HistoryScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -56,8 +57,10 @@ type NavItemProps = {
 function NavItem({ iconActive, iconInactive, label, active, onPress }: NavItemProps) {
   return (
     <TouchableOpacity style={navStyles.item} onPress={onPress} activeOpacity={0.7}>
-      <Ionicons name={active ? iconActive : iconInactive} size={24} color={active ? colors.cyan : colors.textMuted} />
-      <Text style={[navStyles.label, active && navStyles.labelActive]}>{label}</Text>
+      <View style={[navStyles.itemInner, active && navStyles.itemInnerActive]}>
+        <Ionicons name={active ? iconActive : iconInactive} size={24} color={active ? colors.cyan : colors.textMuted} />
+        <Text style={[navStyles.label, active && navStyles.labelActive]}>{label}</Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -151,6 +154,7 @@ function AppShell() {
         getPendingHomeState(),
       ]);
 
+      initPurchases(storedUserId !== null ? String(storedUserId) : null);
       if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
 
@@ -195,7 +199,13 @@ function AppShell() {
           syncServerSettings(tok),
           getSessionUserId(),
         ]);
-        if (storedUserId) Analytics.identify(storedUserId);
+        if (storedUserId) {
+          Analytics.identify(storedUserId);
+          initPurchases(String(storedUserId));
+          switchPurchasesUser(String(storedUserId)).catch(() => {});
+        } else {
+          initPurchases(null);
+        }
         setSubscriptionStatus(status);
         const localProfile = await getBusinessProfile();
         const hasName = !!(localProfile.name ?? '').trim() || serverHasName;
@@ -205,6 +215,7 @@ function AppShell() {
     } else {
       sessionGenRef.current += 1;
       Analytics.reset();
+      logOutPurchases().catch(() => {});
       setAuthToken(null);
       setSubscriptionStatus(null);
       setIsOnboarded(null);
@@ -247,6 +258,7 @@ function AppShell() {
     }
     sessionGenRef.current += 1;
     Analytics.reset();
+    logOutPurchases().catch(() => {});
     await clearSession();
     setIsAuthed(false);
     setAuthToken(null);
@@ -315,13 +327,13 @@ function AppShell() {
 
   // Blank while SecureStore resolves on first render, or while subscription / onboarding state is being fetched
   if (isAuthed === null || (isAuthed && (subscriptionStatus === null || isOnboarded === null))) {
-    return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="light" /></SafeAreaView>;
+    return <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}><StatusBar style="dark" /></SafeAreaView>;
   }
 
   if (!isAuthed) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <SignInScreen onSignIn={() => handleAuthChange(true)} />
       </SafeAreaView>
     );
@@ -336,7 +348,7 @@ function AppShell() {
   if (!hasSubscriptionAccess && !hasFreeAccess) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <SubscriptionScreen
           onSubscribed={handleSubscribed}
           onSignOut={handleSubscriptionSignOut}
@@ -350,7 +362,7 @@ function AppShell() {
   if (!isOnboarded) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <OnboardingWizard
           sessionToken={authToken}
           onComplete={handleOnboardingComplete}
@@ -361,7 +373,7 @@ function AppShell() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <View style={styles.content}>
         {screen === 'home' && (
           <HomeScreen
@@ -424,28 +436,30 @@ function AppShell() {
           />
         )}
       </View>
-      <View style={[navStyles.bar, { paddingBottom: Math.max(bottomInset, 10) }]}>
-        <NavItem
-          iconActive="home"
-          iconInactive="home-outline"
-          label="Home"
-          active={screen === 'home' || screen === 'result'}
-          onPress={() => setScreen('home')}
-        />
-        <NavItem
-          iconActive="time"
-          iconInactive="time-outline"
-          label="History"
-          active={screen === 'history'}
-          onPress={() => setScreen('history')}
-        />
-        <NavItem
-          iconActive="settings-sharp"
-          iconInactive="settings-outline"
-          label="Settings"
-          active={screen === 'settings' || screen === 'subscription' || screen === 'managedata'}
-          onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
-        />
+      <View style={[navStyles.wrapper, { paddingBottom: Math.max(bottomInset, 8) }]}>
+        <View style={navStyles.bar}>
+          <NavItem
+            iconActive="home"
+            iconInactive="home-outline"
+            label="Home"
+            active={screen === 'home' || screen === 'result'}
+            onPress={() => setScreen('home')}
+          />
+          <NavItem
+            iconActive="time"
+            iconInactive="time-outline"
+            label="History"
+            active={screen === 'history'}
+            onPress={() => setScreen('history')}
+          />
+          <NavItem
+            iconActive="settings-sharp"
+            iconInactive="settings-outline"
+            label="Settings"
+            active={screen === 'settings' || screen === 'subscription' || screen === 'managedata'}
+            onPress={() => { setSettingsReturnToResult(false); setScreen('settings'); }}
+          />
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -478,20 +492,38 @@ const styles = StyleSheet.create({
 });
 
 const navStyles = StyleSheet.create({
+  wrapper: {
+    backgroundColor: colors.bg,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
   bar: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 10,
+    borderRadius: 20,
+    paddingVertical: 6,
     paddingHorizontal: 8,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 8,
   },
   item: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 2,
+  },
+  itemInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+  },
+  itemInnerActive: {
+    backgroundColor: colors.iconBg,
   },
   label: { fontSize: 11, fontFamily: 'Inter_500Medium', color: colors.textMuted },
   labelActive: { color: colors.cyan },

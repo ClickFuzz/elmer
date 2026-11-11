@@ -26,6 +26,10 @@ import { Analytics } from '../services/analytics';
 import { INSTAGRAM_ENABLED } from '../constants/features';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+const RETURN_SCHEME = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer';
+const OAUTH_RETURN_URL = Platform.OS === 'android'
+  ? `${API_URL}/oauth/return`
+  : `${RETURN_SCHEME}://oauth/callback`;
 
 type PlatformState = {
   facebook: boolean;
@@ -247,7 +251,8 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
     try {
       const res  = await fetch(`${API_URL}${connectUrlPath}`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -255,7 +260,7 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
         Alert.alert('Connection failed', data.error ?? 'Could not start authorization.');
         return;
       }
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       if (result.type === 'success') {
         const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
         const error  = params.get('error');
@@ -425,14 +430,14 @@ export default function OnboardingWizard({ sessionToken, onComplete }: Props) {
       const res  = await fetch(`${API_URL}/wordpress/connect-url`, {
         method:  'POST',
         headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ siteUrl: url }),
+        body:    JSON.stringify({ siteUrl: url, returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
         Alert.alert('Connection failed', data.error ?? 'Could not reach your WordPress site.');
         return;
       }
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       if (result.type === 'success') {
         const params = new URLSearchParams((result.url.split('?')[1] ?? '').split('#')[0]);
         const error  = params.get('error');
@@ -827,9 +832,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     overflow: 'hidden',
     marginBottom: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
 
   fieldRow: {
@@ -886,7 +896,7 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   saveError: {
     fontSize: 13,
@@ -963,10 +973,10 @@ const styles = StyleSheet.create({
   connectBtnText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   connectedChip: {
-    backgroundColor: 'rgba(82,214,164,0.15)',
+    backgroundColor: 'rgba(67,227,160,0.15)',
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -1008,7 +1018,7 @@ const styles = StyleSheet.create({
   wpConnectBtnText: {
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
   wpCancelBtn: {
     flex: 1,
@@ -1029,10 +1039,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
     padding: 20,
     gap: 16,
     marginBottom: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   stepItemRow: {
     flexDirection: 'row',
@@ -1063,10 +1078,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(82,214,164,0.08)',
+    backgroundColor: 'rgba(67,227,160,0.08)',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(82,214,164,0.2)',
+    borderColor: 'rgba(67,227,160,0.2)',
     padding: 14,
     marginBottom: 20,
   },
@@ -1124,7 +1139,7 @@ const styles = StyleSheet.create({
     borderColor: colors.cyan,
   },
   selectionCheckmark: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
   },
@@ -1146,7 +1161,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   selectionSaveBtnText: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
   },

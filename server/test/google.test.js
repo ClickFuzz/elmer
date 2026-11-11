@@ -137,17 +137,17 @@ describe('GET /google/callback — state validation', () => {
   });
 
   it('redirects with missing_params when code or state absent', async () => {
-    const res = await request(app).get('/google/callback').redirects(0);
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location.includes('missing_params'));
+    const res = await request(app).get('/google/callback');
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('missing_params'));
   });
 
   it('redirects with invalid_state for unknown state', async () => {
     const res = await request(app)
       .get('/google/callback?code=abc&state=badstate')
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location.includes('invalid_state'));
+      ;
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('invalid_state'));
   });
 
   it('redirects with state_expired for expired state', async () => {
@@ -160,9 +160,9 @@ describe('GET /google/callback — state validation', () => {
     );
     const res = await request(app)
       .get(`/google/callback?code=abc&state=${state}`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location.includes('state_expired'));
+      ;
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('state_expired'));
   });
 
   it('redirects with state_already_used on replay', async () => {
@@ -180,11 +180,11 @@ describe('GET /google/callback — state validation', () => {
     const googleRouter = createGoogleRouter({ apiFetch: mock });
     const app2 = createApp({ googleRouter });
 
-    await request(app2).get(`/google/callback?code=abc&state=${state}`).redirects(0);
+    await request(app2).get(`/google/callback?code=abc&state=${state}`);
 
     // Second attempt
-    const res2 = await request(app2).get(`/google/callback?code=abc&state=${state}`).redirects(0);
-    assert.ok(res2.headers.location.includes('state_already_used'));
+    const res2 = await request(app2).get(`/google/callback?code=abc&state=${state}`);
+    assert.ok(res2.text.includes('state_already_used'));
   });
 });
 
@@ -216,11 +216,11 @@ describe('GET /google/callback — successful connection', () => {
 
     const res = await request(app)
       .get(`/google/callback?code=mycode&state=${state}`)
-      .redirects(0);
+      ;
 
-    assert.equal(res.status, 302);
-    assert.ok(res.headers.location.includes('success=true'));
-    assert.ok(res.headers.location.includes('location_count=1'));
+    assert.equal(res.status, 200);
+    assert.ok(res.text.includes('success=true'));
+    assert.ok(res.text.includes('location_count=1'));
 
     const { rows } = await getPool().query(
       `SELECT account_name, account_id FROM connected_platforms WHERE platform = 'google'`
@@ -242,8 +242,8 @@ describe('GET /google/callback — successful connection', () => {
 
     const res = await request(app)
       .get(`/google/callback?code=mycode&state=${state}`)
-      .redirects(0);
-    assert.ok(res.headers.location.includes('no_business_accounts'));
+      ;
+    assert.ok(res.text.includes('no_business_accounts'));
   });
 
   it('redirects with no_locations when locations list is empty', async () => {
@@ -259,8 +259,8 @@ describe('GET /google/callback — successful connection', () => {
 
     const res = await request(app)
       .get(`/google/callback?code=mycode&state=${state}`)
-      .redirects(0);
-    assert.ok(res.headers.location.includes('no_locations'));
+      ;
+    assert.ok(res.text.includes('no_locations'));
   });
 
   it('redirects with auth_failed when token exchange errors', async () => {
@@ -274,8 +274,8 @@ describe('GET /google/callback — successful connection', () => {
 
     const res = await request(app)
       .get(`/google/callback?code=bad&state=${state}`)
-      .redirects(0);
-    assert.ok(res.headers.location.includes('auth_failed'));
+      ;
+    assert.ok(res.text.includes('auth_failed'));
   });
 });
 

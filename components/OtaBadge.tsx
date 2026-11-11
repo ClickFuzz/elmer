@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { useUpdates } from 'expo-updates';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -9,8 +10,14 @@ function OtaBadgeInner() {
   const { currentlyRunning } = useUpdates();
   const insets = useSafeAreaInsets();
 
+  const appVersion = Constants.expoConfig?.version ?? '—';
+  const buildNumber =
+    Constants.platform?.android?.versionCode != null
+      ? String(Constants.platform.android.versionCode)
+      : (Constants.platform?.ios?.buildNumber ?? '—');
+
   const label = currentlyRunning.isEmbeddedLaunch
-    ? 'EMBEDDED'
+    ? `v${appVersion} (${buildNumber})`
     : `OTA ${(currentlyRunning.updateId ?? '???????').slice(0, 7)}`;
 
   return (

@@ -2,7 +2,7 @@
 
 const { Pool } = require('pg');
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 17;
 
 let _pool        = null;
 let _initialized = false;
@@ -487,27 +487,73 @@ async function migrate(pool) {
       );
     }
 
-    // ── V14: password reset tokens ────────────────────────────────────────────
-    // One-time expiring tokens for the forgot-password / reset-password flow.
-    // The raw token is never stored — only its SHA-256 hash.  Tokens expire
-    // after 1 hour and become permanently unusable once used_at is set.
     if (!applied.has(14)) {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS password_reset_tokens (
-          id         BIGSERIAL PRIMARY KEY,
-          user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          token_hash TEXT   NOT NULL UNIQUE,
-          expires_at BIGINT NOT NULL,
-          used_at    BIGINT
-        )
-      `);
-      await client.query(
-        `CREATE INDEX IF NOT EXISTS idx_prt_token_hash ON password_reset_tokens(token_hash)`
-      );
+      // Add multi-provider columns to subscriptions
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'stripe'`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_subscription_id TEXT`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS provider_event_at BIGINT`); } catch { /* pg-mem */ }
+      try { await client.query(`ALTER TABLE subscriptions ALTER COLUMN stripe_customer_id DROP NOT NULL`); } catch { /* pg-mem */ }
+
+      // Backfill provider_subscription_id for existing Stripe rows
+      try {
+        await client.query(`UPDATE subscriptions SET provider_subscription_id = stripe_subscription_id WHERE provider = 'stripe' AND stripe_subscription_id IS NOT NULL AND provider_subscription_id IS NULL`);
+        await client.query(`UPDATE subscriptions SET provider_subscription_id = 'legacy_' || id::text WHERE provider_subscription_id IS NULL`);
+      } catch { /* pg-mem */ }
+
+      try { await client.query(`ALTER TABLE subscriptions ALTER COLUMN provider_subscription_id SET NOT NULL`); } catch { /* pg-mem */ }
+      // New composite unique constraint for multi-provider rows
+      try { await client.query(`ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_user_provider_sub_unique UNIQUE(user_id, provider, provider_subscription_id)`); } catch { /* pg-mem */ }
+      // INTENTIONALLY keeping existing UNIQUE(user_id) — dropped in V15 after all instances run V14 code
 
       await client.query(
         'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
         [14, Date.now()]
+      );
+    }
+
+    if (!applied.has(15)) {
+      // Drop the legacy UNIQUE(user_id) constraint that prevented multiple provider rows.
+      // IF EXISTS makes this idempotent — safe if already dropped.
+      // No try/catch: a real failure here must stop deployment and must not be recorded as applied.
+      await client.query(
+        `ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_user_id_key`
+      );
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [15, Date.now()]
+      );
+    }
+
+    if (!applied.has(16)) {
+      // Store the mobile app's return scheme in each OAuth state row so the callback
+      // redirects to the correct app — necessary when TestFlight builds (elmer://) and
+      // staging builds (elmer-staging://) both point at the same staging backend.
+      try {
+        await client.query(
+          `ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_scheme TEXT NOT NULL DEFAULT 'elmer'`
+        );
+      } catch { /* pg-mem */ }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [16, Date.now()]
+      );
+    }
+
+    if (!applied.has(17)) {
+      // Store an optional full HTTPS return URL for Android App Link-based OAuth.
+      // When present (Android staging/production builds), the callback does a plain
+      // HTTP 302 to this URL; Android intercepts via verified App Links and opens
+      // the app directly without a browser button.  NULL = fall back to return_scheme.
+      try {
+        await client.query(
+          `ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_url TEXT`
+        );
+      } catch { /* pg-mem */ }
+
+      await client.query(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)',
+        [17, Date.now()]
       );
     }
 
@@ -533,9 +579,6 @@ async function initDb() {
     );
     cleanStaleFreePublicationReservations().catch(err =>
       console.warn('[elmer] reservation cleanup error:', err.message)
-    );
-    cleanExpiredPasswordResetTokens().catch(err =>
-      console.warn('[elmer] password reset token cleanup error:', err.message)
     );
   }
   return pool;
@@ -566,13 +609,6 @@ async function cleanExpiredPublishingRecords() {
 
 // Release free_publications rows stuck in 'reserved' for more than 1 hour
 // that have no corresponding successful publishing record.
-async function cleanExpiredPasswordResetTokens() {
-  await getPool().query(
-    'DELETE FROM password_reset_tokens WHERE expires_at < $1',
-    [Date.now()]
-  );
-}
-
 async function cleanStaleFreePublicationReservations() {
   const cutoff = Date.now() - 60 * 60 * 1000;
   const pool = getPool();
@@ -621,4 +657,4 @@ function _setPoolForTesting(pool) {
   _initialized = false;
 }
 
-module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, cleanExpiredPasswordResetTokens, _setPoolForTesting };
+module.exports = { getPool, initDb, closeDb, cleanExpiredSessions, cleanExpiredPublishingRecords, cleanStaleFreePublicationReservations, _setPoolForTesting };

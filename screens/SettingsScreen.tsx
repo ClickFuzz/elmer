@@ -43,6 +43,10 @@ import {
 import { Analytics } from '../services/analytics';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+const RETURN_SCHEME = process.env.EXPO_PUBLIC_APP_SCHEME ?? 'elmer';
+const OAUTH_RETURN_URL = Platform.OS === 'android'
+  ? `${API_URL}/oauth/return`
+  : `${RETURN_SCHEME}://oauth/callback`;
 const DONE_BAR_ID = 'settings-kb-done';
 
 type Props = { onBack: () => void; onAuthChange?: (authed: boolean) => void; onManageData?: () => void; onManageSubscription?: () => void; returnToPost?: boolean; testMode?: boolean };
@@ -534,7 +538,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/google/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -543,7 +548,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       console.log('[gbp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -659,7 +664,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/facebook/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -668,7 +674,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       console.log('[fb-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -814,7 +820,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/instagram/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -823,7 +830,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       console.log('[ig-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -923,7 +930,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     try {
       const res = await fetch(`${API_URL}/threads/connect-url`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -932,7 +940,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       console.log('[threads-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -1009,7 +1017,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
       const res = await fetch(`${API_URL}/wordpress/connect-url`, {
         method:  'POST',
         headers: { Authorization: `Bearer ${sessionToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ siteUrl: url }),
+        body:    JSON.stringify({ siteUrl: url, returnScheme: RETURN_SCHEME, returnUrl: OAUTH_RETURN_URL }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1018,7 +1026,7 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
         return;
       }
 
-      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, 'elmer://oauth/callback');
+      const result = await WebBrowser.openAuthSessionAsync(data.authUrl, OAUTH_RETURN_URL);
       console.log('[wp-oauth] result.type:', result.type, result.type === 'success' ? '| url: ' + result.url : '');
 
       if (result.type === 'success') {
@@ -1092,16 +1100,16 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
     && igAccount.token_expires_at < now + EXPIRY_WARN_MS;
 
   // 'connected' | 'warning' (expiring ≤7d) | 'error' (expired) | 'disconnected'
-  const fbDot  = isFbConnected ? '#52D6A4' : colors.textMuted;
+  const fbDot  = isFbConnected ? colors.success : colors.textMuted;
   const igDot  = !isIgConnected ? colors.textMuted
-    : igAccount!.token_expires_at != null && igAccount!.token_expires_at < now ? '#FF5050'
+    : igAccount!.token_expires_at != null && igAccount!.token_expires_at < now ? colors.error
     : igTokenExpiringSoon ? '#C8A040'
-    : '#52D6A4';
+    : colors.success;
   const thDot  = thAccount === null ? colors.textMuted
-    : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? '#FF5050'
+    : thAccount.token_expires_at != null && thAccount.token_expires_at < now ? colors.error
     : thAccount.token_expires_at != null && thAccount.token_expires_at < now + EXPIRY_WARN_MS ? '#C8A040'
-    : '#52D6A4';
-  const wpDot  = isWpConnected ? '#52D6A4' : colors.textMuted;
+    : colors.success;
+  const wpDot  = isWpConnected ? colors.success : colors.textMuted;
 
   return (
     <View style={styles.container}>
@@ -1446,8 +1454,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
                 <View style={styles.platformInfo}>
                   <Text style={[styles.platformName, !isIgConnected && styles.platformNameDim]}>Instagram</Text>
                   {isIgConnected && (
-                    <Text style={[styles.platformSub, igDot !== '#52D6A4' && { color: igDot }]}>
-                      {igDot === '#FF5050' ? 'Token expired — reconnect'
+                    <Text style={[styles.platformSub, igDot !== colors.success && { color: igDot }]}>
+                      {igDot === colors.error ? 'Token expired — reconnect'
                         : igDot === '#C8A040' ? 'Token expiring soon'
                         : igAccount!.account_name}
                     </Text>
@@ -1495,8 +1503,8 @@ export default function SettingsScreen({ onBack, onAuthChange, onManageData, onM
             <View style={styles.platformInfo}>
               <Text style={[styles.platformName, thAccount === null && styles.platformNameDim]}>Threads</Text>
               {thAccount !== null && (
-                <Text style={[styles.platformSub, thDot !== '#52D6A4' && { color: thDot }]}>
-                  {thDot === '#FF5050' ? 'Token expired — reconnect'
+                <Text style={[styles.platformSub, thDot !== colors.success && { color: thDot }]}>
+                  {thDot === colors.error ? 'Token expired — reconnect'
                     : thDot === '#C8A040' ? 'Token expiring soon'
                     : thAccount.account_name}
                 </Text>
@@ -1876,7 +1884,7 @@ const tagStyles = StyleSheet.create({
   inputFlex: { flex: 1 },
   addBtn: { backgroundColor: colors.cyan, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 9 },
   addBtnDisabled: { backgroundColor: colors.border },
-  addBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  addBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   addBtnTextDim: { color: colors.textMuted },
 });
 
@@ -1892,8 +1900,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   backBtn: { width: 80 },
   backBtnText: { color: colors.cyan, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
@@ -1904,7 +1910,18 @@ const styles = StyleSheet.create({
   groupLabel: { fontSize: 12, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 28, marginBottom: 8, marginLeft: 4 },
   groupNote: { fontSize: 12, color: colors.textMuted, lineHeight: 17, marginTop: 8, marginBottom: 28, marginHorizontal: 4 },
 
-  card: { backgroundColor: colors.surface, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+  },
 
   cardToggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
   cardToggleLeft: { flex: 1, marginRight: 12 },
@@ -1929,7 +1946,7 @@ const styles = StyleSheet.create({
 
   saveBtn: { backgroundColor: colors.cyan, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
   saveBtnDisabled: { opacity: 0.6 },
-  saveBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  saveBtnText: { fontSize: 16, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   saveErrorText: { fontSize: 13, color: colors.error, marginTop: 6, marginHorizontal: 4 },
 
   // Auth form
@@ -1937,7 +1954,7 @@ const styles = StyleSheet.create({
   authButtons: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 14 },
   authBtn: { flex: 1, backgroundColor: colors.cyan, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   authBtnDisabled: { opacity: 0.5 },
-  authBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  authBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   authBtnSecondary: { flex: 1, backgroundColor: colors.border, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   authBtnSecondaryText: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: colors.textSecondary },
 
@@ -1950,10 +1967,10 @@ const styles = StyleSheet.create({
 
   actionBtn: { backgroundColor: colors.cyan, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14 },
   actionBtnDisabled: { backgroundColor: colors.border },
-  actionBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  actionBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   actionBtnTextDisabled: { color: colors.textMuted },
-  actionBtnDanger: { backgroundColor: 'rgba(255,80,80,0.12)', borderWidth: 1, borderColor: 'rgba(255,80,80,0.3)' },
-  actionBtnTextDanger: { color: '#FF5050' },
+  actionBtnDanger: { backgroundColor: 'rgba(255,90,60,0.1)', borderWidth: 1, borderColor: 'rgba(255,90,60,0.25)' },
+  actionBtnTextDanger: { color: colors.error },
 
   // Manage pages panel
   managePagesPanel: { paddingBottom: 4 },
@@ -1966,10 +1983,10 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   checkboxChecked: { backgroundColor: colors.cyan, borderColor: colors.cyan },
-  checkmark: { fontSize: 13, color: colors.bg, fontWeight: '700', lineHeight: 16 },
+  checkmark: { fontSize: 13, color: '#FFFFFF', fontWeight: '700', lineHeight: 16 },
   managePagesActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 14 },
   savePagesBtn: { flex: 1, backgroundColor: colors.cyan, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
-  savePagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.bg },
+  savePagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
   cancelPagesBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
   cancelPagesBtnText: { fontSize: 14, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 
@@ -1981,12 +1998,12 @@ const styles = StyleSheet.create({
   fbDisconnectBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.textMuted },
 
   connectedChipInline: {
-    backgroundColor: 'rgba(82,214,164,0.15)',
+    backgroundColor: 'rgba(67,227,160,0.15)',
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: '#52D6A4' },
+  connectedChipInlineText: { fontSize: 11, fontWeight: '700', color: colors.success },
 
   // Platform rows
   platformRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 10 },
@@ -1999,7 +2016,7 @@ const styles = StyleSheet.create({
   manageBtnText: { fontSize: 13, fontFamily: 'Inter_600SemiBold', color: colors.cyan },
 
   // Expand panel
-  managePanelInner: { backgroundColor: 'rgba(0,0,0,0.15)', paddingBottom: 2 },
+  managePanelInner: { backgroundColor: 'rgba(37,99,166,0.06)', paddingBottom: 2 },
   managePanelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
   managePanelSubText: { fontSize: 13, color: colors.textMuted },
   tokenWarnText: { fontSize: 12, fontWeight: '600', color: '#C8A040' },

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Staging OTA update script for Elmer.
-# Publishes an iOS OTA update to the EAS 'staging' branch with the EAS 'preview' environment.
+# Publishes an iOS OTA update to the EAS 'staging' branch (EAS 'preview' environment).
 # Usage: bash update
+# Authentication: uses EXPO_TOKEN if set (CI), otherwise falls back to interactive EAS login.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -12,11 +13,18 @@ if [[ "$(git branch --show-current)" != "staging" ]]; then
   exit 1
 fi
 
-# ── 2. EXPO_TOKEN check ───────────────────────────────────────────────────────
-if [[ -z "${EXPO_TOKEN:-}" ]]; then
-  echo "ERROR: EXPO_TOKEN is not set. Export it before running this script."
-  echo "       export EXPO_TOKEN=<your-token>"
-  exit 1
+# ── 2. EAS authentication check ───────────────────────────────────────────────
+if [[ -n "${EXPO_TOKEN:-}" ]]; then
+  echo "EAS auth: using EXPO_TOKEN."
+else
+  EAS_USER="$(npx eas-cli@latest whoami 2>/dev/null || true)"
+  if [[ -z "$EAS_USER" ]]; then
+    echo "ERROR: Not authenticated with EAS. Either:"
+    echo "       1. Run 'npx eas-cli@latest login' to sign in interactively, or"
+    echo "       2. Export EXPO_TOKEN before running this script."
+    exit 1
+  fi
+  echo "EAS auth: signed in as ${EAS_USER}."
 fi
 
 # ── 3. eas.json configuration check ──────────────────────────────────────────
@@ -39,8 +47,9 @@ fi
 echo "Verified: eas.json staging profile maps to channel 'staging', environment 'preview'."
 
 # ── 4. EAS CLI configuration ──────────────────────────────────────────────────
-USE_ENVIRONMENT_FLAG=true
-echo "Using EAS CLI with --environment preview."
+# --environment is intentionally omitted: EAS environment overrides shell vars
+# (and replaces the local .env), so we rely on the .env block written below.
+# --non-interactive is omitted because it requires --environment in recent EAS CLI.
 
 # ── 5. Write staging .env (backup production .env; restore on exit) ────────────
 # @expo/env loads .env.local first then .env, with .env winning (override mode).
@@ -68,7 +77,18 @@ EXPO_PUBLIC_APP_SCHEME=elmer-staging
 EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
 EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq
 ENVEOF
+
+# Also export as real shell env vars — eas update may not load .env files
+# in all code paths, but always inherits the shell environment.
+export APP_VARIANT=staging
+export EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com
+export EXPO_PUBLIC_APP_SCHEME=elmer-staging
+export EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+export EXPO_PUBLIC_POSTHOG_API_KEY=phc_yUHWWiu7B4Adyji8ZqkcpA3XUEM5eWA5DfVZnrs5Q8i9
+export EXPO_PUBLIC_INSTAGRAM_ENABLED=true
+export EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq
 
 # ── 6. Validate required staging settings in the .env ─────────────────────────
 check_env_value() {
@@ -125,20 +145,10 @@ echo "Publishing Elmer Staging OTA update..."
 echo "Message: $MESSAGE"
 echo ""
 
-if [[ "$USE_ENVIRONMENT_FLAG" == "true" ]]; then
-  npx eas-cli@latest update \
-    --branch staging \
-    --environment preview \
-    --platform ios \
-    --message "$MESSAGE" \
-    --non-interactive
-else
-  npx eas-cli@latest update \
-    --branch staging \
-    --platform ios \
-    --message "$MESSAGE" \
-    --non-interactive
-fi
+npx eas-cli@latest update \
+  --branch staging \
+  --platform ios \
+  --message "$MESSAGE"
 
 echo ""
 echo "Staging OTA update published successfully."

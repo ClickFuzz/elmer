@@ -29,15 +29,17 @@ async function seedActiveSubscription(userId) {
      ON CONFLICT (user_id) DO UPDATE SET customer_id = $2, updated_at = $3`,
     [userId, customerId, now]
   );
+  const stripeSubId = `sub_test_${userId}`;
   await pool.query(
     `INSERT INTO subscriptions
-       (user_id, stripe_subscription_id, stripe_customer_id, status,
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
         current_period_start, current_period_end, trial_start, trial_end,
         cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
-     VALUES ($1, $2, $3, 'trialing', $4, $5, $4, $5, false, null, null, true, $4, $4)
-     ON CONFLICT (user_id) DO UPDATE SET
+     VALUES ($1, 'stripe', $2, $2, $3, 'trialing', $4, $5, $4, $5, false, null, null, true, $4, $4)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET
        stripe_customer_id = $3, status = 'trialing', updated_at = $4`,
-    [userId, `sub_test_${userId}`, customerId, now, now + 14 * 24 * 60 * 60 * 1000]
+    [userId, stripeSubId, customerId, now, now + 14 * 24 * 60 * 60 * 1000]
   );
 }
 

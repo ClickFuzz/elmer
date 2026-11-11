@@ -33,23 +33,38 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Staging OTA version badge (`OtaBadge`): shows loaded update ID or EMBEDDED; staging-only | COMPLETE — staging `19975be` |
 | — | Production merge: staging → main (all platform integrations, UI polish, security) | COMPLETE — main `b7585d7` |
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
+| 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | IN PROGRESS — staging `5d68bff`; **iOS purchase confirmed working** (Nov 11); Android AAB versionCode 8 built + App Links + OTA active |
+| — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
+| — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
+| — | Fix RC init order (initPurchases before switchPurchasesUser); fix $19.99/month price display | COMPLETE — staging OTA `df153e23` |
+| — | Android App Links: HTTPS intent filters, `assetlinks.json` endpoint, V17 migration (`oauth_states.return_url`), `returnUrl` in all 5 OAuth routes + mobile `OAUTH_RETURN_URL` constant | COMPLETE — staging `1efff86` / versionCode 6 |
+| — | Fix RC Android SDK key missing from OTA bundle (added to EAS `preview` environment) | COMPLETE — staging OTA `df153e23` |
+| — | Fix Android audio transcription: `toFile()` with explicit `audio/mp4` MIME type, file size log, stale-path cleanup fix | COMPLETE — staging `d4d2f60`; Railway deployed; device test pending |
+| — | MVP input validation and manual text fallback: photo+audio pre-generation guards, silent transcription detection, 500-char manual cap, per-platform verbatim fallback, empty-text blocking | COMPLETE — staging `ea631de`; OTA `28049482` |
+| — | UI redesign: tomato-red brand (#DB1200), charcoal text (#252932), warm off-white bg (#F7F6F3), white floating cards with soft shadows, removed all header/footer dividers, floating rounded nav bar with active-item pill | COMPLETE — staging `0d696d0` |
+| — | New logo.png (380×100) and icon.png assets from getelmer.com; logo left-aligned at correct aspect ratio | COMPLETE — staging `0d696d0` |
+| — | Fix audio re-recording silent failure (4th+ attempt): `keepAudioSessionActive:true` prevents 100ms deactivateSession race; remove `setAudioModeAsync(allowsRecording:false)` from playback; capture URI immediately after prepare; clean ExpoAudio cache on each record | COMPLETE — staging OTA `ff1db83c` |
+| — | Fix iOS RevenueCat OTA regression: `EXPO_PUBLIC_RC_API_KEY_IOS` added to EAS Preview environment; `update` script accepts interactive EAS login (no `EXPO_TOKEN` required) | COMPLETE — staging `5f8dfaf`; iOS purchase confirmed Nov 11 |
 
 ---
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `b3ee091` (location/page selection panel in onboarding)
-- **Staging branch:** `staging` — HEAD `b3ee091` (in sync with main)
-- **Last known TestFlight build:** #21
-- **EAS project:** `778df2e5-7a11-47f0-8951-7e3844f59e42` (`@clickfuzz-team/elmer`)
+- **Production branch:** `main` — HEAD `7551889`
+- **Staging branch:** `staging` — HEAD `5f8dfaf` (25+ commits ahead of main — RC integration + OAuth fix + Android App Links + audio fix + MVP validation + full UI redesign + iOS RC OTA fix)
+- **Last known TestFlight build:** submitted Nov 10 2026 — EAS build `58ebf62f` (staging-testflight; full UI redesign + new logo/icon + floating nav bar)
+- **Last Android AAB build:** versionCode 8 — EAS build `0cd37927` (staging-google-play; full UI redesign + new logo/icon + floating nav bar; submitted Nov 10 2026)
+- **Active staging OTA update:** built on `5f8dfaf` (RC diagnostics cleanup; iOS purchase confirmed working) — targets staging channel via EAS Preview environment, runtime 1.0.0
+- **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer`
-- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (built and in use)
-- **Production API:** `https://api.getelmer.com` (Railway, deployed at `b3ee091`)
-- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set)
+- **Staging bundle ID:** `com.clickfuzz.elmer.staging` (internal distribution only; no ASC app)
+- **Production API:** `https://api.getelmer.com` (Railway)
+- **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET`, `ALLOWED_OAUTH_RETURN_SCHEMES=elmer,elmer-staging` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
-- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions
+- **EAS cloud build credits:** exhausted for the free tier — all builds must go through GitHub Actions (exception: `npx eas-cli@latest build` still works for staging-testflight ad-hoc builds)
 - **Pending OTA update:** `34fe198` (subscription screen redesign) — **not yet pushed to `production` channel**
+- **react-native-purchases**: pinned at `10.16.0` on staging (downgraded from `11.0.1` — `PurchasesHybridCommon 20.4.0` unpublished Nov 2–6 2026 CocoaPods disruption); upgrade back to `11.x` after disruption clears
 
 ## Staging Environment
 
@@ -69,6 +84,22 @@ Staging infrastructure is fully live. Railway staging environment is running.
 | `docs/DEPLOYMENT-WORKFLOW.md` | Full dev/staging/production/rollback/hotfix procedures |
 | Railway staging | Live at `https://api-staging.getelmer.com`; `APP_SCHEME=elmer-staging`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true` confirmed set |
 
+### EAS Preview environment — critical rule for OTA variables
+
+The `staging` branch is permanently linked to the EAS **Preview** environment on expo.dev. All OTA updates to the staging channel use this environment's variables, regardless of `--environment` flags, shell exports, or `.env` files — the EAS server-side environment always wins.
+
+**Any `EXPO_PUBLIC_*` variable required in a staging OTA bundle must be present in the EAS Preview environment** (expo.dev → Project → Environment Variables → Preview). `eas.json` build profile `env` blocks apply to native builds only; they are ignored during OTA bundling.
+
+Current EAS Preview environment variables (all confirmed set):
+- `EXPO_PUBLIC_API_URL=https://api-staging.getelmer.com`
+- `EXPO_PUBLIC_APP_SCHEME=elmer-staging`
+- `EXPO_PUBLIC_INSTAGRAM_ENABLED=true`
+- `EXPO_PUBLIC_RC_API_KEY_IOS=appl_qiMBWYvElXNhKitKwqFWXExCYsq` ← added Nov 11 2026 (was missing; caused iOS purchase regression)
+- `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM`
+
+To inspect: `npx eas-cli@latest env:list --environment preview`
+To add: `npx eas-cli@latest env:set --environment preview --name KEY --value VALUE`
+
 ### Staging OTA workflow — important fix (19975be)
 
 `--environment preview` was causing the EAS server-side "preview" environment (expo.dev) to override and nullify `EXPO_PUBLIC_API_URL`, making the app fall back to `http://localhost:3001`. Removed from the workflow. All staging env vars are now set explicitly in the GitHub Actions `env` block and are correctly inlined by Metro at bundle time.
@@ -81,7 +112,11 @@ Staging infrastructure is fully live. Railway staging environment is running.
 
 ### Staging deep-link scheme separation (important)
 
-The staging app uses scheme `elmer-staging://` (set in `app.config.js`) and the staging server must have `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging`. Without this, OAuth callbacks are ambiguous when both apps are on the same device.
+The staging app uses scheme `elmer-staging://` (set in `app.config.js`). The staging server has `FACEBOOK_OAUTH_RETURN_SCHEME=elmer-staging` and `GOOGLE_OAUTH_RETURN_SCHEME=elmer-staging` as fallback defaults.
+
+**OAuth return scheme fix (f1b47ef):** Mobile now passes `returnScheme: EXPO_PUBLIC_APP_SCHEME ?? 'elmer'` in every connect-url request. The server validates against `ALLOWED_OAUTH_RETURN_SCHEMES` (staging: `elmer,elmer-staging`) and stores the scheme in `oauth_states.return_scheme` (V16 DB migration). The callback reads it back and redirects to the correct app.
+
+**Android App Links (1efff86):** V17 migration adds `oauth_states.return_url TEXT`. All 5 OAuth connect-url routes accept `returnUrl` body param and store it; callbacks read `return_url` and do a plain 302 redirect for HTTPS URLs (Android App Link) or render an intent:// HTML page for custom scheme URLs. Mobile sends `OAUTH_RETURN_URL = Platform.OS === 'android' ? \`${API_URL}/oauth/return\` : \`${RETURN_SCHEME}://oauth/callback\``. Server serves `assetlinks.json` at `/.well-known/assetlinks.json` (Google Play App Signing SHA-256: `87:FB:5B:BE:30:...`). `app.json` has `intentFilters` for `api-staging.getelmer.com` and `api.getelmer.com` with `autoVerify: true`. Helper module: `server/routes/oauth-helpers.js` (`resolveReturnScheme`, `resolveReturnUrl`, `sendOAuthRedirect`).
 
 ---
 
@@ -125,7 +160,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **Threads:** connect (OAuth), text/photo/carousel publish, Before/After composite
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
-- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`; 14-day trial offer → Stripe Checkout via `Linking.openURL`; polls for activation on return; Manage Subscription → Customer Portal. When user already has access and navigates from Settings, renders as an in-app screen with back button + bottom nav (no flash, no sign-out button). `formatDate` coerces PG BIGINT strings with `Number()` to avoid "Invalid Date". `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` env var (staging: `elmer-staging://`, production: `elmer://`).
+- **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`. iOS/Android: native StoreKit / Google Play purchase via RevenueCat SDK (`services/purchases.ts`); no browser for mobile purchases. Web/Stripe: `Linking.openURL` to Stripe Checkout (unchanged). After purchase: `POST /billing/rc-verify-purchase` grants access within seconds; RC webhook confirms asynchronously. Provider-aware management: Apple → Account Settings URL, Google → Play subscriptions URL, Stripe → Customer Portal. Restore Purchases button (Apple requirement). `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` (staging: `elmer-staging://`, production: `elmer://`).
 - **Staging OTA version badge** (`components/OtaBadge.tsx`): persistent top-right badge visible only when `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; shows `OTA <first-7-chars-of-updateId>` for loaded OTA updates, `EMBEDDED` for the original binary bundle; uses `useUpdates()` so it reflects the actually-running update; `pointerEvents="none"`, safe-area-aware, zero cost in production.
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
@@ -149,26 +184,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **Stage 1 — Billing portal backend** (`server/routes/billing.js`, `server/routes/auth.js`, `server/app.js`, `server/services/email.js`):
-  - `POST /billing/checkout-session` and `POST /billing/portal-session` accept `source: 'web'`; web sessions point success/cancel/return URLs to `BILLING_PORTAL_URL` instead of the mobile deep-link relay
-  - `GET /billing/checkout-return` sanitizes `status` against an allowlist before constructing the deep-link URL
-  - CORS allowlist via `CORS_ALLOWED_ORIGINS` env var; requests without `Origin` (mobile) always pass
-  - `POST /auth/forgot-password` — always returns `{ok:true}`; generates 32-byte token; stores SHA-256 hash only; sends reset email via Resend; silently skips if `RESEND_API_KEY` absent
-  - `POST /auth/reset-password` — verifies token hash, marks used, updates password (bcrypt), invalidates all sessions, issues fresh session
-  - `server/services/email.js` — `sendPasswordResetEmail`; test hooks `_setEmailSenderForTest` / `_clearEmailSenderForTest`
-  - V14 DB migration: `password_reset_tokens` table (`id`, `user_id`, `token_hash` UNIQUE, `expires_at`, `used_at`)
-  - `GET /health` now returns `emailEnabled: !!RESEND_API_KEY` for pre-deployment Resend verification
-- **Stage 2 — billing.getelmer.com portal** (static HTML/CSS/vanilla JS, `website/billing/`):
-  - Login + signup (combined tab switcher), forgot-password, reset-password, subscription dashboard
-  - `sessionStorage`-based auth; `apiFetch` with `skipAuthRedirect` option to prevent false 401 redirects on auth endpoints
-  - Stripe Checkout and Customer Portal via `source:'web'`; entitlement verified from `GET /billing/subscription` (never inferred from redirect)
-  - Webhook latency: polls up to 10× with 2 s delay after successful checkout return
-  - Account deletion: blocks if `hasAccess=true` with "cancel subscription first" message
-  - Apache `.htaccess`: HTTPS redirect, extensionless URL rewriting, HSTS, `X-Frame-Options: DENY`, `Content-Security-Policy: script-src 'self'` (no inline/eval), `no-store` cache
-  - `website/billing/test/smoke.test.js`: 36 portal smoke tests (file presence, JS syntax, cross-file refs, DOM elements, CSP rules, secret-free frontend)
-  - `website/billing/DEPLOY.md`: step-by-step subdomain + SSL + Railway + Stripe + Resend setup; post-deployment checklist
-  - **Status: awaiting explicit deployment approval** — subdomain and SSL not yet created
-- **569 automated tests passing** — `cd server && npm test` (22 test files); 36 portal smoke tests — `node --test website/billing/test/smoke.test.js`
+- **566 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -192,63 +208,6 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ---
 
-## Website — getelmer.com
-
-### Hosting
-
-- **Provider:** CrocWeb shared hosting, managed via DirectAdmin
-- **DA panel:** `homesincda.com:2222` — account `clgorman`
-- **Document root:** `/domains/getelmer.com/public_html/`
-- **API server:** Railway — `https://api.getelmer.com` (separate from website hosting)
-- **Local source copy:** `website/` directory in this repo (mirrors server files for version control)
-
-### Technology
-
-Pure static HTML + CSS + vanilla JS. No PHP, no frameworks, no SSR, no build step. Apache serves files directly.
-
-### Pages
-
-| Page | Server path | Local source |
-|---|---|---|
-| Home | `/domains/getelmer.com/public_html/index.html` | `website/index.html` |
-| Privacy Policy | `/domains/getelmer.com/public_html/privacy-policy/index.html` | `website/privacy-policy/index.html` |
-| Terms & Conditions | `/domains/getelmer.com/public_html/terms-and-conditions/index.html` | `website/terms-and-conditions/index.html` |
-| Stylesheet | `/domains/getelmer.com/public_html/style.css` | `website/style.css` |
-
-### How to deploy changes
-
-Use the DirectAdmin MCP tools:
-```
-da_upload_file(
-  local_path="<absolute path under website/>",
-  remote_dir="/domains/getelmer.com/public_html[/subdir]",
-  remote_filename="<filename>"
-)
-```
-
-Read a server file: `da_read_file(path="/domains/getelmer.com/public_html/style.css")`  
-Check a file exists: `da_stat(path="/domains/getelmer.com/public_html/style.css")`
-
-### ClickFuzz cleanup (completed 2026-11-05)
-
-The site was previously managed by the ClickFuzz PitchSnap CMS which:
-- Used SSI includes (`<!--#include virtual="_cf/head.html">`) in `<head>` — Apache was not processing SSI, so `<head>` rendered empty and CSS never loaded
-- Injected nav items via `<!-- cf-nav-start/end -->` delimiters
-- Used `data-cf-form` attributes for form embeds
-- Required `runtime.js` from `/cf-runtime/`
-- Had CSS selectors `nav[data-clickfuzz-nav="primary/mobile/footer"]`
-
-All three pages were rewritten as standalone HTML. CSS nav selectors updated to structural selectors: `.header-inner nav`, `.mobile-drawer nav`, `footer nav`. All ClickFuzz dependencies removed.
-
-### CSS nav selector history (important)
-
-The old `style.css` used `nav[data-clickfuzz-nav="primary"]` etc. These are now gone. Current selectors:
-- Desktop nav: `.header-inner nav { display: none; }` → `@media (min-width: 768px) { .header-inner nav { display: flex; } }`
-- Mobile drawer nav: `.mobile-drawer nav ul { display: flex; flex-direction: column; gap: 4px; }`
-- Footer nav: `footer nav ul { display: flex; flex-direction: column; gap: 10px; }`
-
----
-
 ## Key Architectural Rules
 
 - **No Expo Router** — manual `useState<AppScreen>` switcher in `App.tsx`.
@@ -256,8 +215,9 @@ The old `style.css` used `nav[data-clickfuzz-nav="primary"]` etc. These are now 
 - **Credentials server-side only** — OAuth tokens and app passwords encrypted AES-256-GCM; mobile never holds provider credentials.
 - **No PostgreSQL/Redis/Supabase/Firebase addition** without explicit requirement.
 - **Platform independence** — Facebook, Instagram, Threads, WordPress failures must not affect each other.
-- **iOS billing:** `Linking.openURL()` to Stripe Checkout. No StoreKit or `com.apple.developer.storekit.external-purchase-link` entitlement needed — Elmer is US-only and App Review Guideline 3.1.1(a) (updated Oct 16, 2026) does not require the entitlement for US storefront apps.
-- **Android billing:** `Linking.openURL()`. SaaS exemption applies — Elmer sells backend service access, not in-app digital goods.
+- **iOS billing:** RevenueCat SDK (`react-native-purchases`) + native StoreKit. RC offering `default`, package `$rc_monthly`, entitlement `elmer-post-everywhere`, product `com.clickfuzz.elmer.monthly`. After purchase: `POST /billing/rc-verify-purchase` fast path; RC webhook confirms. Existing Stripe subscribers retain access (multi-provider `subscriptions` table, V15 migration).
+- **Android billing:** RevenueCat SDK + Google Play Billing. RC key `EXPO_PUBLIC_RC_API_KEY_ANDROID=goog_pwUUWIOHItSpOgrtZROpFiIJnjM` set in `staging-google-play` EAS profile. AAB (versionCode 4, includes registration fix) built; upload to Google Play Console internal testing track pending.
+- **Web/Stripe billing:** `Linking.openURL()` to Stripe Checkout (unchanged for web users on getelmer.com).
 
 ---
 
@@ -284,21 +244,26 @@ The old `style.css` used `nav[data-clickfuzz-nav="primary"]` etc. These are now 
 | `GOOGLE_OAUTH_RETURN_SCHEME` | Default `elmer`; matches `scheme` in `app.json` |
 | `STRIPE_TEST_MODE` | `TRUE` in Railway (case-insensitive check); enables test Stripe keys + DeviceCheck bypass + Developer section in Settings |
 | `INSTAGRAM_ENABLED` | `false` in production Railway (set); omit or set `true` in staging — blocks connect-url + publish; compliance endpoints always active |
+| `REVENUECAT_SECRET_KEY` | RC server-side secret key — required for `rc-verify-purchase` and `rc-webhook` endpoints; Railway only |
+| `REVENUECAT_WEBHOOK_SECRET` | Bearer token RC sends in `Authorization` header; must match Railway env var; Railway only |
 | `APP_URL` | `https://api.getelmer.com` (production); `https://api-staging.getelmer.com` (staging) |
 | `APP_SCHEME` | `elmer` (production); `elmer-staging` (staging) — used for Stripe + OAuth deep-link returns |
+| `ALLOWED_OAUTH_RETURN_SCHEMES` | Comma-separated allowlist for custom-scheme OAuth returns; staging: `elmer,elmer-staging`; production: `elmer` |
 | `DISABLE_AUTH` | `false` in production; never `true` in prod |
 | `DISABLE_RATE_LIMIT` | `true` in tests only |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed CORS origins; e.g. `https://billing.getelmer.com`; unset = all origins (backward compat) |
-| `BILLING_PORTAL_URL` | Base URL for billing portal web sessions; default `https://billing.getelmer.com`; used in Stripe return URLs and password reset email links |
-| `RESEND_API_KEY` | Resend API key (`re_…`); required for password reset emails; server logs warning and skips email when absent; check via `GET /health` → `emailEnabled` |
-| `EMAIL_FROM` | Sender for transactional emails; default `Elmer <noreply@getelmer.com>`; must be a verified domain in Resend |
 
 ---
 
 ## Pending Actions Before App Store Release
 
-1. **Merge Instagram feature flag PR** — open at `https://github.com/ClickFuzz/elmer/compare/main...staging`; 524 tests pass; ready to merge.
-2. **New production iOS build** — required after merging Instagram flag (build-time env var; OTA alone is not sufficient to disable Instagram in current TestFlight binary). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
+1. **Complete iOS sandbox purchase test** — Install TestFlight build 24, sign in, tap Subscribe, complete with sandbox Apple ID, verify unlock.
+2. **Complete Android purchase + registration test** — Upload AAB (versionCode 6) to Google Play Console → `com.clickfuzz.elmer` → Internal testing track. Install via internal testing link. Test: (a) register new account; (b) Subscribe → verify 14-day trial offer (product `com.clickfuzz.elmer.monthly:monthly`, offer `free-trial-14-day`) → verify unlock. Test Restore Purchases. Install OTA update group `28049482` or confirm it auto-applies.
+2a. **Confirm Android audio transcription fix** — On versionCode 6 with Railway staging deployed, record voice + tap Generate. Confirm no "Transcription failed" error. Check Railway logs for `[Generate] Audio received: X bytes` (expect 50 KB+).
+3. **Merge staging → main** — After both iOS and Android purchase tests pass; 20+ commits of RC integration + App Links + audio fix.
+4. **Upgrade react-native-purchases to 11.x** — After Nov 6 CocoaPods disruption clears; run `npx expo install react-native-purchases@latest`, typecheck, build new staging-testflight to confirm, then production.
+4. **New production iOS build** — Required after merging RC integration (new native module; OTA alone is not sufficient). Trigger via GitHub Actions → "iOS Build and Submit to TestFlight" → Branch: main.
+5. **Set `EXPO_PUBLIC_RC_API_KEY_IOS` in production `eas.json` env** — Only after RC sandbox test passes on staging; use the same key `appl_qiMBWYvElXNhKitKwqFWXExCYsq`.
+6. **Set `REVENUECAT_SECRET_KEY` + `REVENUECAT_WEBHOOK_SECRET` on Railway production** — After staging test passes; configure RC production webhook at `https://api.getelmer.com/billing/rc-webhook`.
 3. **OTA update (interim):** if shipping before a new binary, push `34fe198` to `production` channel — `bunx eas-cli update --branch production --message "Fix subscription manage screen: no flash, back button, Invalid Date"` — but note this does NOT include the Instagram flag (that requires a build with the new `EXPO_PUBLIC_INSTAGRAM_ENABLED` env var absent).
 4. **App Store Connect — Territory Availability:** restrict to United States only (Pricing and Availability → Territory Availability → deselect all, check only United States).
 5. **Stripe production keys:** set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway. **Do not set `STRIPE_TEST_MODE=true` when live key is present** — the billing.js startup guard will crash the server.
@@ -335,7 +300,7 @@ The old `style.css` used `nav[data-clickfuzz-nav="primary"]` etc. These are now 
 
 ```bash
 cd server && npm test
-# 524 tests: db, auth, platforms, facebook, instagram, threads,
+# 566 tests: db, auth, platforms, facebook, instagram, threads,
 #             media-utils, generation, account-isolation, wordpress,
 #             billing, google, free-publication, analytics, device,
 #             security, settings, testmode, meta-callbacks
@@ -366,7 +331,8 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `server/routes/facebook.js` | Facebook: OAuth, pages, publish, Meta callbacks, backfill |
 | `server/routes/instagram.js` | Instagram: OAuth, publish, Meta callbacks |
 | `server/routes/threads.js` | Threads: OAuth, publish, Meta callbacks |
-| `screens/SubscriptionScreen.tsx` | Trial offer, checkout flow, manage subscription |
+| `services/purchases.ts` | RevenueCat SDK wrapper — configure, purchase, restore, logIn/logOut |
+| `screens/SubscriptionScreen.tsx` | Trial offer, native StoreKit purchase flow, manage subscription (provider-aware) |
 | `server/test/meta-callbacks.test.js` | 19 Meta callback integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
 | `constants/features.ts` | Mobile feature flags: `INSTAGRAM_ENABLED` (derived from `EXPO_PUBLIC_INSTAGRAM_ENABLED`) |

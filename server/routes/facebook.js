@@ -11,6 +11,7 @@ const { requireAuth } = require('../auth');
 const { orderWithFeaturedFirst } = require('./media-utils');
 const { tryReserveFreePublication, redeemFreePublication, releaseFreePublicationIfNoSuccess, checkFreeRetryAllowed } = require('./billing');
 const { trackFreePublicationCompleted, trackPublicationResult } = require('../services/analytics');
+const { resolveReturnScheme, resolveReturnUrl, sendOAuthRedirect } = require('./oauth-helpers');
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GRAPH_API_VERSION  = 'v21.0';
@@ -121,13 +122,18 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         return res.status(503).json({ error: 'Facebook integration not configured on this server' });
       }
 
+      const returnScheme = resolveReturnScheme(
+        req.body?.returnScheme,
+        process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer'
+      );
+      const returnUrl = resolveReturnUrl(req.body?.returnUrl);
       const state = randomBytes(24).toString('hex');
       const now   = Date.now();
 
       await getPool().query(
-        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at)
-         VALUES ($1, $2, 'facebook', $3, $4)`,
-        [state, req.userId, now, now + OAUTH_STATE_TTL_MS]
+        `INSERT INTO oauth_states (state, user_id, platform, created_at, expires_at, return_scheme, return_url)
+         VALUES ($1, $2, 'facebook', $3, $4, $5, $6)`,
+        [state, req.userId, now, now + OAUTH_STATE_TTL_MS, returnScheme, returnUrl]
       );
 
       const params = new URLSearchParams({
@@ -146,26 +152,27 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
   // ── GET /facebook/callback ──────────────────────────────────────────────────
   router.get('/callback', async (req, res) => {
-    const appId        = process.env.FACEBOOK_APP_ID        ?? '';
-    const appSecret    = process.env.FACEBOOK_APP_SECRET    ?? '';
-    const redirectUri  = process.env.FACEBOOK_REDIRECT_URI  ?? '';
-    const returnScheme = process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer';
-    const returnBase   = `${returnScheme}://oauth/callback`;
+    const appId         = process.env.FACEBOOK_APP_ID        ?? '';
+    const appSecret     = process.env.FACEBOOK_APP_SECRET    ?? '';
+    const redirectUri   = process.env.FACEBOOK_REDIRECT_URI  ?? '';
+    const fallbackScheme = process.env.FACEBOOK_OAUTH_RETURN_SCHEME ?? 'elmer';
+    // Starts as env-var fallback; updated to stateRow.return_scheme after state is validated
+    let returnBase = `${fallbackScheme}://oauth/callback`;
 
     const { code, state, error: fbError, error_description } = req.query;
     console.log('[facebook] callback hit — code:', !!code, '| state:', !!state, '| fbError:', fbError ?? 'none');
 
     if (fbError) {
       const reason = (typeof error_description === 'string' ? error_description : fbError);
-      return res.redirect(`${returnBase}?platform=facebook&error=${encodeURIComponent(reason)}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=${encodeURIComponent(reason)}`);
     }
 
     if (!code || !state || typeof code !== 'string' || typeof state !== 'string') {
-      return res.redirect(`${returnBase}?platform=facebook&error=missing_params`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=missing_params`);
     }
 
     if (!appId || !appSecret || !redirectUri) {
-      return res.redirect(`${returnBase}?platform=facebook&error=server_not_configured`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=server_not_configured`);
     }
 
     try {
@@ -178,7 +185,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       try {
         await client.query('BEGIN');
         const { rows } = await client.query(
-          `SELECT id, user_id, expires_at, used_at
+          `SELECT id, user_id, expires_at, used_at, return_scheme, return_url
            FROM oauth_states WHERE state = $1 AND platform = 'facebook'
            FOR UPDATE`,
           [state]
@@ -187,15 +194,16 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
 
         if (!stateRow) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=facebook&error=invalid_state`);
+          return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=invalid_state`);
         }
+        const stateBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
         if (stateRow.used_at) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=facebook&error=state_already_used`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=facebook&error=state_already_used`);
         }
         if (stateRow.expires_at < now) {
           await client.query('ROLLBACK');
-          return res.redirect(`${returnBase}?platform=facebook&error=state_expired`);
+          return sendOAuthRedirect(res, `${stateBase}?platform=facebook&error=state_expired`);
         }
 
         await client.query('UPDATE oauth_states SET used_at = $1 WHERE id = $2', [now, stateRow.id]);
@@ -206,6 +214,9 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       } finally {
         client.release();
       }
+
+      // Update returnBase to the URL/scheme the mobile app requested at connect time
+      returnBase = stateRow.return_url ?? `${stateRow.return_scheme ?? fallbackScheme}://oauth/callback`;
 
       // Step 1 — Exchange code for short-lived user access token
       const tokenParams = new URLSearchParams({
@@ -275,7 +286,7 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
       const pages = (pagesData.data ?? []).filter(p => p.id && p.access_token);
 
       if (pages.length === 0) {
-        return res.redirect(`${returnBase}?platform=facebook&error=no_manageable_pages`);
+        return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=no_manageable_pages`);
       }
 
       // Step 5 — Persist each page's access token encrypted.
@@ -301,14 +312,14 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         );
       }
 
-      return res.redirect(
+      return sendOAuthRedirect(res,
         `${returnBase}?platform=facebook&success=true&page_count=${pages.length}`
       );
 
     } catch (err) {
       console.error('[facebook] callback error:', err.message);
       const errorCode = err.isPermissionError ? 'insufficient_permissions' : 'auth_failed';
-      return res.redirect(`${returnBase}?platform=facebook&error=${errorCode}`);
+      return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=${errorCode}`);
     }
   });
 

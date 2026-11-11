@@ -48,28 +48,33 @@ async function seedStripeCustomer(userId, customerId = 'cus_test123') {
 
 async function seedSubscription(userId, customerId, overrides = {}) {
   const now = Date.now();
+  const stripeSubId = overrides.stripe_subscription_id ?? 'sub_test123';
   const defaults = {
-    stripe_subscription_id: 'sub_test123',
-    stripe_customer_id:     customerId,
-    status:                 'trialing',
-    current_period_start:   now,
-    current_period_end:     now + 30 * 24 * 60 * 60 * 1000,
-    trial_start:            now,
-    trial_end:              now + 14 * 24 * 60 * 60 * 1000,
-    cancel_at_period_end:   false,
-    cancel_at:              null,
-    canceled_at:            null,
-    trial_used:             true,
+    stripe_subscription_id:  stripeSubId,
+    stripe_customer_id:      customerId,
+    provider:                'stripe',
+    provider_subscription_id: stripeSubId,
+    status:                  'trialing',
+    current_period_start:    now,
+    current_period_end:      now + 30 * 24 * 60 * 60 * 1000,
+    trial_start:             now,
+    trial_end:               now + 14 * 24 * 60 * 60 * 1000,
+    cancel_at_period_end:    false,
+    cancel_at:               null,
+    canceled_at:             null,
+    trial_used:              true,
   };
   const s = { ...defaults, ...overrides };
   await getPool().query(
     `INSERT INTO subscriptions
-       (user_id, stripe_subscription_id, stripe_customer_id, status,
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
         current_period_start, current_period_end, trial_start, trial_end,
         cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
     [
-      userId, s.stripe_subscription_id, s.stripe_customer_id, s.status,
+      userId, s.provider, s.provider_subscription_id,
+      s.stripe_subscription_id, s.stripe_customer_id, s.status,
       s.current_period_start, s.current_period_end,
       s.trial_start, s.trial_end,
       s.cancel_at_period_end, s.cancel_at, s.canceled_at,
@@ -257,21 +262,21 @@ describe('POST /billing/portal-session', () => {
 describe('GET /billing/checkout-return', () => {
   it('redirects to elmer://billing/return?status=success', async () => {
     const res = await request(app).get('/billing/checkout-return?status=success');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('elmer://billing/return'));
-    assert.ok(res.headers.location.includes('status=success'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('elmer://billing/return'));
+    assert.ok(res.text.includes('status=success'));
   });
 
   it('redirects to elmer://billing/return?status=cancel', async () => {
     const res = await request(app).get('/billing/checkout-return?status=cancel');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('status=cancel'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('status=cancel'));
   });
 
   it('uses status=unknown when no status param is provided', async () => {
     const res = await request(app).get('/billing/checkout-return');
-    assert.strictEqual(res.status, 302);
-    assert.ok(res.headers.location.includes('status=unknown'));
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('status=unknown'));
   });
 
   it('uses APP_SCHEME env var for the redirect scheme (staging scenario)', async () => {
@@ -282,12 +287,12 @@ describe('GET /billing/checkout-return', () => {
     process.env.APP_SCHEME = 'elmer-staging';
     try {
       const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.status, 200);
       assert.ok(
-        res.headers.location.startsWith('elmer-staging://billing/return'),
-        `expected elmer-staging:// prefix, got: ${res.headers.location}`
+        res.text.includes('elmer-staging://billing/return'),
+        `expected elmer-staging:// prefix, got: ${res.text}`
       );
-      assert.ok(res.headers.location.includes('status=success'));
+      assert.ok(res.text.includes('status=success'));
     } finally {
       if (original === undefined) delete process.env.APP_SCHEME;
       else process.env.APP_SCHEME = original;
@@ -299,10 +304,10 @@ describe('GET /billing/checkout-return', () => {
     delete process.env.APP_SCHEME;
     try {
       const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.status, 200);
       assert.ok(
-        res.headers.location.startsWith('elmer://billing/return'),
-        `expected elmer:// prefix, got: ${res.headers.location}`
+        res.text.includes('elmer://billing/return'),
+        `expected elmer:// prefix, got: ${res.text}`
       );
     } finally {
       if (original !== undefined) process.env.APP_SCHEME = original;

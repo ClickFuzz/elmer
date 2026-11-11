@@ -301,26 +301,26 @@ describe('GET /wordpress/callback', () => {
     const state = await insertOAuthState(userId);
     const res = await request(app)
       .get(`/wordpress/callback?state=${state}&error=rejected`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=rejected/);
-    assert.match(res.headers.location, /platform=wordpress/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=rejected/);
+    assert.match(res.text, /platform=wordpress/);
   });
 
   it('redirects with error for missing params', async () => {
     const res = await request(app)
       .get('/wordpress/callback?state=abc')
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=missing_params/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=missing_params/);
   });
 
   it('redirects with error for invalid state', async () => {
     const res = await request(app)
       .get('/wordpress/callback?state=invalid&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=abc123')
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=invalid_state/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=invalid_state/);
   });
 
   it('redirects with error for expired state', async () => {
@@ -328,9 +328,9 @@ describe('GET /wordpress/callback', () => {
     const state = await insertOAuthState(userId, { expired: true });
     const res = await request(app)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=abc123`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=state_expired/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=state_expired/);
   });
 
   it('redirects with error when SSRF site_url is private', async () => {
@@ -338,9 +338,9 @@ describe('GET /wordpress/callback', () => {
     const state = await insertOAuthState(userId);
     const res = await request(app)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2F192.168.1.1&user_login=admin&password=abc123`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=invalid_site/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=invalid_site/);
   });
 
   it('redirects with error when credentials fail verification', async () => {
@@ -352,9 +352,9 @@ describe('GET /wordpress/callback', () => {
     const state = await insertOAuthState(userId);
     const res = await request(localApp)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=abc123`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /error=auth_failed/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /error=auth_failed/);
   });
 
   it('stores credentials and redirects with success=true on valid callback', async () => {
@@ -362,10 +362,10 @@ describe('GET /wordpress/callback', () => {
     const state = await insertOAuthState(userId);
     const res = await request(app)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=xxxx+xxxx+xxxx+xxxx+xxxx+xxxx`)
-      .redirects(0);
-    assert.equal(res.status, 302);
-    assert.match(res.headers.location, /success=true/);
-    assert.match(res.headers.location, /platform=wordpress/);
+      ;
+    assert.equal(res.status, 200);
+    assert.match(res.text, /success=true/);
+    assert.match(res.text, /platform=wordpress/);
 
     const { rows } = await getPool().query(
       `SELECT * FROM connected_platforms WHERE user_id = $1 AND platform = 'wordpress'`,
@@ -383,10 +383,10 @@ describe('GET /wordpress/callback', () => {
     const { userId } = await registerAndLogin(app);
     const state = await insertOAuthState(userId);
     const params = `?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=abc`;
-    await request(app).get(`/wordpress/callback${params}`).redirects(0);
-    const res2 = await request(app).get(`/wordpress/callback${params}`).redirects(0);
-    assert.equal(res2.status, 302);
-    assert.match(res2.headers.location, /error=state_already_used/);
+    await request(app).get(`/wordpress/callback${params}`);
+    const res2 = await request(app).get(`/wordpress/callback${params}`);
+    assert.equal(res2.status, 200);
+    assert.match(res2.text, /error=state_already_used/);
   });
 
   it('upserts on reconnect — updates token without creating duplicate', async () => {
@@ -396,13 +396,13 @@ describe('GET /wordpress/callback', () => {
     let state = await insertOAuthState(userId);
     await request(app)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=first_pass`)
-      .redirects(0);
+      ;
 
     // Reconnect
     state = await insertOAuthState(userId);
     await request(app)
       .get(`/wordpress/callback?state=${state}&site_url=https%3A%2F%2Fmyblog.example.com&user_login=admin&password=new_pass`)
-      .redirects(0);
+      ;
 
     const { rows } = await getPool().query(
       `SELECT * FROM connected_platforms WHERE user_id = $1 AND platform = 'wordpress'`,

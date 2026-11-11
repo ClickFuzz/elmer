@@ -10,6 +10,7 @@ const {
   processQueuedDeviceUpdate,
   isDeviceCheckConfigured,
 } = require('./device');
+const { sendOAuthRedirect } = require('./oauth-helpers');
 const {
   trackTrialStarted,
   trackTrialConverted,
@@ -52,24 +53,34 @@ if (process.env.STRIPE_SECRET_KEY?.startsWith('sk_live_') && isTestMode()) {
 
 const APP_URL              = () => process.env.APP_URL ?? 'https://api.getelmer.com';
 const APP_SCHEME           = () => process.env.APP_SCHEME ?? 'elmer';
-// BILLING_PORTAL_URL: public URL of the billing web portal.
-// Used to build Stripe web-checkout success/cancel URLs and password reset links.
-const BILLING_PORTAL_URL   = () => process.env.BILLING_PORTAL_URL ?? 'https://billing.getelmer.com';
-
-// Status values accepted by checkout-return and forwarded to the caller.
-// Any other value is normalised to 'unknown' to prevent reflected injection.
-const VALID_RETURN_STATUSES = new Set(['success', 'cancel', 'portal_return', 'unknown']);
 
 // Stripe statuses that grant full access
 const ACCESS_STATUSES = new Set(['trialing', 'active']);
 // Grace period for past_due before access is revoked (3 days)
 const GRACE_PERIOD_MS = 3 * 24 * 60 * 60 * 1000;
 
+// RevenueCat — 24-hour buffer accommodates delayed RC notifications for Apple/Google subs
+const RC_NOTIFICATION_BUFFER_MS  = 24 * 60 * 60 * 1000;
+const REVENUECAT_SECRET_KEY      = () => process.env.REVENUECAT_SECRET_KEY    || null;
+const REVENUECAT_WEBHOOK_SECRET  = () => process.env.REVENUECAT_WEBHOOK_SECRET || null;
+
 // ── Entitlement helpers ───────────────────────────────────────────────────────
 
 function hasAccess(sub) {
   if (!sub || !sub.status) return false;
-  if (ACCESS_STATUSES.has(sub.status)) return true;
+  if (ACCESS_STATUSES.has(sub.status)) {
+    // Apple/Google rows have hard expiry dates — Stripe manages its own status transitions.
+    // 24-hour buffer accommodates delayed RC notifications so a valid subscriber isn't
+    // incorrectly blocked between the actual expiry and the RC webhook arrival.
+    const provider = sub.provider ?? 'stripe';
+    if (provider !== 'stripe') {
+      // Apple/Google rows always have a hard expiry. A missing current_period_end is
+      // anomalous (corrupt row, RC API quirk) — deny access rather than grant it forever.
+      if (!sub.current_period_end) return false;
+      return Date.now() < Number(sub.current_period_end) + RC_NOTIFICATION_BUFFER_MS;
+    }
+    return true;
+  }
   if (sub.status === 'past_due' && sub.current_period_end) {
     return Date.now() < Number(sub.current_period_end) + GRACE_PERIOD_MS;
   }
@@ -81,10 +92,10 @@ async function requireSubscription(req, res, next) {
   if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
   try {
     const { rows } = await getPool().query(
-      'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+      'SELECT status, current_period_end, provider FROM subscriptions WHERE user_id = $1',
       [req.userId]
     );
-    if (!hasAccess(rows[0])) {
+    if (!rows.some(r => hasAccess(r))) {
       return res.status(402).json({
         error: 'subscription_required',
         message: 'An active subscription is required.',
@@ -208,10 +219,10 @@ async function getEntitlement(userId) {
   const pool = getPool();
 
   const { rows: subRows } = await pool.query(
-    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    'SELECT status, current_period_end, provider FROM subscriptions WHERE user_id = $1',
     [userId]
   );
-  if (hasAccess(subRows[0])) return { access: 'subscription' };
+  if (subRows.some(r => hasAccess(r))) return { access: 'subscription' };
 
   const { rows: fpRows } = await pool.query(
     'SELECT status, job_key FROM free_publications WHERE user_id = $1',
@@ -236,10 +247,10 @@ async function tryReserveFreePublication(userId, jobKey) {
 
   // Paying users don't consume the free slot
   const { rows: subRows } = await pool.query(
-    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    'SELECT status, current_period_end, provider FROM subscriptions WHERE user_id = $1',
     [userId]
   );
-  if (hasAccess(subRows[0])) return false;
+  if (subRows.some(r => hasAccess(r))) return false;
 
   const client = await pool.connect();
   try {
@@ -427,11 +438,12 @@ async function upsertSubscriptionFromStripe(stripeSub) {
 
   await pool.query(
     `INSERT INTO subscriptions
-       (user_id, stripe_subscription_id, stripe_customer_id, status,
+       (user_id, provider, provider_subscription_id, provider_event_at,
+        stripe_subscription_id, stripe_customer_id, status,
         current_period_start, current_period_end, trial_start, trial_end,
         cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
-     ON CONFLICT (user_id) DO UPDATE SET
+     VALUES ($1,'stripe',$2,$14,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET
        stripe_subscription_id = $2,
        stripe_customer_id     = $3,
        status                 = $4,
@@ -443,6 +455,7 @@ async function upsertSubscriptionFromStripe(stripeSub) {
        cancel_at              = $10,
        canceled_at            = $11,
        trial_used             = CASE WHEN $12 THEN true ELSE subscriptions.trial_used END,
+       provider_event_at      = $14,
        updated_at             = $13`,
     [
       userId,
@@ -458,6 +471,7 @@ async function upsertSubscriptionFromStripe(stripeSub) {
       stripeSub.canceled_at ? stripeSub.canceled_at * 1000 : null,
       stripeSub.trial_start != null, // trial_used = true when a trial was ever started
       now,
+      now, // provider_event_at ($14)
     ]
   );
 }
@@ -590,6 +604,159 @@ async function handleWebhookEvent(event) {
   }
 }
 
+// ── RevenueCat helpers ────────────────────────────────────────────────────────
+
+async function fetchRcSubscriber(userId) {
+  const secretKey = REVENUECAT_SECRET_KEY();
+  if (!secretKey) throw new Error('REVENUECAT_SECRET_KEY not configured');
+  const response = await fetch(
+    `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(String(userId))}`,
+    { headers: { 'Authorization': `Bearer ${secretKey}`, 'Content-Type': 'application/json' } }
+  );
+  if (!response.ok) throw new Error(`RC Subscribers API error: ${response.status}`);
+  return response.json();
+}
+
+// Maps a RevenueCat subscriber API response to a normalized subscription row.
+// Returns null if no subscription data exists.
+function mapRcSubscriberResponse(rcResponse, provider) {
+  const subscriptions = rcResponse?.subscriber?.subscriptions ?? {};
+  const subEntries = Object.entries(subscriptions);
+  if (!subEntries.length) return null;
+
+  // Elmer has one product — take the first subscription entry
+  const [, rcSub] = subEntries[0];
+  const now           = Date.now();
+  const expiresMs     = rcSub.expires_date              ? Date.parse(rcSub.expires_date)              : null;
+  const gracePeriodMs = rcSub.grace_period_expires_date ? Date.parse(rcSub.grace_period_expires_date) : null;
+  const isTrial       = rcSub.period_type === 'trial';
+  const isCanceled    = !!rcSub.unsubscribe_detected_at;
+  // store_transaction_id is stable for Apple and Google on initial purchase;
+  // webhooks use original_transaction_id — rc-verify-purchase uses this field.
+  const storeSubId    = rcSub.store_transaction_id ?? null;
+
+  if (rcSub.refunded_at) {
+    return { providerSubscriptionId: storeSubId, status: 'canceled',
+             currentPeriodEnd: expiresMs, cancelAtPeriodEnd: false, cancelAt: null,
+             canceledAt: Date.parse(rcSub.refunded_at),
+             trialStart: null, trialEnd: null, trialUsed: false,
+             isSandbox: rcSub.is_sandbox ?? false };
+  }
+  if (gracePeriodMs && gracePeriodMs > now) {
+    return { providerSubscriptionId: storeSubId, status: 'active',
+             currentPeriodEnd: gracePeriodMs, cancelAtPeriodEnd: true, cancelAt: gracePeriodMs,
+             canceledAt: null, trialStart: null, trialEnd: null, trialUsed: isTrial,
+             isSandbox: rcSub.is_sandbox ?? false };
+  }
+  if (expiresMs && expiresMs > now) {
+    return { providerSubscriptionId: storeSubId,
+             status: isTrial ? 'trialing' : 'active',
+             currentPeriodEnd: expiresMs, cancelAtPeriodEnd: isCanceled,
+             cancelAt: isCanceled ? expiresMs : null,
+             canceledAt: isCanceled ? Date.parse(rcSub.unsubscribe_detected_at) : null,
+             trialStart: isTrial ? Date.parse(rcSub.original_purchase_date ?? rcSub.purchase_date) : null,
+             trialEnd: isTrial ? expiresMs : null, trialUsed: isTrial,
+             isSandbox: rcSub.is_sandbox ?? false };
+  }
+  return { providerSubscriptionId: storeSubId, status: 'canceled',
+           currentPeriodEnd: expiresMs, cancelAtPeriodEnd: false, cancelAt: null,
+           canceledAt: null, trialStart: null, trialEnd: null, trialUsed: isTrial,
+           isSandbox: rcSub.is_sandbox ?? false };
+}
+
+// Upsert a subscription row from RC API data. Accepts a pool or client (both have .query).
+// Out-of-order protection: only updates if the incoming provider_event_at is >= stored value.
+async function upsertSubscriptionFromRC(dbClient, userId, provider, providerSubId, mappedRow) {
+  const now = Date.now();
+  await dbClient.query(
+    `INSERT INTO subscriptions
+       (user_id, provider, provider_subscription_id, provider_event_at,
+        stripe_customer_id, stripe_subscription_id,
+        status, current_period_start, current_period_end,
+        trial_start, trial_end, trial_used,
+        cancel_at_period_end, cancel_at, canceled_at,
+        created_at, updated_at)
+     VALUES ($1,$2,$3,$4, NULL,NULL, $5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET
+       status               = EXCLUDED.status,
+       current_period_start = EXCLUDED.current_period_start,
+       current_period_end   = EXCLUDED.current_period_end,
+       trial_start          = EXCLUDED.trial_start,
+       trial_end            = EXCLUDED.trial_end,
+       trial_used           = CASE WHEN EXCLUDED.trial_used THEN true ELSE subscriptions.trial_used END,
+       cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+       cancel_at            = EXCLUDED.cancel_at,
+       canceled_at          = EXCLUDED.canceled_at,
+       provider_event_at    = EXCLUDED.provider_event_at,
+       updated_at           = EXCLUDED.updated_at
+     WHERE subscriptions.provider_event_at IS NULL
+        OR EXCLUDED.provider_event_at >= subscriptions.provider_event_at`,
+    [userId, provider, providerSubId, now,
+     mappedRow.status, null /* current_period_start */,
+     mappedRow.currentPeriodEnd,
+     mappedRow.trialStart, mappedRow.trialEnd,
+     mappedRow.trialUsed ?? false,
+     mappedRow.cancelAtPeriodEnd ?? false,
+     mappedRow.cancelAt, mappedRow.canceledAt,
+     now]
+  );
+}
+
+// Process a single RevenueCat webhook event.
+// _fetchSubscriber is injectable for unit testing.
+async function handleRcWebhookEvent(event, { _fetchSubscriber } = {}) {
+  const fetchFn   = _fetchSubscriber ?? fetchRcSubscriber;
+  const rawUserId = event.app_user_id;
+  const userId    = parseInt(rawUserId, 10);
+  if (!Number.isInteger(userId) || userId <= 0) return; // anonymous / alias user IDs
+
+  const pool = getPool();
+  const { rows: userRows } = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+  if (!userRows.length) return; // unknown user
+
+  const store    = event.store;
+  const provider = store === 'PLAY_STORE' ? 'google' : store === 'APP_STORE' ? 'apple' : null;
+  if (!provider) return;
+
+  if (event.type === 'SUBSCRIBER_ALIAS') return; // alias events carry no subscription state
+
+  // Fetch current RC subscriber state OUTSIDE the DB transaction (avoid holding connection during HTTP)
+  const rcResponse = await fetchFn(userId); // throws on error → RC retries
+  const mappedRow  = mapRcSubscriberResponse(rcResponse, provider);
+  if (!mappedRow) return;
+
+  if (!isTestMode() && mappedRow.isSandbox) return; // ignore sandbox events in production
+
+  // Webhooks use original_transaction_id (stable across renewals).
+  // rc-verify-purchase uses store_transaction_id (equals original_transaction_id on first purchase).
+  const providerSubId = event.original_transaction_id ?? mappedRow.providerSubscriptionId;
+  if (!providerSubId) return;
+
+  // DB transaction: idempotency dedup INSERT + subscription upsert — ATOMIC.
+  // ROLLBACK removes the idempotency mark if the upsert fails, so RC can retry.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (event.id) {
+      const dedupResult = await client.query(
+        `INSERT INTO stripe_webhook_events (event_id, event_type, processed_at)
+         VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING`,
+        [event.id, event.type, Date.now()]
+      );
+      if (dedupResult.rowCount === 0) { await client.query('COMMIT'); return; } // already processed
+    }
+
+    await upsertSubscriptionFromRC(client, userId, provider, providerSubId, mappedRow);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err; // RC retries on 5xx
+  } finally {
+    client.release();
+  }
+}
+
 // ── Router factory ────────────────────────────────────────────────────────────
 
 function createBillingRouter() {
@@ -601,11 +768,18 @@ function createBillingRouter() {
       const { rows } = await getPool().query(
         `SELECT status, current_period_start, current_period_end,
                 trial_start, trial_end, cancel_at_period_end,
-                cancel_at, canceled_at, trial_used
+                cancel_at, canceled_at, trial_used, provider
          FROM subscriptions WHERE user_id = $1`,
         [req.userId]
       );
-      const sub        = rows[0] ?? null;
+
+      // Pick the best display row: active > trialing > past_due > anything else
+      const statusPriority = { active: 0, trialing: 1, past_due: 2 };
+      const sortedRows = [...rows].sort((a, b) =>
+        (statusPriority[a.status] ?? 99) - (statusPriority[b.status] ?? 99)
+      );
+      const sub        = sortedRows[0] ?? null;
+      const anyTrialUsed = rows.some(r => r.trial_used);
       const entitlement = await getEntitlement(req.userId);
 
       // Load business settings to determine onboarding state and expose businessName.
@@ -640,13 +814,15 @@ function createBillingRouter() {
       }
 
       res.json({
-        hasAccess: hasAccess(sub),
+        hasAccess: rows.some(r => hasAccess(r)),
         entitlement,
         onboardingCompleted,
         businessName,
+        anyTrialUsed,
         testMode: isTestMode(),
         subscription: sub ? {
           status:             sub.status,
+          provider:           sub.provider ?? 'stripe',
           currentPeriodStart: sub.current_period_start,
           currentPeriodEnd:   sub.current_period_end,
           trialStart:         sub.trial_start,
@@ -697,32 +873,23 @@ function createBillingRouter() {
 
       const customerId = await getOrCreateStripeCustomer(req.userId, req.userEmail);
 
-      // Determine trial eligibility — trial is blocked if one was previously used
+      // Determine trial eligibility — trial is blocked if one was previously used on ANY provider,
+      // or if the account already has active access via Apple/Google IAP.
       const { rows: subRows } = await getPool().query(
-        'SELECT trial_used FROM subscriptions WHERE user_id = $1',
+        'SELECT provider, trial_used, status, current_period_end FROM subscriptions WHERE user_id = $1',
         [req.userId]
       );
-      const trialUsed    = subRows[0]?.trial_used ?? false;
-
-      // source='web' → Stripe redirects directly to the billing portal (no server-side relay).
-      // source='mobile' (or absent) → Stripe redirects through /billing/checkout-return
-      //   which issues the deep-link redirect that the mobile app listens for.
-      const source      = req.body.source === 'web' ? 'web' : 'mobile';
-      const appUrl      = APP_URL();
-      const portalUrl   = BILLING_PORTAL_URL();
-      const successUrl  = source === 'web'
-        ? `${portalUrl}/subscription?status=success&session_id={CHECKOUT_SESSION_ID}`
-        : `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`;
-      const cancelUrl   = source === 'web'
-        ? `${portalUrl}/subscription?status=cancel`
-        : `${appUrl}/billing/checkout-return?status=cancel`;
+      const anyTrialUsed = subRows.some(r => r.trial_used);
+      const hasActiveIAP = subRows.some(r => r.provider !== 'stripe' && hasAccess(r));
+      const trialUsed    = anyTrialUsed || hasActiveIAP;
+      const appUrl       = APP_URL();
 
       const session = await getStripe().checkout.sessions.create({
         customer:                   customerId,
         mode:                       'subscription',
         line_items:                 [{ price: priceId, quantity: 1 }],
-        success_url:                successUrl,
-        cancel_url:                 cancelUrl,
+        success_url:                `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url:                 `${appUrl}/billing/checkout-return?status=cancel`,
         payment_method_collection:  'always',
         billing_address_collection: 'required',
         subscription_data: {
@@ -754,13 +921,10 @@ function createBillingRouter() {
         return res.status(404).json({ error: 'no_billing_account' });
       }
 
-      const source    = req.body?.source === 'web' ? 'web' : 'mobile';
-      const returnUrl = source === 'web'
-        ? `${BILLING_PORTAL_URL()}/subscription?status=portal_return`
-        : `${APP_URL()}/billing/checkout-return?status=portal_return`;
+      const appUrl  = APP_URL();
       const session = await getStripe().billingPortal.sessions.create({
         customer:   rows[0].customer_id,
-        return_url: returnUrl,
+        return_url: `${appUrl}/billing/checkout-return?status=portal_return`,
       });
 
       res.json({ portalUrl: session.url });
@@ -770,15 +934,12 @@ function createBillingRouter() {
     }
   });
 
-  // GET /billing/checkout-return — mobile-only relay: Stripe → deep link
-  // Called by Stripe after mobile checkout success/cancel and by portal return.
-  // Web checkouts redirect to the billing portal directly (no server relay needed).
-  // Status is validated against an allowlist to prevent reflected injection.
+  // GET /billing/checkout-return — redirects back to the app's deep link
+  // Called by Stripe after checkout success/cancel, and by portal return
   router.get('/checkout-return', (req, res) => {
-    const rawStatus = req.query.status ?? 'unknown';
-    const status    = VALID_RETURN_STATUSES.has(rawStatus) ? rawStatus : 'unknown';
-    const scheme    = APP_SCHEME();
-    res.redirect(`${scheme}://billing/return?status=${status}`);
+    const status = req.query.status ?? 'unknown';
+    const scheme = APP_SCHEME();
+    sendOAuthRedirect(res, `${scheme}://billing/return?status=${status}`);
   });
 
   // POST /billing/webhook — Stripe webhook event receiver
@@ -823,6 +984,59 @@ function createBillingRouter() {
     }
   });
 
+  // POST /billing/rc-webhook — RevenueCat webhook event receiver
+  router.post('/rc-webhook', async (req, res) => {
+    const webhookSecret = REVENUECAT_WEBHOOK_SECRET();
+    if (webhookSecret) {
+      const authHeader = req.headers['authorization'] ?? '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      if (!token || token !== webhookSecret) return res.status(401).json({ error: 'Unauthorized' });
+    } else if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'RC webhook not configured' });
+    }
+
+    const event = req.body?.event;
+    if (!event) return res.status(400).json({ error: 'Missing event' });
+
+    try {
+      await handleRcWebhookEvent(event);
+      res.json({ received: true });
+    } catch (err) {
+      console.error('[rc] webhook handler error:', err);
+      res.status(500).json({ error: 'RC webhook processing failed' });
+    }
+  });
+
+  // POST /billing/rc-verify-purchase — mobile triggers after a successful IAP to sync RC state
+  router.post('/rc-verify-purchase', requireAuth, async (req, res) => {
+    const secretKey = REVENUECAT_SECRET_KEY();
+    if (!secretKey) return res.status(503).json({ error: 'RC not configured' });
+
+    const { store } = req.body ?? {};
+    if (!store || !['APP_STORE', 'PLAY_STORE'].includes(store))
+      return res.status(400).json({ error: 'Missing or invalid store' });
+
+    const provider = store === 'APP_STORE' ? 'apple' : 'google';
+    try {
+      let rcResponse;
+      try { rcResponse = await fetchRcSubscriber(req.userId); }
+      catch (err) { return res.status(502).json({ error: 'RC API unavailable' }); }
+
+      const mappedRow = mapRcSubscriberResponse(rcResponse, provider);
+      if (!mappedRow) return res.json({ hasAccess: false });
+      if (!isTestMode() && mappedRow.isSandbox) return res.json({ hasAccess: false });
+
+      const providerSubId = mappedRow.providerSubscriptionId;
+      if (!providerSubId) return res.json({ hasAccess: false });
+
+      await upsertSubscriptionFromRC(getPool(), req.userId, provider, providerSubId, mappedRow);
+      res.json({ hasAccess: hasAccess(mappedRow) });
+    } catch (err) {
+      console.error('[rc] verify-purchase error:', err);
+      res.status(500).json({ error: 'Failed to verify purchase' });
+    }
+  });
+
   return router;
 }
 
@@ -838,4 +1052,7 @@ module.exports = {
   releaseFreePublicationIfNoSuccess,
   checkFreeRetryAllowed,
   handleWebhookEvent,
+  handleRcWebhookEvent,
+  mapRcSubscriberResponse,
+  upsertSubscriptionFromRC,
 };

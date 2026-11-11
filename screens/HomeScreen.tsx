@@ -70,37 +70,16 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     isFeatured: boolean;
   } | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
+  const pendingUriRef = useRef<string | null>(null);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
-  // Prevents expo-audio's persisted recorder.uri from falsely showing "Recording saved"
-  // on fresh app open. Set to true only when the user actually starts a recording.
-  const hasRecordedThisSession = useRef(false);
-  // Tracks the last recorder.uri we already copied/processed to avoid duplicate work.
-  const lastProcessedRecorderUri = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
       playerRef.current?.remove();
     };
   }, []);
-
-  useEffect(() => {
-    if (!hasRecordedThisSession.current) return;
-    if (!recorderState.isRecording && recorder.uri && recorder.uri !== lastProcessedRecorderUri.current) {
-      lastProcessedRecorderUri.current = recorder.uri;
-      // Copy to document dir so the URI survives app restarts
-      (async () => {
-        let uri = recorder.uri!;
-        try {
-          const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
-          await FileSystem.copyAsync({ from: uri, to: dest });
-          uri = dest;
-        } catch { /* use original path */ }
-        setAudioUri(uri);
-      })();
-    }
-  }, [recorderState.isRecording, recorder.uri]);
 
   // Persist photos + audio so state survives app restarts
   useEffect(() => {
@@ -253,12 +232,39 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         setIsPlayingBack(false);
       }
 
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-      hasRecordedThisSession.current = true;
-      lastProcessedRecorderUri.current = null; // reset so re-record always captures the new URI
       setAudioUri(null);
+      pendingUriRef.current = null;
+
+      // Delete old pending audio files from document directory
+      try {
+        const docDir = FileSystem.documentDirectory!;
+        const contents = await FileSystem.readDirectoryAsync(docDir);
+        await Promise.all(
+          contents
+            .filter(f => f.startsWith('elmer_pending_audio_') && f.endsWith('.m4a'))
+            .map(f => FileSystem.deleteAsync(docDir + f, { idempotent: true }))
+        );
+      } catch { /* non-fatal */ }
+
+      // Delete stale recorder cache files from ExpoAudio directory
+      try {
+        const expoAudioDir = `${FileSystem.cacheDirectory}ExpoAudio/`;
+        const dirInfo = await FileSystem.getInfoAsync(expoAudioDir);
+        if (dirInfo.exists) {
+          const files = await FileSystem.readDirectoryAsync(expoAudioDir);
+          await Promise.all(
+            files
+              .filter(f => f.startsWith('recording-') && f.endsWith('.m4a'))
+              .map(f => FileSystem.deleteAsync(expoAudioDir + f, { idempotent: true }))
+          );
+        }
+      } catch { /* non-fatal */ }
+
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+      // Capture the URI immediately — before any state can change between prepare and stop
+      pendingUriRef.current = recorder.uri;
+      recorder.record();
     } catch (err) {
       console.error('Failed to start recording', err);
       Alert.alert('Error', 'Could not start recording. Please try again.');
@@ -268,6 +274,17 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
   const stopRecording = async () => {
     try {
       await recorder.stop();
+      // Prefer the URI captured right after prepare — more reliable than reading post-stop
+      const rawUri = pendingUriRef.current ?? recorder.uri;
+      pendingUriRef.current = null;
+      if (!rawUri) return;
+      let uri = rawUri;
+      try {
+        const dest = `${FileSystem.documentDirectory}elmer_pending_audio_${Date.now()}.m4a`;
+        await FileSystem.copyAsync({ from: rawUri, to: dest });
+        uri = dest;
+      } catch { /* use original path */ }
+      setAudioUri(uri);
     } catch (err) {
       console.error('Failed to stop recording', err);
     }
@@ -287,8 +304,14 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         playerRef.current = null;
       }
 
-      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-      const player = createAudioPlayer({ uri: audioUri });
+      // keepAudioSessionActive: true prevents the 100ms deactivation task that fires when
+      // playback completes. Without it, deactivateSession() can race with the next
+      // prepareToRecordAsync() call and silently kill the new recording.
+      //
+      // No setAudioModeAsync({ allowsRecording: false }) needed here — the session is
+      // already in playAndRecord + defaultToSpeaker mode (set during startRecording),
+      // so audio routes to the speaker without switching away from recording mode.
+      const player = createAudioPlayer({ uri: audioUri }, { keepAudioSessionActive: true });
       playerRef.current = player;
 
       player.addListener('playbackStatusUpdate', (status: { didJustFinish?: boolean }) => {
@@ -322,14 +345,20 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     if (isRecording) {
       try {
         await recorder.stop();
-        finalAudioUri = recorder.uri;
+        finalAudioUri = pendingUriRef.current ?? recorder.uri;
+        pendingUriRef.current = null;
       } catch (err) {
         console.error('Failed to stop recording before generate', err);
       }
     }
 
-    if (!finalAudioUri && photos.length === 0) {
-      Alert.alert('Nothing to generate', 'Add at least one photo or record a description.');
+    if (photos.length === 0) {
+      Alert.alert('Missing photos', 'Please add photos to continue.', [{ text: 'OK' }]);
+      return;
+    }
+
+    if (!finalAudioUri) {
+      Alert.alert('Missing recording', 'Please record a voice description to continue.', [{ text: 'OK' }]);
       return;
     }
 
@@ -368,10 +397,11 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.logoRow}>
-          <Text style={styles.logoText}>elmer</Text>
-          <Text style={styles.logoPeriod}>.</Text>
-        </View>
+        <Image
+          source={require('../assets/logo.png')}
+          style={styles.logoImage}
+          resizeMode="contain"
+        />
         <Text style={styles.headline}>Share More. Grow More.</Text>
         <Text style={styles.subheadline}>Take a minute to spread the word</Text>
       </View>
@@ -434,7 +464,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
 
             {photos.length < MAX_PHOTOS && (
               <TouchableOpacity style={styles.addPhotoBtn} onPress={addPhotos} activeOpacity={0.7}>
-                <Ionicons name="add" size={28} color={colors.textMuted} />
+                <Ionicons name="add" size={28} color={colors.cyan} />
                 <Text style={styles.addPhotoBtnLabel}>
                   {photos.length === 0 ? 'Add Photo' : 'Add More'}
                 </Text>
@@ -450,7 +480,7 @@ export default function HomeScreen({ onGenerate, onClear, initialState }: Props)
         {/* Audio */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <View style={styles.sectionIconWrap}>
+            <View style={[styles.sectionIconWrap, styles.sectionIconWrapMic]}>
               <Ionicons name="mic" size={18} color={colors.cyan} />
             </View>
             <View style={styles.sectionLabelGroup}>
@@ -569,33 +599,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 24,
     paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
-  logoRow: { flexDirection: 'row', alignItems: 'baseline' },
-  logoText: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.textPrimary, letterSpacing: -1 },
-  logoPeriod: { fontSize: 42, fontFamily: 'DMSans_700Bold', color: colors.cyan, letterSpacing: -1 },
+  logoImage: { height: 40, width: 152, marginBottom: 2, alignSelf: 'flex-start' },
   headline: { fontSize: 24, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary, marginTop: 10, lineHeight: 30 },
   subheadline: { fontSize: 15, fontFamily: 'Inter_400Regular', color: colors.textSecondary, marginTop: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20 },
   section: {
-    backgroundColor: colors.surface,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 18,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#EEF0F3',
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
   },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   sectionIconWrap: {
     width: 36,
     height: 36,
     borderRadius: 9,
-    backgroundColor: 'rgba(83,219,243,0.12)',
+    backgroundColor: colors.iconBg,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+  },
+  sectionIconWrapMic: {
+    backgroundColor: colors.iconBg,
   },
   sectionLabelGroup: { flex: 1 },
   sectionLabel: { fontSize: 17, fontFamily: 'DMSans_600SemiBold', color: colors.textPrimary },
@@ -646,7 +680,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: colors.border,
+    borderColor: '#D0D5DD',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.bg,
@@ -671,7 +705,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.error,
     borderColor: colors.error,
   },
-  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.error },
+  recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.cyan },
   recordDotActive: { backgroundColor: '#fff' },
   recordBtnText: { color: colors.textSecondary, fontSize: 16, fontFamily: 'Inter_600SemiBold' },
   recordBtnTextActive: { color: '#fff' },
@@ -689,22 +723,27 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 24,
     backgroundColor: colors.bg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
   generateBtn: {
     backgroundColor: colors.cyan,
     borderRadius: 16,
     paddingVertical: 20,
     alignItems: 'center',
+    shadowColor: colors.cyan,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 2,
   },
   generateBtnDisabled: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   generateBtnText: {
-    color: colors.bg,
+    color: '#FFFFFF',
     fontSize: 18,
     fontFamily: 'Inter_600SemiBold',
     letterSpacing: 0.2,
@@ -803,6 +842,6 @@ const styles = StyleSheet.create({
   modalDoneBtnText: {
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    color: colors.bg,
+    color: '#FFFFFF',
   },
 });
