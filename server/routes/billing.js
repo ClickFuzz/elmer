@@ -64,6 +64,34 @@ const RC_NOTIFICATION_BUFFER_MS  = 24 * 60 * 60 * 1000;
 const REVENUECAT_SECRET_KEY      = () => process.env.REVENUECAT_SECRET_KEY    || null;
 const REVENUECAT_WEBHOOK_SECRET  = () => process.env.REVENUECAT_WEBHOOK_SECRET || null;
 
+// RC sandbox policy — independent of Stripe test mode.
+// Sandbox purchases from Apple/Google are blocked in production by default.
+// Three opt-in gates (checked in order):
+//   1. STRIPE_TEST_MODE=true  — blanket allow; backward-compatible, keeps existing behavior
+//   2. RC_ALLOW_SANDBOX=true  — blanket allow for all users (staging server env var)
+//   3. RC_SANDBOX_USER_IDS    — comma-separated allowlist of user IDs for production TestFlight
+//
+// Stripe credentials, DeviceCheck, and all other billing behavior are unaffected by gates 2–3.
+function isSandboxAllowed(userId = null) {
+  if (isTestMode()) return true;
+  if ((process.env.RC_ALLOW_SANDBOX ?? '').toLowerCase() === 'true') return true;
+  if (userId !== null) {
+    const raw = process.env.RC_SANDBOX_USER_IDS ?? '';
+    if (raw.trim()) {
+      const allowed = new Set(
+        raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
+      );
+      if (allowed.has(Number(userId))) return true;
+    }
+  }
+  return false;
+}
+
+// Injectable RC fetch for rc-verify-purchase (test isolation only).
+let _rcVerifyFetchOverride = null;
+function _setRcVerifyFetchForTest(fn)  { _rcVerifyFetchOverride = fn; }
+function _clearRcVerifyFetchForTest()  { _rcVerifyFetchOverride = null; }
+
 // ── Entitlement helpers ───────────────────────────────────────────────────────
 
 function hasAccess(sub) {
@@ -725,7 +753,7 @@ async function handleRcWebhookEvent(event, { _fetchSubscriber } = {}) {
   const mappedRow  = mapRcSubscriberResponse(rcResponse, provider);
   if (!mappedRow) return;
 
-  if (!isTestMode() && mappedRow.isSandbox) return; // ignore sandbox events in production
+  if (!isSandboxAllowed(userId) && mappedRow.isSandbox) return; // blocked unless permitted by policy
 
   // Webhooks use original_transaction_id (stable across renewals).
   // rc-verify-purchase uses store_transaction_id (equals original_transaction_id on first purchase).
@@ -1019,12 +1047,12 @@ function createBillingRouter() {
     const provider = store === 'APP_STORE' ? 'apple' : 'google';
     try {
       let rcResponse;
-      try { rcResponse = await fetchRcSubscriber(req.userId); }
+      try { rcResponse = await (_rcVerifyFetchOverride ?? fetchRcSubscriber)(req.userId); }
       catch (err) { return res.status(502).json({ error: 'RC API unavailable' }); }
 
       const mappedRow = mapRcSubscriberResponse(rcResponse, provider);
       if (!mappedRow) return res.json({ hasAccess: false });
-      if (!isTestMode() && mappedRow.isSandbox) return res.json({ hasAccess: false });
+      if (!isSandboxAllowed(req.userId) && mappedRow.isSandbox) return res.json({ hasAccess: false });
 
       const providerSubId = mappedRow.providerSubscriptionId;
       if (!providerSubId) return res.json({ hasAccess: false });
@@ -1055,4 +1083,7 @@ module.exports = {
   handleRcWebhookEvent,
   mapRcSubscriberResponse,
   upsertSubscriptionFromRC,
+  isSandboxAllowed,
+  _setRcVerifyFetchForTest,
+  _clearRcVerifyFetchForTest,
 };
