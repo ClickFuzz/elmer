@@ -14,7 +14,7 @@ import {
 import { colors } from '../constants/colors';
 import { getSessionToken } from '../storage/database';
 import { Analytics } from '../services/analytics';
-import { purchaseSubscription, restorePurchases, getPurchaseDiagnostics } from '../services/purchases';
+import { purchaseSubscription, restorePurchases } from '../services/purchases';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -350,20 +350,6 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       contentContainerStyle={[styles.content, isManageMode && styles.contentManage]}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Staging-only RC diagnostics */}
-      {process.env.EXPO_PUBLIC_APP_SCHEME === 'elmer-staging' && (() => {
-        const d = getPurchaseDiagnostics();
-        return (
-          <View style={diagStyles.banner}>
-            <Text style={diagStyles.title}>RC Diagnostics (staging) · build 7</Text>
-            <Text style={diagStyles.line}>configured: {String(d.configured)}</Text>
-            <Text style={diagStyles.line}>platform: {d.platform}</Text>
-            <Text style={diagStyles.line}>iOS key: {d.iosKeyPresent ? d.iosKeyPrefix : '⚠ MISSING'}</Text>
-            <Text style={diagStyles.line}>Android key: {String(d.androidKeyPresent)}</Text>
-          </View>
-        );
-      })()}
-
       {/* Back button header (manage mode only) */}
       {isManageMode && (
         <View style={styles.manageHeader}>
@@ -685,23 +671,3 @@ const styles = StyleSheet.create({
   },
 });
 
-const diagStyles = StyleSheet.create({
-  banner: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-    gap: 2,
-  },
-  title: {
-    color: '#00ff88',
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 11,
-    marginBottom: 4,
-  },
-  line: {
-    color: '#cccccc',
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-  },
-});
