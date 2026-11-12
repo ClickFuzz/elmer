@@ -9,6 +9,17 @@ const RC_KEY_ANDROID = process.env.EXPO_PUBLIC_RC_API_KEY_ANDROID ?? '';
 const MONTHLY_PACKAGE_ID = '$rc_monthly';
 const ENTITLEMENT_ID = 'elmer-post-everywhere';
 
+export type PackageInfo = {
+  /** Localized formatted price from the store (e.g., "$19.99"). */
+  priceString: string;
+  /** True when the store product offers a $0 introductory period. */
+  hasFreeTrial: boolean;
+  /** Number of units in the trial period (e.g., 14 for 14 days). */
+  trialPeriodUnits: number;
+  /** Singular unit name, lowercased (e.g., "day", "week", "month"). */
+  trialPeriodUnit: string;
+};
+
 // ── Module-level identity state ────────────────────────────────────────────
 // Tracks the current authenticated Elmer user. Updated on every login/logout.
 // _identityGeneration is incremented on every identity change so that an async
@@ -234,6 +245,50 @@ export async function restorePurchases(): Promise<RestoreResult> {
   } catch (err: unknown) {
     const e = err as { message?: string };
     return { success: false, error: e?.message ?? 'Restore failed. Please try again.' };
+  }
+}
+
+/**
+ * Fetches the active monthly package from RevenueCat and returns its localized
+ * price string and free-trial metadata. Returns null if the RC SDK is not
+ * configured, no package is available, or the fetch fails.
+ */
+export async function getMonthlyPackage(): Promise<PackageInfo | null> {
+  if (!_configured) return null;
+  try {
+    const offerings = await Purchases.getOfferings();
+    const pkgs = offerings.current?.availablePackages ?? [];
+    const pkg = pkgs.find(p => p.identifier === MONTHLY_PACKAGE_ID) ?? pkgs[0];
+    if (!pkg) return null;
+
+    // iOS: introPrice reflects the StoreKit introductory offer; price === 0 means free trial.
+    // Android: RC populates introPrice from defaultOption. If the mapping covers only the paid
+    // introPhase (amountMicros > 0), free trials would be missed. defaultOption.freePhase
+    // (amountMicros = 0, Google Play only) is the authoritative Android free-trial field.
+    // defaultOption is null on iOS so the freePhase path never fires there.
+    const intro = pkg.product.introPrice;
+    const freePhase = pkg.product.defaultOption?.freePhase ?? null;
+
+    const iosFreeTrial = intro != null && intro.price === 0;
+    const androidFreeTrial = freePhase != null;
+    const hasFreeTrial = iosFreeTrial || androidFreeTrial;
+
+    let trialPeriodUnits: number;
+    let trialPeriodUnit: string;
+    if (iosFreeTrial && intro) {
+      trialPeriodUnits = intro.periodNumberOfUnits;
+      trialPeriodUnit  = intro.periodUnit.toLowerCase();
+    } else if (androidFreeTrial && freePhase) {
+      trialPeriodUnits = freePhase.billingPeriod.value;
+      trialPeriodUnit  = freePhase.billingPeriod.unit.toLowerCase();
+    } else {
+      trialPeriodUnits = 0;
+      trialPeriodUnit  = 'day';
+    }
+
+    return { priceString: pkg.product.priceString, hasFreeTrial, trialPeriodUnits, trialPeriodUnit };
+  } catch {
+    return null;
   }
 }
 

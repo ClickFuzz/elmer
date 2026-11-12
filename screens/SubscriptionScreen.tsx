@@ -14,7 +14,7 @@ import {
 import { colors } from '../constants/colors';
 import { getSessionToken } from '../storage/database';
 import { Analytics } from '../services/analytics';
-import { purchaseSubscription, restorePurchases } from '../services/purchases';
+import { purchaseSubscription, restorePurchases, getMonthlyPackage, type PackageInfo } from '../services/purchases';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -62,6 +62,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAttemptsRef = useRef(0);
   const paywallTrackedRef = useRef(false);
+  const [packageInfo, setPackageInfo] = useState<PackageInfo | null | undefined>(undefined);
 
   // ── Fetch subscription status from server ──────────────────────────────────
 
@@ -86,6 +87,10 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       setLoading(false);
     });
   }, [fetchStatus, initialStatus]);
+
+  useEffect(() => {
+    getMonthlyPackage().then(setPackageInfo);
+  }, []);
 
   // In gate mode, hand off immediately once access is confirmed.
   // In manage mode (onBack provided) the user already has access — don't auto-dismiss.
@@ -317,6 +322,36 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
   const trialUsed      = sub?.trialUsed ?? false;
   const freePostUsed   = status?.entitlement?.access === 'free_redeemed';
 
+  const priceString = packageInfo?.priceString ?? null;
+  const packageHasFreeTrial = packageInfo?.hasFreeTrial ?? false;
+  const showFreeTrial = !trialUsed && packageHasFreeTrial;
+  const trialAdj = (packageInfo?.hasFreeTrial && packageInfo.trialPeriodUnits)
+    ? `${packageInfo.trialPeriodUnits}-${packageInfo.trialPeriodUnit}`
+    : '14-day';
+  const trialNoun = (packageInfo?.hasFreeTrial && packageInfo.trialPeriodUnits)
+    ? (packageInfo.trialPeriodUnits === 1
+        ? `1 ${packageInfo.trialPeriodUnit}`
+        : `${packageInfo.trialPeriodUnits} ${packageInfo.trialPeriodUnit}s`)
+    : '14 days';
+
+  const offerHeadline = freePostUsed
+    ? 'Keep posting with Elmer.'
+    : packageInfo === undefined
+      ? 'Loading pricing…'
+      : packageInfo === null
+        ? 'Subscription unavailable.'
+        : showFreeTrial
+          ? `${trialNoun} free, then ${priceString}/month.`
+          : `${priceString}/month.`;
+
+  const offerBody = packageInfo === null
+    ? 'Subscription pricing is currently unavailable. Please check your connection and try again later.'
+    : freePostUsed
+      ? showFreeTrial
+        ? `Your first post was free. Start your ${trialAdj} free trial to keep sharing your updates.`
+        : 'Your first post was free. Subscribe to keep sharing your updates.'
+      : 'Create and publish content across your connected platforms. All features included. Cancel anytime.';
+
   const formatDate = (ms: number | null) => {
     if (!ms) return '';
     const d = new Date(Number(ms));
@@ -336,13 +371,13 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
 
   const isAppleOrGoogle = sub?.provider === 'apple' || sub?.provider === 'google';
 
-  const disclosureText = trialUsed
+  const disclosureText = showFreeTrial
     ? Platform.OS === 'ios'
-      ? 'Payment will be charged to your Apple ID account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage subscriptions in your Account Settings after purchase.'
-      : 'Payment will be charged to your Google Play account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage your subscription in Google Play.'
+      ? `A ${trialAdj} free trial is available to new subscribers. Payment will be charged to your Apple ID account when the trial ends (${priceString ?? ''}/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage subscriptions in your Account Settings.`
+      : `A ${trialAdj} free trial is available to new subscribers. Payment will be charged to your Google Play account when the trial ends (${priceString ?? ''}/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage your subscription in Google Play.`
     : Platform.OS === 'ios'
-      ? 'A 14-day free trial is available to new subscribers. Payment will be charged to your Apple ID account when the trial ends ($19.99/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage subscriptions in your Account Settings.'
-      : 'A 14-day free trial is available to new subscribers. Payment will be charged to your Google Play account when the trial ends ($19.99/month). Subscription automatically renews unless canceled at least 24 hours before the end of the trial period. Manage your subscription in Google Play.';
+      ? 'Payment will be charged to your Apple ID account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage subscriptions in your Account Settings after purchase.'
+      : 'Payment will be charged to your Google Play account at confirmation of purchase. Subscription automatically renews unless canceled at least 24 hours before the end of the current period. Manage your subscription in Google Play.';
 
   return (
     <ScrollView
@@ -371,16 +406,19 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
       {/* Offer card */}
       {!isSubscribed || isCanceled ? (
         <View style={styles.offerCard}>
-          <Text style={styles.offerHeadline}>
-            {freePostUsed ? 'Keep posting with Elmer.' : '14 days free, then $19.99/month.'}
-          </Text>
-          <Text style={styles.offerBody}>
-            {freePostUsed
-              ? 'Your first post was free. Start your 14-day free trial to keep sharing your updates.'
-              : 'Create and publish content across your connected platforms. All features included. Cancel anytime.'}
-          </Text>
+          <Text style={styles.offerHeadline}>{offerHeadline}</Text>
+          <Text style={styles.offerBody}>{offerBody}</Text>
 
-          {checkoutLoading ? (
+          {packageInfo === undefined ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator color={colors.cyan} />
+              <Text style={styles.loadingText}>Loading pricing…</Text>
+            </View>
+          ) : packageInfo === null ? (
+            <TouchableOpacity style={[styles.ctaBtn, styles.ctaBtnDisabled]} disabled activeOpacity={1}>
+              <Text style={styles.ctaBtnText}>Pricing unavailable — try again later</Text>
+            </TouchableOpacity>
+          ) : checkoutLoading ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator color={colors.cyan} />
               <Text style={styles.loadingText}>
@@ -394,7 +432,7 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
               activeOpacity={0.85}
             >
               <Text style={styles.ctaBtnText}>
-                {trialUsed ? 'Subscribe — $19.99/month' : 'Start My Free Trial'}
+                {showFreeTrial ? 'Start My Free Trial' : `Subscribe — ${priceString ?? ''}/month`}
               </Text>
             </TouchableOpacity>
           )}
@@ -429,7 +467,9 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
           <View style={styles.statusRow}>
             <View style={[styles.statusDot, { backgroundColor: isTrialing || isActive ? colors.success : colors.error }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.statusPlan}>Elmer — $19.99/month</Text>
+              <Text style={styles.statusPlan}>
+                {priceString ? `Elmer — ${priceString}/month` : 'Elmer'}
+              </Text>
               {statusLabel() && <Text style={styles.statusSub}>{statusLabel()}</Text>}
             </View>
           </View>
@@ -542,6 +582,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     color: '#FFFFFF',
+  },
+  ctaBtnDisabled: {
+    opacity: 0.5,
   },
   disclosure: {
     fontSize: 12,
