@@ -74,7 +74,10 @@ describe('purchaseSubscription', () => {
 
   test('calls logIn to sync identity when RC App User ID does not match, then purchases', async () => {
     initPurchases('1');
-    mp.getAppUserID.mockResolvedValue('$RCAnonymousID:xyz');
+    // RC reports anonymous before logIn; reports correct userId afterward (RC behavior post-logIn)
+    mp.getAppUserID
+      .mockResolvedValueOnce('$RCAnonymousID:xyz') // _ensureIdentity: mismatch → triggers logIn
+      .mockResolvedValue('1');                      // final check after logIn
     const result = await purchaseSubscription();
     expect(mp.logIn).toHaveBeenCalledWith('1');
     expect(mp.purchasePackage).toHaveBeenCalled();
@@ -149,6 +152,42 @@ describe('purchaseSubscription', () => {
   });
 });
 
+// ── purchaseSubscription — final identity check (getOfferings window) ────────
+
+describe('purchaseSubscription — final identity check', () => {
+  test('aborts purchase when account switches during getOfferings()', async () => {
+    initPurchases('1');
+    mp.getAppUserID.mockResolvedValue('1');
+    mp.getOfferings.mockImplementation(async () => {
+      await logOutPurchases(); // increments generation, clears userId
+      return { current: { availablePackages: [mockPkg] } };
+    });
+    const result = await purchaseSubscription();
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('account changed') });
+    expect(mp.purchasePackage).not.toHaveBeenCalled();
+  });
+
+  test('aborts purchase when RC identity drifts during getOfferings()', async () => {
+    initPurchases('1');
+    mp.getAppUserID
+      .mockResolvedValueOnce('1')                       // _ensureIdentity fast path
+      .mockResolvedValueOnce('$RCAnonymousID:drifted'); // final RC check
+    const result = await purchaseSubscription();
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('account changed') });
+    expect(mp.purchasePackage).not.toHaveBeenCalled();
+  });
+
+  test('aborts restore when RC identity drifts between guard and restore call', async () => {
+    initPurchases('1');
+    mp.getAppUserID
+      .mockResolvedValueOnce('1')                       // _ensureIdentity fast path
+      .mockResolvedValueOnce('$RCAnonymousID:drifted'); // final RC check in restorePurchases
+    const result = await restorePurchases();
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('account changed') });
+    expect(mp.restorePurchases).not.toHaveBeenCalled();
+  });
+});
+
 // ── restorePurchases identity guard ───────────────────────────────────────
 
 describe('restorePurchases', () => {
@@ -161,7 +200,9 @@ describe('restorePurchases', () => {
 
   test('applies identity guard: calls logIn when RC identity mismatches before restore', async () => {
     initPurchases('1');
-    mp.getAppUserID.mockResolvedValue('$RCAnonymousID:stale');
+    mp.getAppUserID
+      .mockResolvedValueOnce('$RCAnonymousID:stale') // _ensureIdentity: mismatch → triggers logIn
+      .mockResolvedValue('1');                        // final check after logIn
     await restorePurchases();
     expect(mp.logIn).toHaveBeenCalledWith('1');
     expect(mp.restorePurchases).toHaveBeenCalled();
@@ -228,7 +269,9 @@ describe('identity state management', () => {
   test('switching to a new user and purchasing uses the new userId for RC identity', async () => {
     initPurchases('1');
     await switchPurchasesUser('2');
-    mp.getAppUserID.mockResolvedValue('$RCAnonymousID:xyz');
+    mp.getAppUserID
+      .mockResolvedValueOnce('$RCAnonymousID:xyz') // _ensureIdentity: mismatch → triggers logIn as '2'
+      .mockResolvedValue('2');                      // final check after logIn
     mp.logIn.mockClear();
     await purchaseSubscription();
     expect(mp.logIn).toHaveBeenCalledWith('2'); // guard uses userId '2', not '1'

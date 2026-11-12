@@ -75,6 +75,28 @@ async function _ensureIdentity(): Promise<{ ok: true } | { ok: false; error: str
   }
 }
 
+// ── Pre-purchase identity confirmation ────────────────────────────────────
+// Called immediately before purchasePackage() / restorePurchases() to close
+// the async window between _ensureIdentity() and the native call (e.g. the
+// getOfferings() await). Checks three things:
+//   1. The generation counter has not moved (logout / account switch).
+//   2. The in-module userId still matches what the guard verified.
+//   3. RC's App User ID still matches — no SDK-side drift.
+// Does NOT attempt logIn — this is a lightweight abort, not a recovery.
+async function _abortIfIdentityChanged(
+  verifiedUserId: string,
+  verifiedGen: number
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (_identityGeneration !== verifiedGen || _currentUserId !== verifiedUserId) {
+    return { ok: false, error: 'Your account changed during purchase setup. Please try again.' };
+  }
+  const currentRcId = await Purchases.getAppUserID();
+  if (currentRcId !== verifiedUserId) {
+    return { ok: false, error: 'Your account changed during purchase setup. Please try again.' };
+  }
+  return { ok: true };
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export function initPurchases(userId: string | null, email?: string): void {
@@ -160,6 +182,10 @@ export async function purchaseSubscription(): Promise<PurchaseResult> {
     return { success: false, error: identity.error };
   }
 
+  // Capture the verified state synchronously before any further awaits.
+  const verifiedGen = _identityGeneration;
+  const verifiedUserId = _currentUserId as string;
+
   try {
     const offerings = await Purchases.getOfferings();
     const pkgs = offerings.current?.availablePackages ?? [];
@@ -167,6 +193,11 @@ export async function purchaseSubscription(): Promise<PurchaseResult> {
     const pkg = pkgs.find(p => p.identifier === MONTHLY_PACKAGE_ID) ?? pkgs[0];
     if (!pkg) {
       return { success: false, error: 'No subscription packages are available. Please try again later.' };
+    }
+    // Final check — guards the getOfferings() async window.
+    const finalCheck = await _abortIfIdentityChanged(verifiedUserId, verifiedGen);
+    if (!finalCheck.ok) {
+      return { success: false, error: finalCheck.error };
     }
     await Purchases.purchasePackage(pkg);
     return { success: true };
@@ -189,7 +220,14 @@ export async function restorePurchases(): Promise<RestoreResult> {
     return { success: false, error: identity.error };
   }
 
+  const verifiedGen = _identityGeneration;
+  const verifiedUserId = _currentUserId as string;
+
   try {
+    const finalCheck = await _abortIfIdentityChanged(verifiedUserId, verifiedGen);
+    if (!finalCheck.ok) {
+      return { success: false, error: finalCheck.error };
+    }
     const customerInfo = await Purchases.restorePurchases();
     const hasEntitlement = !!(customerInfo?.entitlements?.active?.[ENTITLEMENT_ID]);
     return { success: true, hasEntitlement };
