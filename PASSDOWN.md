@@ -35,6 +35,11 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Instagram feature flag: `INSTAGRAM_ENABLED` server + `EXPO_PUBLIC_INSTAGRAM_ENABLED` mobile; hides IG pending Meta approval | COMPLETE — main `7551889` |
 | 14 | RevenueCat iOS/Android in-app subscriptions (StoreKit + Google Play via RC SDK) | COMPLETE — merged main `6c51897` (Nov 11); iOS + Android purchase confirmed working |
 | — | Production build preparation: staging→main merge, production RC keys, Android icon fix, Android buildType, EAS production env | COMPLETE — main `6c51897` (Nov 11) |
+| — | Fix V14 "poisoned migration" (DDL in try/catch silently failed): V18 repair migration uses `information_schema.columns` pre-check; `provider`, `provider_subscription_id`, `provider_event_at` columns confirmed present on production | COMPLETE — main `fee3116` deployed |
+| — | RC sandbox policy decoupling: `isSandboxAllowed(userId)` with three gates (STRIPE_TEST_MODE / RC_ALLOW_SANDBOX / RC_SANDBOX_USER_IDS); replaces `isTestMode()` check in webhook + verify-purchase; 21 new tests in `rc-sandbox.test.js` | COMPLETE — main `fee3116` |
+| — | Fix server/tmp parallel-worker ENOENT in CI: `existsSync+mkdirSync` → `mkdirSync({recursive:true})` | COMPLETE — main `82800ed` |
+| — | Fix Home screen not clearing after publish: `onPublishSuccess` now fires for all outcomes (success, partial, full failure); extended with `anySuccess: boolean`; clears `savedHomeState` unconditionally after any publish attempt; content already in History at generation time so always safe to clear | COMPLETE — main `1c80abf`; production OTA `1b647aca` |
+| — | Fix V18 migration aborting transaction on staging: `ADD CONSTRAINT subscriptions_user_provider_sub_unique` failed (already added by V14 on staging); bare try/catch caught JS error but left PostgreSQL tx aborted (25P02); every subsequent query including schema_migrations INSERT failed; fix: pre-check via `information_schema.table_constraints` before ADD CONSTRAINT; inner try/catch kept as pg-mem fallback | COMPLETE — main `6e4f4be`; staging confirmed healthy |
 | — | Fix OAuth return scheme for TestFlight builds hitting staging backend (V16 migration, `oauth_states.return_scheme`, `resolveReturnScheme` allowlist) | COMPLETE — staging `f1b47ef` |
 | — | Fix Android registration: SecureStore fallback + handleAuth error separation + 409 idempotency | COMPLETE — staging `5e1bd4d` |
 | — | Fix RC init order (initPurchases before switchPurchasesUser); fix $19.99/month price display | COMPLETE — staging OTA `df153e23` |
@@ -46,18 +51,21 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | New logo.png (380×100) and icon.png assets from getelmer.com; logo left-aligned at correct aspect ratio | COMPLETE — staging `0d696d0` |
 | — | Fix audio re-recording silent failure (4th+ attempt): `keepAudioSessionActive:true` prevents 100ms deactivateSession race; remove `setAudioModeAsync(allowsRecording:false)` from playback; capture URI immediately after prepare; clean ExpoAudio cache on each record | COMPLETE — staging OTA `ff1db83c` |
 | — | Fix iOS RevenueCat OTA regression: `EXPO_PUBLIC_RC_API_KEY_IOS` added to EAS Preview environment; `update` script accepts interactive EAS login (no `EXPO_TOKEN` required) | COMPLETE — staging `5f8dfaf`; iOS purchase confirmed Nov 11 |
+| — | RC identity guard: `_ensureIdentity()` before purchase/restore; `_abortIfIdentityChanged()` final check before `purchasePackage()`/`restorePurchases()` to close `getOfferings()` async window; email wired into `initPurchases()`/`switchPurchasesUser()` via `fetchAuthMe()`; 26 unit tests | COMPLETE — main `8a7db41`+`6e7facd`; production OTA `d2aa2c3a` (Nov 12) |
 
 ---
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `6c51897` (Nov 11 — staging→main merge complete)
-- **Staging branch:** `staging` — HEAD `81bf0b9` (up to date with main; in sync after icon fix + eas.json update)
+- **Production branch:** `main` — HEAD `6e7facd` (RC identity guard + final check)
+- **Staging branch:** `staging` — HEAD `9197b7e` (merged from main; V18 fix + home clearing fix; RC guard is JS-only, delivered via OTA)
 - **Last production iOS build:** PENDING — awaiting GitHub Actions `ios-build.yml` dispatch from `main` (manual trigger required at https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml)
+- **Active investigation:** none
 - **Last staging TestFlight build:** EAS `58ebf62f` versionCode 28 (staging-testflight; Nov 10)
 - **Production Android AAB:** EAS `cfecc61f` versionCode 12 — **FINISHED** (profile `production`, channel `production`, built from main `6c51897`; AAB ready for Google Play upload)
 - **Last staging Android build:** EAS `8ca6fecb` versionCode 8 (staging-google-play; Nov 10)
-- **Active staging OTA update:** targets staging channel; iOS purchase confirmed working Nov 11
+- **Active production OTA update:** `d2aa2c3a` (fix: RC identity guard — prevent orphaned subscriptions); deployed Nov 12
+- **Active staging OTA update:** `e46f4266` (same RC identity guard on staging channel)
 - **EAS project:** `778df2e5-7a11-47f0-8351-7e3844f59e42` (`@clickfuzz-team/elmer`)
 - **ASC App ID:** `6824199734`
 - **Production bundle ID:** `com.clickfuzz.elmer` / Android package `com.clickfuzz.elmer`
@@ -176,6 +184,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
 - **WordPress:** connect (Application Passwords), multi-site, publish with markdown→HTML
 - **Google Business Profile:** connect (OAuth), multi-location management + selection, publish local posts with optional LEARN_MORE CTA, token refresh, reconnect alert
 - **Subscription gate:** `SubscriptionScreen` shown until `hasAccess = true`. iOS/Android: native StoreKit / Google Play purchase via RevenueCat SDK (`services/purchases.ts`); no browser for mobile purchases. Web/Stripe: `Linking.openURL` to Stripe Checkout (unchanged). After purchase: `POST /billing/rc-verify-purchase` grants access within seconds; RC webhook confirms asynchronously. Provider-aware management: Apple → Account Settings URL, Google → Play subscriptions URL, Stripe → Customer Portal. Restore Purchases button (Apple requirement). `BILLING_RETURN_PREFIX` is scheme-aware via `EXPO_PUBLIC_APP_SCHEME` (staging: `elmer-staging://`, production: `elmer://`).
+- **RC identity guard** (`services/purchases.ts`): `_ensureIdentity()` verifies RC App User ID matches the authenticated Elmer user before any purchase or restore; calls `Purchases.logIn()` once if drifted (anonymous session, stale prior-user identity); uses `_identityGeneration` counter to detect concurrent account switches during the async `logIn()`. `_abortIfIdentityChanged()` performs a second lightweight check (generation + userId + RC App User ID) immediately before `purchasePackage()` and `restorePurchases()` to close the `getOfferings()` async window. Authenticated user email fetched via `GET /auth/me` on startup and login, passed to `initPurchases()` and `switchPurchasesUser()` for RC `setEmail()` calls. `getAppUserID()` properly awaited (returns `Promise<string>` in RN-purchases v10).
 - **Staging OTA version badge** (`components/OtaBadge.tsx`): persistent top-right badge visible only when `EXPO_PUBLIC_APP_SCHEME === 'elmer-staging'`; shows `OTA <first-7-chars-of-updateId>` for loaded OTA updates, `EMBEDDED` for the original binary bundle; uses `useUpdates()` so it reflects the actually-running update; `pointerEvents="none"`, safe-area-aware, zero cost in production.
 - **Developer update section:** visible in Settings only when server returns `testMode: true` (requires `STRIPE_TEST_MODE=TRUE` in Railway — comparison is case-insensitive). Shows app version, iOS build number, current EAS update ID. Button checks for OTA update, downloads, and prompts restart. Guards against interrupting an active post edit (`returnToPost`). Uses `expo-updates` + `expo-constants`; no new native modules.
 
@@ -198,8 +207,8 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `GET /billing/checkout-return` → redirects to `${APP_SCHEME}://billing/return` (env var; default `elmer`; staging must set `APP_SCHEME=elmer-staging`)
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
-- **PostgreSQL schema v13**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states, publishing_records (+ `content_hash` column), stripe_customers, subscriptions, stripe_webhook_events, deletion_requests (V13)
-- **566 automated tests passing** — `cd server && npm test`
+- **PostgreSQL schema v18**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states (+ `return_scheme` V16, `return_url` V17), publishing_records (+ `content_hash`), stripe_customers, subscriptions (+ `provider`, `provider_subscription_id`, `provider_event_at` V14/V18 repair; dropped legacy `UNIQUE(user_id)` V15), stripe_webhook_events (V8), deletion_requests (V13), password_reset_tokens (V14-billing)
+- **587 automated tests passing** — `cd server && npm test`
 
 ---
 
@@ -261,6 +270,8 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 | `INSTAGRAM_ENABLED` | `false` in production Railway (set); omit or set `true` in staging — blocks connect-url + publish; compliance endpoints always active |
 | `REVENUECAT_SECRET_KEY` | RC server-side secret key — required for `rc-verify-purchase` and `rc-webhook` endpoints; Railway only |
 | `REVENUECAT_WEBHOOK_SECRET` | Bearer token RC sends in `Authorization` header; must match Railway env var; Railway only |
+| `RC_ALLOW_SANDBOX` | Set `true` on staging to allow TestFlight/sandbox RC purchases for all users; never set on production |
+| `RC_SANDBOX_USER_IDS` | Comma-separated user IDs permitted to use sandbox RC purchases on production (e.g. `1`); for temporary TestFlight testing only — remove after verification |
 | `APP_URL` | `https://api.getelmer.com` (production); `https://api-staging.getelmer.com` (staging) |
 | `APP_SCHEME` | `elmer` (production); `elmer-staging` (staging) — used for Stripe + OAuth deep-link returns |
 | `ALLOWED_OAUTH_RETURN_SCHEMES` | Comma-separated allowlist for custom-scheme OAuth returns; staging: `elmer,elmer-staging`; production: `elmer` |
@@ -282,6 +293,8 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 - ✅ Android EAS production build submitted (EAS `cfecc61f`, versionCode 12, IN PROGRESS)
 
 **REMAINING:**
+
+0. **[PENDING] TestFlight sandbox purchase verification** — `RC_SANDBOX_USER_IDS=1,16` is live on Railway production. User (user_id=1, `clgsplace@gmail.com`) should retry TestFlight sandbox purchase now that RC identity guard (`d2aa2c3a`) is live on production OTA. After successful purchase: verify RC subscriber state, confirm `subscriptions` row with `provider='apple'` inserted in production DB, confirm `hasAccess=true`. Then remove `RC_SANDBOX_USER_IDS`: `railway variable delete RC_SANDBOX_USER_IDS --environment production --service elmer`.
 
 1. **[REQUIRED BEFORE iOS REVIEW SUBMISSION] Trigger production iOS build** — GitHub Actions → `https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml` → "Run workflow" → Branch: `main`. Builds locally, signs, submits to TestFlight automatically. Then submit for App Review from App Store Connect.
 
@@ -310,11 +323,11 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 10. **[PRE-RELEASE] Meta App Review** — Currently in progress. Do not modify the pending review submission. After approval, configure callback URLs per Meta Compliance section above.
 
-11. **[PRE-RELEASE] Google Cloud Console** — Add `https://api.getelmer.com/google/callback` to authorized redirect URIs in project `elmer-511511`; add `https://api.getelmer.com` to authorized JavaScript origins.
+11. **[DEFERRED] Google OAuth hang** — New personal Gmail accounts hang after password entry in `ASWebAuthenticationSession`; existing connected account works (has session cookies). Google OAuth app confirmed In production, branding verified, `business.manage` registered as non-sensitive. Root cause unconfirmed — no active investigation.
 
-12. **[PRE-RELEASE] Railway GBP env vars** — Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI=https://api.getelmer.com/google/callback` in Elmer Server service and redeploy.
+12. **[PRE-RELEASE / partially done] Google Cloud Console** — GBP OAuth app is live (In production, branding verified, `business.manage` non-sensitive). Confirm `https://api.getelmer.com/google/callback` is in authorized redirect URIs and GBP APIs (My Business Account Management, Business Information) are enabled in project `elmer-511511`.
 
-13. **[PRE-RELEASE] GBP API library approval** — Enable My Business API, My Business Account Management API, My Business Business Information API in GCP console.
+13. **[PRE-RELEASE / partially done] Railway GBP env vars** — At least one account connects successfully, so `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` are likely set on production. Confirm after OAuth hang is resolved.
 
 ## Instagram Activation (when Meta approves publishing permissions)
 
@@ -343,14 +356,16 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 ```bash
 cd server && npm test
-# 566 tests: db, auth, platforms, facebook, instagram, threads,
+# 587 tests: db, auth, platforms, facebook, instagram, threads,
 #             media-utils, generation, account-isolation, wordpress,
 #             billing, google, free-publication, analytics, device,
-#             security, settings, testmode, meta-callbacks
+#             security, settings, testmode, meta-callbacks, revenuecat,
+#             rc-sandbox, cors, web-billing, password-reset
 ```
 
 Mobile:
 ```bash
+npx jest            # 26 tests: RC identity guard unit tests (__tests__/purchases.test.ts)
 npx tsc --noEmit    # 0 errors
 npx expo lint       # warnings only in pre-existing files; 0 errors in billing/subscription code
 ```
@@ -365,16 +380,16 @@ npx expo lint       # warnings only in pre-existing files; 0 errors in billing/s
 | `AGENTS.md` | Dev rules, Expo guidance, commands |
 | `server/.env.example` | Template for required env vars |
 | `storage/database.ts` | All device SQLite access |
-| `server/db.js` | PostgreSQL pool + migrations (schema v13) |
+| `server/db.js` | PostgreSQL pool + migrations (schema v18) |
 | `server/app.js` | Express app factory — middleware + route mounting order |
 | `server/auth.js` | `requireAuth` / `optionalAuth` |
 | `server/crypto.js` | AES-256-GCM encrypt/decrypt |
-| `server/routes/billing.js` | Stripe billing: checkout, portal, webhook, `requireSubscription` |
+| `server/routes/billing.js` | Stripe billing: checkout, portal, webhook, `requireSubscription`; `isSandboxAllowed()` for RC sandbox policy |
 | `server/routes/google.js` | GBP: OAuth connect-url/callback, locations, publish, token refresh |
 | `server/routes/facebook.js` | Facebook: OAuth, pages, publish, Meta callbacks, backfill |
 | `server/routes/instagram.js` | Instagram: OAuth, publish, Meta callbacks |
 | `server/routes/threads.js` | Threads: OAuth, publish, Meta callbacks |
-| `services/purchases.ts` | RevenueCat SDK wrapper — configure, purchase, restore, logIn/logOut |
+| `services/purchases.ts` | RevenueCat SDK wrapper — configure, purchase, restore, logIn/logOut; identity guard (`_ensureIdentity`, `_abortIfIdentityChanged`) |
 | `screens/SubscriptionScreen.tsx` | Trial offer, native StoreKit purchase flow, manage subscription (provider-aware) |
 | `server/test/meta-callbacks.test.js` | 19 Meta callback integration tests |
 | `eas.json` | EAS build/submit config; `ascAppId: 6824199734`; remote versioning |
