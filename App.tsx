@@ -98,6 +98,19 @@ function AppShell() {
     }
   };
 
+  const fetchAuthMe = async (token: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.email ?? null;
+    } catch {
+      return null;
+    }
+  };
+
   // Fetch business settings from the server and sync them to the local cache.
   // Returns true if a non-empty business name was found (= onboarding completed).
   // Fail-open: network failures leave the local cache intact.
@@ -146,15 +159,16 @@ function AppShell() {
       // Fetch subscription status, sync server settings, and load local state in parallel.
       // syncServerSettings must complete before we derive isOnboarded so a new-device
       // login gets the server's business name before we decide whether to show onboarding.
-      const [status, serverHasName, storedUserId, pendingGen, pendingState] = await Promise.all([
+      const [status, serverHasName, storedUserId, email, pendingGen, pendingState] = await Promise.all([
         fetchSubscriptionStatus(tok),
         syncServerSettings(tok),
         getSessionUserId(),
+        fetchAuthMe(tok),
         getPendingGenerationFlag(),
         getPendingHomeState(),
       ]);
 
-      initPurchases(storedUserId !== null ? String(storedUserId) : null);
+      initPurchases(storedUserId !== null ? String(storedUserId) : null, email ?? undefined);
       if (storedUserId) Analytics.identify(storedUserId);
       setSubscriptionStatus(status);
 
@@ -194,15 +208,16 @@ function AppShell() {
       const tok = await getSessionToken();
       if (tok) {
         setAuthToken(tok);
-        const [status, serverHasName, storedUserId] = await Promise.all([
+        const [status, serverHasName, storedUserId, email] = await Promise.all([
           fetchSubscriptionStatus(tok),
           syncServerSettings(tok),
           getSessionUserId(),
+          fetchAuthMe(tok),
         ]);
         if (storedUserId) {
           Analytics.identify(storedUserId);
-          initPurchases(String(storedUserId));
-          switchPurchasesUser(String(storedUserId)).catch(() => {});
+          initPurchases(String(storedUserId), email ?? undefined);
+          switchPurchasesUser(String(storedUserId), email ?? undefined).catch(() => {});
         } else {
           initPurchases(null);
         }

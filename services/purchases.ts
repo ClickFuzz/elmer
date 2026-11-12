@@ -9,20 +9,102 @@ const RC_KEY_ANDROID = process.env.EXPO_PUBLIC_RC_API_KEY_ANDROID ?? '';
 const MONTHLY_PACKAGE_ID = '$rc_monthly';
 const ENTITLEMENT_ID = 'elmer-post-everywhere';
 
-let _configured = false;
+// ── Module-level identity state ────────────────────────────────────────────
+// Tracks the current authenticated Elmer user. Updated on every login/logout.
+// _identityGeneration is incremented on every identity change so that an async
+// logIn() call can detect if the user switched accounts while it was in flight.
 
-export function initPurchases(userId: string | null): void {
+let _configured = false;
+let _currentUserId: string | null = null;
+let _currentEmail: string | null = null;
+let _identityGeneration = 0;
+
+// ── Identity guard ─────────────────────────────────────────────────────────
+// Called before any purchase or restore. Verifies that the RC SDK is running
+// under the authenticated Elmer user. If the RC App User ID has drifted
+// (anonymous session, stale identity from a previous account), one logIn()
+// attempt is made. If that also fails the purchase is not initiated.
+//
+// Why this matters: rc-verify-purchase queries RC for the authenticated Elmer
+// user ID extracted from the Bearer token. If the purchase was processed under
+// a different RC identity (anonymous or prior user), that query returns no
+// entitlement even though Apple/Google charged the customer successfully.
+async function _ensureIdentity(): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!_configured) {
+    return { ok: false, error: 'In-app purchases are not available. Please restart the app and try again.' };
+  }
+  if (!_currentUserId) {
+    return { ok: false, error: 'Please sign in to your Elmer account before purchasing.' };
+  }
+
+  const gen = _identityGeneration; // Capture before any await — detects mid-flight account switches.
+
+  const currentRcId = await Purchases.getAppUserID();
+  if (currentRcId === _currentUserId) {
+    return { ok: true };
+  }
+
+  // RC identity doesn't match the authenticated Elmer user — attempt to sync.
+  console.warn(`[Purchases] RC identity mismatch (current=${currentRcId}, expected=userId:${_currentUserId}) — attempting logIn`);
+
+  try {
+    await Purchases.logIn(_currentUserId);
+
+    // Abort if the Elmer account changed while logIn() was awaited.
+    if (_identityGeneration !== gen) {
+      return { ok: false, error: 'Your account changed during purchase setup. Please try again.' };
+    }
+
+    if (_currentEmail) {
+      Purchases.setEmail(_currentEmail).catch((err: unknown) => {
+        console.warn('[Purchases] setEmail failed:', err instanceof Error ? err.message : String(err));
+      });
+    }
+
+    console.log(`[Purchases] RC identity synchronized for userId:${_currentUserId}`);
+    return { ok: true };
+  } catch (err: unknown) {
+    // Scrub any email-like strings from the log to avoid accidental PII exposure.
+    const raw = err instanceof Error ? err.message : String(err);
+    const sanitized = raw.replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]');
+    console.warn(`[Purchases] RC logIn failed for userId:${_currentUserId}: ${sanitized}`);
+    return {
+      ok: false,
+      error: 'Could not sync your account with the payment system. Please check your connection and try again.',
+    };
+  }
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+
+export function initPurchases(userId: string | null, email?: string): void {
   const apiKey = Platform.OS === 'ios' ? RC_KEY_IOS : RC_KEY_ANDROID;
   if (!apiKey) {
     // No key — RC not initialized. Expected in Expo Go and CI builds.
     console.log(`[Purchases] No RC API key for platform=${Platform.OS} — skipping (Expo Go / CI build)`);
     return;
   }
+
+  _currentUserId = userId;
+  _currentEmail = email ?? null;
+
   if (_configured) {
     // SDK already running — switch user identity without reinitializing.
-    if (userId) Purchases.logIn(userId).catch(() => {});
+    if (userId) {
+      Purchases.logIn(userId).then(() => {
+        if (email) {
+          Purchases.setEmail(email).catch((err: unknown) => {
+            console.warn('[Purchases] setEmail failed:', err instanceof Error ? err.message : String(err));
+          });
+        }
+      }).catch((err: unknown) => {
+        const raw = err instanceof Error ? err.message : String(err);
+        console.warn(`[Purchases] initPurchases logIn failed for userId:${userId}: ${raw.replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')}`);
+      });
+    }
     return;
   }
+
   if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
   Purchases.configure({ apiKey, appUserID: userId ?? undefined });
   _configured = true;
@@ -30,17 +112,35 @@ export function initPurchases(userId: string | null): void {
 }
 
 // Call after sign-in to associate purchases with the authenticated user.
-export async function switchPurchasesUser(userId: string): Promise<void> {
+// Errors are logged — not thrown — because sign-in must succeed regardless of
+// RC availability. The identity guard in purchaseSubscription/restorePurchases
+// will catch any drift at purchase time and prompt the user to retry.
+export async function switchPurchasesUser(userId: string, email?: string): Promise<void> {
+  _currentUserId = userId;
+  _currentEmail = email ?? null;
+  _identityGeneration++;
+
   if (!_configured) return;
   try {
     await Purchases.logIn(userId);
-  } catch {
-    // Non-fatal — entitlement verification is authoritative on the server via webhook.
+    if (email) {
+      Purchases.setEmail(email).catch((err: unknown) => {
+        console.warn('[Purchases] setEmail failed:', err instanceof Error ? err.message : String(err));
+      });
+    }
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : String(err);
+    console.warn(`[Purchases] switchPurchasesUser logIn failed for userId:${userId}: ${raw.replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')}`);
+    // Non-fatal here: the identity guard will re-attempt logIn at purchase time.
   }
 }
 
 // Call on sign-out to revert RC to anonymous identity.
 export async function logOutPurchases(): Promise<void> {
+  _currentUserId = null;
+  _currentEmail = null;
+  _identityGeneration++;
+
   if (!_configured) return;
   try {
     await Purchases.logOut();
@@ -55,10 +155,11 @@ export type PurchaseResult =
   | { success: false; cancelled?: false; error: string };
 
 export async function purchaseSubscription(): Promise<PurchaseResult> {
-  if (!_configured) {
-    console.warn(`[Purchases] purchaseSubscription called but SDK not configured; iOS key present=${!!RC_KEY_IOS} Android key present=${!!RC_KEY_ANDROID}`);
-    return { success: false, error: 'In-app purchases are not available. Please restart the app and try again.' };
+  const identity = await _ensureIdentity();
+  if (!identity.ok) {
+    return { success: false, error: identity.error };
   }
+
   try {
     const offerings = await Purchases.getOfferings();
     const pkgs = offerings.current?.availablePackages ?? [];
@@ -83,10 +184,11 @@ export type RestoreResult =
   | { success: false; error: string };
 
 export async function restorePurchases(): Promise<RestoreResult> {
-  if (!_configured) {
-    console.warn('[Purchases] restorePurchases called but SDK not configured');
-    return { success: false, error: 'In-app purchases are not available. Please restart the app and try again.' };
+  const identity = await _ensureIdentity();
+  if (!identity.ok) {
+    return { success: false, error: identity.error };
   }
+
   try {
     const customerInfo = await Purchases.restorePurchases();
     const hasEntitlement = !!(customerInfo?.entitlements?.active?.[ENTITLEMENT_ID]);
@@ -95,4 +197,13 @@ export async function restorePurchases(): Promise<RestoreResult> {
     const e = err as { message?: string };
     return { success: false, error: e?.message ?? 'Restore failed. Please try again.' };
   }
+}
+
+// ── Test utilities ─────────────────────────────────────────────────────────
+// Resets all module-level state. Only for use in automated tests.
+export function _resetModule(): void {
+  _configured = false;
+  _currentUserId = null;
+  _currentEmail = null;
+  _identityGeneration = 0;
 }
