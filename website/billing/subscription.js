@@ -62,6 +62,26 @@ async function loadSubscription(returnStatus) {
     if (returnStatus === 'success' && !data.hasAccess) {
       await pollUntilAccess();
     }
+
+    // Auto-sync stale IAP timestamps: status is active/trialing but hasAccess is false,
+    // which means current_period_end is stale (missed/failed RC renewal webhook).
+    // Re-fetch from the RC API to refresh the row, then reload.
+    const sub = data.subscription;
+    if (!data.hasAccess && sub?.provider && sub.provider !== 'stripe' &&
+        (sub.status === 'active' || sub.status === 'trialing')) {
+      const store = sub.provider === 'apple' ? 'APP_STORE' : 'PLAY_STORE';
+      try {
+        const syncRes = await apiFetch('/billing/rc-verify-purchase', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ store }),
+        });
+        if (syncRes.ok) {
+          const syncData = await syncRes.json();
+          if (syncData.hasAccess) await loadSubscription(null);
+        }
+      } catch { /* best-effort — silent on failure */ }
+    }
   } catch (err) {
     if (err.code !== 'auth') {
       showDashboard(null, false);
@@ -115,6 +135,47 @@ function showDashboard(sub, hasAccess, entitlement) {
     // No subscription at all — show trial / subscribe offer
     document.getElementById('trialOfferSection').classList.remove('hidden');
     document.getElementById('manageBillingSection').classList.add('hidden');
+  }
+
+  // Show download card only when the server confirms active access.
+  const showDownload = !!hasAccess;
+  const downloadSection = document.getElementById('downloadSection');
+  if (showDownload) {
+    renderDownloadButtons();
+    downloadSection.classList.remove('hidden');
+  } else {
+    downloadSection.classList.add('hidden');
+  }
+}
+
+// ── Platform detection + download buttons ──────────────────────────────────────
+function detectPlatform() {
+  var ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'desktop';
+}
+
+function renderDownloadButtons() {
+  var container = document.getElementById('downloadBtnContainer');
+  if (!container || container.children.length > 0) return;
+
+  var iosHtml = '<a href="https://apps.apple.com/us/app/elmer-publish-everywhere/id6824199734" class="store-badge" target="_blank" rel="noopener noreferrer">' +
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>' +
+    '<span class="store-badge-text"><span class="store-badge-sub">Download on the</span><span class="store-badge-name">App Store</span></span>' +
+    '</a>';
+  var androidHtml = '<a href="https://play.google.com/store/apps/details?id=com.clickfuzz.elmer" class="store-badge" target="_blank" rel="noopener noreferrer">' +
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.18 23.76c.3.17.65.19.98.08l13.12-7.37-2.84-2.84-11.26 10.13zM.54 1.73C.2 2.07 0 2.6 0 3.28v17.44c0 .68.2 1.21.55 1.55l.08.07 9.77-9.77v-.23L.62 1.65l-.08.08zM20.65 10.65l-2.83-1.59-3.17 3.17 3.17 3.17 2.84-1.6c.81-.46.81-1.21-.01-1.67v-.48zM3.18.24L16.3 7.61l-2.84 2.84L3.18.4a.95.95 0 0 1 0-.16z"/></svg>' +
+    '<span class="store-badge-text"><span class="store-badge-sub">Get it on</span><span class="store-badge-name">Google Play</span></span>' +
+    '</a>';
+
+  var platform = detectPlatform();
+  if (platform === 'ios') {
+    container.innerHTML = iosHtml;
+  } else if (platform === 'android') {
+    container.innerHTML = androidHtml;
+  } else {
+    container.innerHTML = iosHtml + androidHtml;
   }
 }
 

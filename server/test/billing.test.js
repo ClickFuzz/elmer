@@ -261,22 +261,22 @@ describe('POST /billing/portal-session', () => {
 
 describe('GET /billing/checkout-return', () => {
   it('redirects to elmer://billing/return?status=success', async () => {
-    const res = await request(app).get('/billing/checkout-return?status=success');
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.text.includes('elmer://billing/return'));
-    assert.ok(res.text.includes('status=success'));
+    const res = await request(app).get('/billing/checkout-return?status=success').redirects(0);
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.location.includes('elmer://billing/return'));
+    assert.ok(res.headers.location.includes('status=success'));
   });
 
   it('redirects to elmer://billing/return?status=cancel', async () => {
-    const res = await request(app).get('/billing/checkout-return?status=cancel');
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.text.includes('status=cancel'));
+    const res = await request(app).get('/billing/checkout-return?status=cancel').redirects(0);
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.location.includes('status=cancel'));
   });
 
   it('uses status=unknown when no status param is provided', async () => {
-    const res = await request(app).get('/billing/checkout-return');
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.text.includes('status=unknown'));
+    const res = await request(app).get('/billing/checkout-return').redirects(0);
+    assert.strictEqual(res.status, 302);
+    assert.ok(res.headers.location.includes('status=unknown'));
   });
 
   it('uses APP_SCHEME env var for the redirect scheme (staging scenario)', async () => {
@@ -286,13 +286,13 @@ describe('GET /billing/checkout-return', () => {
     const original = process.env.APP_SCHEME;
     process.env.APP_SCHEME = 'elmer-staging';
     try {
-      const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 200);
+      const res = await request(app).get('/billing/checkout-return?status=success').redirects(0);
+      assert.strictEqual(res.status, 302);
       assert.ok(
-        res.text.includes('elmer-staging://billing/return'),
-        `expected elmer-staging:// prefix, got: ${res.text}`
+        res.headers.location.includes('elmer-staging://billing/return'),
+        `expected elmer-staging:// prefix, got: ${res.headers.location}`
       );
-      assert.ok(res.text.includes('status=success'));
+      assert.ok(res.headers.location.includes('status=success'));
     } finally {
       if (original === undefined) delete process.env.APP_SCHEME;
       else process.env.APP_SCHEME = original;
@@ -303,11 +303,11 @@ describe('GET /billing/checkout-return', () => {
     const original = process.env.APP_SCHEME;
     delete process.env.APP_SCHEME;
     try {
-      const res = await request(app).get('/billing/checkout-return?status=success');
-      assert.strictEqual(res.status, 200);
+      const res = await request(app).get('/billing/checkout-return?status=success').redirects(0);
+      assert.strictEqual(res.status, 302);
       assert.ok(
-        res.text.includes('elmer://billing/return'),
-        `expected elmer:// prefix, got: ${res.text}`
+        res.headers.location.includes('elmer://billing/return'),
+        `expected elmer:// prefix, got: ${res.headers.location}`
       );
     } finally {
       if (original !== undefined) process.env.APP_SCHEME = original;

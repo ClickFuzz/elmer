@@ -53,6 +53,7 @@ if (process.env.STRIPE_SECRET_KEY?.startsWith('sk_live_') && isTestMode()) {
 
 const APP_URL              = () => process.env.APP_URL ?? 'https://api.getelmer.com';
 const APP_SCHEME           = () => process.env.APP_SCHEME ?? 'elmer';
+const BILLING_PORTAL_URL   = () => process.env.BILLING_PORTAL_URL ?? 'https://billing.getelmer.com';
 
 // Stripe statuses that grant full access
 const ACCESS_STATUSES = new Set(['trialing', 'active']);
@@ -910,14 +911,25 @@ function createBillingRouter() {
       const anyTrialUsed = subRows.some(r => r.trial_used);
       const hasActiveIAP = subRows.some(r => r.provider !== 'stripe' && hasAccess(r));
       const trialUsed    = anyTrialUsed || hasActiveIAP;
-      const appUrl       = APP_URL();
+
+      // Web checkouts return directly to the billing portal (HTTPS).
+      // Mobile checkouts route through checkout-return → deep link.
+      const isWeb      = req.body.source === 'web';
+      const appUrl     = APP_URL();
+      const portalUrl  = BILLING_PORTAL_URL();
+      const successUrl = isWeb
+        ? `${portalUrl}/subscription?status=success`
+        : `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl  = isWeb
+        ? `${portalUrl}/subscription?status=cancel`
+        : `${appUrl}/billing/checkout-return?status=cancel`;
 
       const session = await getStripe().checkout.sessions.create({
         customer:                   customerId,
         mode:                       'subscription',
         line_items:                 [{ price: priceId, quantity: 1 }],
-        success_url:                `${appUrl}/billing/checkout-return?status=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url:                 `${appUrl}/billing/checkout-return?status=cancel`,
+        success_url:                successUrl,
+        cancel_url:                 cancelUrl,
         payment_method_collection:  'always',
         billing_address_collection: 'required',
         subscription_data: {
@@ -949,10 +961,15 @@ function createBillingRouter() {
         return res.status(404).json({ error: 'no_billing_account' });
       }
 
-      const appUrl  = APP_URL();
+      const isWeb     = req.body.source === 'web';
+      const appUrl    = APP_URL();
+      const portalUrl = BILLING_PORTAL_URL();
+      const returnUrl = isWeb
+        ? `${portalUrl}/subscription?status=portal_return`
+        : `${appUrl}/billing/checkout-return?status=portal_return`;
       const session = await getStripe().billingPortal.sessions.create({
         customer:   rows[0].customer_id,
-        return_url: `${appUrl}/billing/checkout-return?status=portal_return`,
+        return_url: returnUrl,
       });
 
       res.json({ portalUrl: session.url });
@@ -962,12 +979,16 @@ function createBillingRouter() {
     }
   });
 
-  // GET /billing/checkout-return — redirects back to the app's deep link
-  // Called by Stripe after checkout success/cancel, and by portal return
+  // GET /billing/checkout-return — 302 relay to the mobile app's deep link
+  // Called by Stripe after checkout success/cancel and by the Customer Portal return (mobile only).
+  // Web checkouts point directly to the billing portal and never hit this endpoint.
+  // Status is validated against an allowlist to prevent open-redirect injection.
   router.get('/checkout-return', (req, res) => {
-    const status = req.query.status ?? 'unknown';
+    const VALID_STATUSES = new Set(['success', 'cancel', 'portal_return', 'unknown']);
+    const rawStatus = req.query.status ?? 'unknown';
+    const status = VALID_STATUSES.has(rawStatus) ? rawStatus : 'unknown';
     const scheme = APP_SCHEME();
-    sendOAuthRedirect(res, `${scheme}://billing/return?status=${status}`);
+    res.redirect(302, `${scheme}://billing/return?status=${status}`);
   });
 
   // POST /billing/webhook — Stripe webhook event receiver
