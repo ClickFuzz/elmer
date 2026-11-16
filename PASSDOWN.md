@@ -52,17 +52,22 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 | — | Fix audio re-recording silent failure (4th+ attempt): `keepAudioSessionActive:true` prevents 100ms deactivateSession race; remove `setAudioModeAsync(allowsRecording:false)` from playback; capture URI immediately after prepare; clean ExpoAudio cache on each record | COMPLETE — staging OTA `ff1db83c` |
 | — | Fix iOS RevenueCat OTA regression: `EXPO_PUBLIC_RC_API_KEY_IOS` added to EAS Preview environment; `update` script accepts interactive EAS login (no `EXPO_TOKEN` required) | COMPLETE — staging `5f8dfaf`; iOS purchase confirmed Nov 11 |
 | — | RC identity guard: `_ensureIdentity()` before purchase/restore; `_abortIfIdentityChanged()` final check before `purchasePackage()`/`restorePurchases()` to close `getOfferings()` async window; email wired into `initPurchases()`/`switchPurchasesUser()` via `fetchAuthMe()`; 26 unit tests | COMPLETE — main `8a7db41`+`6e7facd`; production OTA `d2aa2c3a` (Nov 12) |
+| — | Localized RC pricing: `SubscriptionScreen` displays live price string from RevenueCat SDK (`getMonthlyPackage()` in `services/purchases.ts`); Android free-trial via `defaultOption.freePhase`; 12 new tests; react-native-purchases upgraded back to `11.0.1` | COMPLETE — main `91af2a3` (Nov 14) |
+| — | iOS Build 30 (buildNumber 30, `github` EAS profile) submitted to TestFlight; Android AAB versionCode 13 (`production` profile) built — EAS `de690e27` | COMPLETE — builds finished Nov 14; AAB not yet uploaded to Play Console |
+| — | billing.getelmer.com: retheme from dark navy/cyan to light off-white/red matching getelmer.com; app download links (App Store + Google Play) shown only when subscribed; stale RC `current_period_end` auto-sync via `POST /billing/rc-verify-purchase` on page load; CSP inline-style violations fixed; app info card (always visible with icon + tagline) with side-by-side download buttons | COMPLETE — deployed to DirectAdmin Nov 14; local files uncommitted |
+| — | Fix Stripe web checkout "Invalid address" error; add active-subscriber download card to billing.getelmer.com | COMPLETE — main `8d56fbc` (Nov 16) |
 
 ---
 
 ## Current Build State
 
-- **Production branch:** `main` — HEAD `6e7facd` (RC identity guard + final check)
+- **Production branch:** `main` — HEAD `8d56fbc` (fix Stripe web checkout + download card; Nov 16)
 - **Staging branch:** `staging` — HEAD `9197b7e` (merged from main; V18 fix + home clearing fix; RC guard is JS-only, delivered via OTA)
-- **Last production iOS build:** PENDING — awaiting GitHub Actions `ios-build.yml` dispatch from `main` (manual trigger required at https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml)
+- **Last production iOS build:** EAS Build 30 (buildNumber 30, `github` profile) — submitted to TestFlight Nov 14; awaiting App Review submission
 - **Active investigation:** none
 - **Last staging TestFlight build:** EAS `58ebf62f` versionCode 28 (staging-testflight; Nov 10)
-- **Production Android AAB:** EAS `cfecc61f` versionCode 12 — **FINISHED** (profile `production`, channel `production`, built from main `6c51897`; AAB ready for Google Play upload)
+- **Production Android AAB:** EAS `de690e27` versionCode 13 — **FINISHED** (profile `production`, built from main `91af2a3`; needs upload to Google Play Console)
+- **Previous Android AAB:** EAS `cfecc61f` versionCode 12 — superseded
 - **Last staging Android build:** EAS `8ca6fecb` versionCode 8 (staging-google-play; Nov 10)
 - **Active production OTA update:** `d2aa2c3a` (fix: RC identity guard — prevent orphaned subscriptions); deployed Nov 12
 - **Active staging OTA update:** `e46f4266` (same RC identity guard on staging channel)
@@ -74,7 +79,7 @@ Elmer is a mobile publishing tool for contractors and businesses. After finishin
 - **Staging API:** `https://api-staging.getelmer.com` (Railway live; `APP_SCHEME`, `APP_URL`, `SERVER_URL`, `STRIPE_TEST_MODE=true`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_WEBHOOK_SECRET`, `ALLOWED_OAUTH_RETURN_SCHEMES=elmer,elmer-staging` confirmed set)
 - **EAS channels:** `production` (live), `staging` (live — OTA updates active)
 - **EAS production environment** (expo.dev): `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_POSTHOG_API_KEY`, `EXPO_PUBLIC_POSTHOG_HOST`, `EXPO_PUBLIC_RC_API_KEY_IOS`, `EXPO_PUBLIC_RC_API_KEY_ANDROID` — all set Nov 11
-- **react-native-purchases**: pinned at `10.16.0` (downgraded from `11.0.1` — `PurchasesHybridCommon 20.4.0` unpublished Nov 2–6 2026 CocoaPods disruption); upgrade back to `11.x` after disruption clears
+- **react-native-purchases**: `11.0.1` (CocoaPods disruption cleared Nov 14; upgraded back from `10.16.0`)
 
 ### Reviewer Account
 
@@ -204,7 +209,7 @@ Builds run on the GitHub Actions macOS runner, not EAS cloud. EAS provides crede
   - `GET /billing/subscription` — status + `hasAccess`
   - `POST /billing/checkout-session` — Stripe Checkout; 409 if already subscribed
   - `POST /billing/portal-session` — Stripe Customer Portal
-  - `GET /billing/checkout-return` → redirects to `${APP_SCHEME}://billing/return` (env var; default `elmer`; staging must set `APP_SCHEME=elmer-staging`)
+  - `GET /billing/checkout-return` → plain 302 to `${APP_SCHEME}://billing/return` (mobile only; web checkouts bypass this via direct BILLING_PORTAL_URL); status sanitized against allowlist
   - `POST /billing/webhook` — `checkout.session.completed` (US-only gate), `customer.subscription.created/updated/deleted`, `invoice.paid/payment_failed`
   - `requireSubscription` middleware on `/api/generate` + all publish endpoints
 - **PostgreSQL schema v18**: users, sessions, business_settings, connected_platforms (+ `platform_user_id` column, V12), oauth_states (+ `return_scheme` V16, `return_url` V17), publishing_records (+ `content_hash`), stripe_customers, subscriptions (+ `provider`, `provider_subscription_id`, `provider_event_at` V14/V18 repair; dropped legacy `UNIQUE(user_id)` V15), stripe_webhook_events (V8), deletion_requests (V13), password_reset_tokens (V14-billing)
@@ -284,21 +289,27 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
 
 > Items 1–5 from the Nov 11 2026 production build prep session are **COMPLETE**. The remaining items are console/manual steps.
 
-**COMPLETE (Nov 11):**
+**COMPLETE (Nov 11–14):**
 - ✅ iOS + Android purchase tests confirmed working
 - ✅ staging → main merged (`6c51897`)
 - ✅ Production RC keys set in EAS production env + `eas.json` production profile
 - ✅ Android `buildType: app-bundle` added to production profile
 - ✅ Android icon Gradle fix committed (replaced missing adaptive icon assets)
-- ✅ Android EAS production build submitted (EAS `cfecc61f`, versionCode 12, IN PROGRESS)
+- ✅ Localized RC pricing + Android free-trial detection (`91af2a3`)
+- ✅ iOS Build 30 submitted to TestFlight (Nov 14)
+- ✅ Android AAB versionCode 13 built — EAS `de690e27` (Nov 14)
+- ✅ react-native-purchases upgraded to `11.0.1` (CocoaPods disruption cleared)
+- ✅ billing.getelmer.com retheme, download links, stale RC sync, CSP fixes, redesign (deployed Nov 14)
 
 **REMAINING:**
 
-0. **[PENDING] TestFlight sandbox purchase verification** — `RC_SANDBOX_USER_IDS=1,16` is live on Railway production. User (user_id=1, `clgsplace@gmail.com`) should retry TestFlight sandbox purchase now that RC identity guard (`d2aa2c3a`) is live on production OTA. After successful purchase: verify RC subscriber state, confirm `subscriptions` row with `provider='apple'` inserted in production DB, confirm `hasAccess=true`. Then remove `RC_SANDBOX_USER_IDS`: `railway variable delete RC_SANDBOX_USER_IDS --environment production --service elmer`.
+0. **[PENDING] Commit remaining website changes** — `website/index.html`, `website/style.css`, `website/privacy-policy/index.html`, `website/terms-and-conditions/index.html` are deployed to production via DirectAdmin but not committed. Also untracked: `website/.htaccess`, `website/_cf/`, `website/data-deletion/`, `website/privacy-policy/.htaccess`, `website/terms-and-conditions/.htaccess`. The billing sub-files (`website/billing/style.css`, `subscription.html`, `subscription.js`) were committed in `8d56fbc`.
 
-1. **[REQUIRED BEFORE iOS REVIEW SUBMISSION] Trigger production iOS build** — GitHub Actions → `https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml` → "Run workflow" → Branch: `main`. Builds locally, signs, submits to TestFlight automatically. Then submit for App Review from App Store Connect.
+1. **[PENDING] TestFlight sandbox purchase verification** — `RC_SANDBOX_USER_IDS=1,16` is live on Railway production. User (user_id=1, `clgsplace@gmail.com`) should verify Build 30 purchase works. After successful purchase: confirm `subscriptions` row with `provider='apple'` in production DB, confirm `hasAccess=true`. Then remove: `railway variable delete RC_SANDBOX_USER_IDS --environment production --service elmer`.
 
-2. **[REQUIRED BEFORE BOTH] Reviewer password SQL** — Run in Railway PostgreSQL console:
+2. **[READY] Submit Build 30 for iOS App Review** — Build 30 (buildNumber 30) is in TestFlight. Submit from App Store Connect when sandbox verification passes.
+
+3. **[REQUIRED BEFORE BOTH] Reviewer password SQL** — Run in Railway PostgreSQL console:
    ```sql
    UPDATE users
    SET password_hash = '$2a$12$Lky.ITuzamf9E6vfPxHfu.4Dpbs0cMNjvoyg0FLFMAbD/9H0MwAme',
@@ -307,15 +318,13 @@ All three Meta platforms implement signed-request validation (HMAC-SHA256) and a
    ```
    Reviewer credentials: `review@clickfuzz.com` / `ElmerReview2026!`
 
-3. **[REQUIRED] Android AAB upload** — Once EAS `cfecc61f` completes, download AAB from expo.dev and upload to Google Play Console → Internal testing track.
+4. **[REQUIRED] Android AAB upload** — EAS `de690e27` versionCode 13 is built. Download AAB from expo.dev and upload to Google Play Console → Internal testing track.
 
-4. **[REQUIRED] App Store Connect listing** — Complete: app description, screenshots, support URL (`https://getelmer.com`), privacy policy URL (`https://getelmer.com/privacy`), age rating, US-only territory restriction, subscription product linked to build.
+5. **[REQUIRED] App Store Connect listing** — Complete: app description, screenshots, support URL (`https://getelmer.com`), privacy policy URL (`https://getelmer.com/privacy`), age rating, US-only territory restriction, subscription product linked to build.
 
-5. **[REQUIRED] Google Play listing** — Complete: description, screenshots, content rating questionnaire, data safety form.
+6. **[REQUIRED] Google Play listing** — Complete: description, screenshots, content rating questionnaire, data safety form.
 
-6. **[PRE-RELEASE] Upgrade react-native-purchases to 11.x** — CocoaPods disruption cleared; run `npx expo install react-native-purchases@latest`, typecheck, staging build to confirm, then new production builds.
-
-7. **[PRE-RELEASE] Stripe production keys** — Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway production. **Do not set `STRIPE_TEST_MODE=true` when live key is present** — billing.js startup guard will crash the server.
+7. **[PRE-RELEASE] Stripe production keys** — Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` in Railway production. Do not set `STRIPE_TEST_MODE=true` when live key is present — billing.js startup guard will crash the server.
 
 8. **[PRE-RELEASE] Stripe webhook** — Register `https://api.getelmer.com/billing/webhook` in Stripe Dashboard.
 
