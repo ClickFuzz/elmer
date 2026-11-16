@@ -1,0 +1,90 @@
+<!-- ════════════════ FOOTER ════════════════ -->
+<footer>
+  <div class="container">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <a href="/" aria-label="elmer. Home">
+          <span class="footer-wordmark">elmer<span class="wordmark-period">.</span></span>
+        </a>
+        <p>The simplest way for local businesses to share completed work across all their social platforms — in about a minute.</p>
+      </div>
+      <div class="footer-nav-col">
+        <h4>Product</h4>
+        <nav aria-label="Footer navigation">
+          <ul>
+            <li><a href="/#how-it-works">How It Works</a></li>
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#platforms">Platforms</a></li>
+            <li><a href="/pricing">Pricing</a></li>
+          </ul>
+        </nav>
+      </div>
+      <div class="footer-nav-col">
+        <h4>Account</h4>
+        <div class="footer-contact">
+          <a href="https://billing.getelmer.com/login?tab=signup">Start Free Trial</a>
+          <a href="https://billing.getelmer.com">Log In</a>
+          <a href="mailto:help@getelmer.com">help@getelmer.com</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p class="footer-copy">&copy; <span id="footer-year"></span> Elmer. All rights reserved.</p>
+      <p class="footer-legal">
+        <a href="/privacy-policy/">Privacy Policy</a>
+        <a href="/terms-and-conditions/">Terms &amp; Conditions</a>
+        <a href="/data-deletion/">Data Deletion</a>
+      </p>
+    </div>
+  </div>
+</footer>
+
+<!-- ════════════════ MOBILE STICKY CTA ════════════════ -->
+<div class="mobile-cta-bar" id="mobileCta" aria-hidden="true">
+  <a href="https://billing.getelmer.com/login?tab=signup" class="btn-primary mobile-cta-btn">
+    Start Free Trial
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+  </a>
+</div>
+
+<!-- ════════════════ SHARED JS ════════════════ -->
+<script>
+  // Footer year
+  document.getElementById('footer-year').textContent = new Date().getFullYear();
+
+  // Hamburger / mobile drawer
+  var hamburger = document.getElementById('hamburgerBtn');
+  var mobileDrawer = document.getElementById('mobileDrawer');
+  hamburger.addEventListener('click', function () {
+    var open = mobileDrawer.classList.toggle('open');
+    hamburger.classList.toggle('open', open);
+    hamburger.setAttribute('aria-expanded', open.toString());
+    mobileDrawer.setAttribute('aria-hidden', (!open).toString());
+  });
+  mobileDrawer.querySelectorAll('a').forEach(function (link) {
+    link.addEventListener('click', function () {
+      mobileDrawer.classList.remove('open');
+      hamburger.classList.remove('open');
+      hamburger.setAttribute('aria-expanded', 'false');
+      mobileDrawer.setAttribute('aria-hidden', 'true');
+    });
+  });
+
+  // Scroll-reveal
+  var fadeEls = document.querySelectorAll('.fade-up');
+  var revealObserver = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        revealObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+  fadeEls.forEach(function (el) { revealObserver.observe(el); });
+
+  // Sticky header shadow on scroll
+  var siteHeader = document.getElementById('site-header');
+  window.addEventListener('scroll', function () {
+    siteHeader.classList.toggle('scrolled', window.scrollY > 10);
+  }, { passive: true });
+</script>

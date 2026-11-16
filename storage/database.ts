@@ -740,6 +740,37 @@ export async function runAutoCleanup(): Promise<void> {
     await FileSystem.deleteAsync(jobDir, { idempotent: true }).catch(() => {});
     await db.runAsync(`DELETE FROM jobs WHERE id = ?`, [job.id]);
   }
+
+  // Delete orphaned elmer_recording_*.m4a files left behind after generate.
+  // Protected URIs: (1) the audio in the pending home state (user may still need it),
+  // (2) any job whose audio_local_uri still points to the temp path (copy failed on save).
+  try {
+    const protectedUris = new Set<string>();
+
+    const savedState = await getSetting('pending_home_state');
+    if (savedState) {
+      try {
+        const hs = JSON.parse(savedState) as { audioUri?: string | null };
+        if (hs.audioUri) protectedUris.add(hs.audioUri);
+      } catch { /* ignore */ }
+    }
+
+    const docDir = FileSystem.documentDirectory ?? '';
+    const refRows = await db.getAllAsync<{ audio_local_uri: string }>(
+      `SELECT audio_local_uri FROM jobs WHERE audio_local_uri LIKE '%elmer_recording_%' AND audio_local_uri IS NOT NULL`
+    );
+    for (const row of refRows) protectedUris.add(row.audio_local_uri);
+
+    const entries = await FileSystem.readDirectoryAsync(docDir);
+    for (const entry of entries) {
+      if (entry.startsWith('elmer_recording_') && entry.endsWith('.m4a')) {
+        const uri = docDir + entry;
+        if (!protectedUris.has(uri)) {
+          await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      }
+    }
+  } catch { /* non-critical — never block startup on a cleanup failure */ }
 }
 
 export async function deleteAllJobsForCurrentUser(): Promise<{ deletedJobs: number }> {

@@ -1,0 +1,2 @@
+Options +IncludesNOEXEC
+AddOutputFilter INCLUDES .html

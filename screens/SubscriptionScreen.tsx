@@ -440,11 +440,11 @@ export default function SubscriptionScreen({ onSubscribed, onSignOut, initialSta
           <Text style={styles.disclosure}>{disclosureText}</Text>
 
           <View style={styles.legalRow}>
-            <TouchableOpacity onPress={() => Linking.openURL('https://getelmer.com/terms')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => Linking.openURL('https://getelmer.com/terms-and-conditions/')} activeOpacity={0.7}>
               <Text style={styles.legalLink}>Terms of Service</Text>
             </TouchableOpacity>
             <Text style={styles.legalDot}>·</Text>
-            <TouchableOpacity onPress={() => Linking.openURL('https://getelmer.com/privacy')} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => Linking.openURL('https://getelmer.com/privacy-policy/')} activeOpacity={0.7}>
               <Text style={styles.legalLink}>Privacy Policy</Text>
             </TouchableOpacity>
           </View>

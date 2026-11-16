@@ -5,58 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Privacy Policy — elmer.</title>
   <link rel="canonical" href="https://getelmer.com/privacy-policy/">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css">
+  <!--#include virtual="/_cf/head.html"-->
 </head>
 <body>
 
-<!-- ════════════════ HEADER ════════════════ -->
-<header>
-  <div class="container">
-    <div class="header-inner">
-
-      <div class="logo-wrap">
-        <a href="/" aria-label="elmer. Home">
-          <span class="wordmark">elmer<span class="wordmark-period">.</span></span>
-        </a>
-      </div>
-
-      <nav aria-label="Primary navigation">
-        <ul>
-          <li><a href="/#how-it-works">How It Works</a></li>
-          <li><a href="/#platforms">Platforms</a></li>
-          <li><a href="/#features">Why Elmer</a></li>
-          <li><a href="/#contact">Early Access</a></li>
-        </ul>
-      </nav>
-
-      <div class="header-actions">
-        <a href="/#contact" class="btn-primary header-cta">Get Early Access</a>
-        <button class="hamburger" id="hamburgerBtn" aria-label="Toggle menu" aria-expanded="false">
-          <span></span><span></span><span></span>
-        </button>
-      </div>
-
-    </div>
-  </div>
-
-  <div class="mobile-drawer" id="mobileDrawer" aria-hidden="true">
-    <a href="/#contact" class="btn-primary mobile-drawer-cta">Get Early Access</a>
-    <nav aria-label="Mobile navigation">
-      <ul>
-        <li><a href="/#how-it-works">How It Works</a></li>
-        <li><a href="/#platforms">Platforms</a></li>
-        <li><a href="/#features">Why Elmer</a></li>
-        <li><a href="/#contact">Early Access</a></li>
-      </ul>
-    </nav>
-    <div class="mobile-contact-row">
-      <a href="mailto:help@getelmer.com">help@getelmer.com</a>
-    </div>
-  </div>
-</header>
+<!--#include virtual="/_cf/header.html"-->
 
 <!-- ════════════════ MAIN ════════════════ -->
 <main>
@@ -64,94 +17,133 @@
     <article class="cf-legal-content">
       <h1>Privacy Policy</h1>
 
-      <p><strong>Last Updated:</strong> September 14, 2026</p>
+      <p><strong>Last Updated:</strong> November 16, 2026</p>
 
-      <p>Elmer ("we," "us," or "our") respects your privacy and is committed to protecting the personal information you provide to us. This Privacy Policy explains how we collect, use, disclose, and protect information when you visit https://getelmer.com, contact us, submit a form, communicate with us, or otherwise use our website and services.</p>
+      <p>Elmer ("we," "us," or "our") is operated by ClickFuzz LLC. This Privacy Policy explains how we collect, use, disclose, and protect personal information when you use the Elmer mobile application (iOS and Android), the Elmer website at https://getelmer.com, and the Elmer billing portal at https://billing.getelmer.com (collectively, the "Services").</p>
+
+      <p>By using the Services you agree to the practices described in this policy. If you do not agree, please do not use the Services.</p>
 
       <h2>Information We Collect</h2>
 
-      <p>We may collect information that you voluntarily provide to us, including your name, email address, telephone number, address, information submitted through contact or quote-request forms, appointment or service information, and any other information you choose to provide.</p>
+      <h3>Account and Profile Information</h3>
+      <p>When you create an Elmer account we collect your email address and a securely hashed version of your password. We also store business profile information you provide, including your business name, website, services, service areas, and writing style preferences.</p>
 
-      <p>We may also automatically collect certain information when you use our website, including your IP address, browser type, device information, operating system, referring URLs, pages viewed, interactions with the website, approximate location derived from your IP address, and other usage information.</p>
+      <h3>Voice Recordings</h3>
+      <p>The Elmer app allows you to record a voice description of a job. When you request content generation, that recording is transmitted to our server and sent to OpenAI's Whisper API for transcription. <strong>We do not retain your audio recording after transcription is complete.</strong> The audio file is deleted from our server immediately after the transcription request is processed. The resulting text transcript and any AI-generated content are stored locally on your device and may be retained by us in your publishing history as described below. We do not use voice recordings for voice identification, biometric authentication, or advertising targeting.</p>
+
+      <h3>Photos</h3>
+      <p>When you publish content through Elmer, photos you select are transmitted to our server for processing (such as aspect-ratio correction) and then forwarded directly to the destination platform (Facebook, Instagram, Threads, Google Business Profile, or WordPress). <strong>We do not retain your photos on our servers after the publishing request is complete.</strong> Photos remain stored on your device in the Elmer app until you delete your publishing history or delete the app. We do not send photo contents to our AI text generation service.</p>
+
+      <h3>Location Information</h3>
+      <p>When you take photos through the Elmer app, we may extract GPS coordinates embedded in the photo metadata (EXIF data) if location access was enabled when the photo was taken. These coordinates are transmitted to our server as part of the content generation request. If your voice description does not contain a location, we use the GPS coordinates to perform a reverse geocoding lookup via the Nominatim service (powered by OpenStreetMap) to identify an approximate job location. The coordinates are used only within that content generation request and are not stored separately on our servers beyond what is retained as part of your publishing history.</p>
+
+      <h3>AI-Generated Content</h3>
+      <p>Your voice transcript, business profile, and photo metadata are sent to OpenAI's API (GPT-4o mini) to generate social posts, Google Business posts, and blog articles. The generated content is stored locally on your device and in your server-side publishing history.</p>
+
+      <h3>Connected Social and Publishing Accounts</h3>
+      <p>When you connect a social platform (Facebook, Instagram, Threads, Google Business Profile, or WordPress), we receive and store an OAuth access token or application password issued by that platform. These credentials are encrypted at rest using AES-256-GCM and stored on our server. They are used only to publish content on your behalf. We do not sell information obtained from connected accounts or use connected account data for third-party advertising. You may disconnect any platform at any time through the app's Settings screen.</p>
+
+      <h3>Publishing Records</h3>
+      <p>We maintain records of content you have published through Elmer, including the platform, date, post identifier, and outcome status. These records are stored on our server and are associated with your account. You can delete your publishing history at any time through Settings → Data Management in the app.</p>
+
+      <h3>Subscription and Billing Information</h3>
+      <p>Subscription purchases made through the iOS App Store or Google Play are processed by Apple or Google and by RevenueCat, our subscription management provider. We receive subscription status, entitlement, and renewal information from RevenueCat but do not receive your full payment card information. Subscription purchases made through our web billing portal are processed by Stripe. Stripe collects and processes your payment information and billing address. We receive subscription status and limited customer information from Stripe. For further information, see the privacy policies of <a href="https://www.apple.com/legal/privacy/" rel="noopener noreferrer">Apple</a>, <a href="https://policies.google.com/privacy" rel="noopener noreferrer">Google</a>, <a href="https://www.revenuecat.com/privacy" rel="noopener noreferrer">RevenueCat</a>, and <a href="https://stripe.com/privacy" rel="noopener noreferrer">Stripe</a>.</p>
+
+      <h3>Usage and Analytics Data (Mobile App)</h3>
+      <p>The Elmer mobile app uses PostHog, a product analytics service, to collect usage events. PostHog is configured to identify events with your internal Elmer user ID. We do not use PostHog session replay, automatic lifecycle events, or geolocation. Events tracked include actions such as completing account registration, starting the onboarding flow, connecting a social platform, generating content, viewing the subscription paywall, and publishing. No voice content, photo content, or message text is included in these events. For more information, see <a href="https://posthog.com/privacy" rel="noopener noreferrer">PostHog's privacy policy</a>.</p>
+
+      <p>Our server also uses PostHog to track subscription lifecycle events (trial started, payment processed, subscription cancelled) linked to your internal user ID.</p>
+
+      <h3>Website and Billing Portal Data</h3>
+      <p>When you visit https://getelmer.com or https://billing.getelmer.com, we may automatically collect certain information including your IP address, browser type, device information, operating system, referring URLs, pages viewed, and other usage information.</p>
+
+      <p>Our website may use analytics and advertising services provided by third parties, including Google Analytics, Google Ads, and Meta/Facebook advertising technologies. These services may collect information about your device, browser, and interactions with our website. You may control cookies through your browser settings or the consent controls provided on the website.</p>
 
       <h2>How We Use Your Information</h2>
 
-      <p>We may use information we collect to:</p>
-
+      <p>We use information we collect to:</p>
       <ul>
-        <li>Respond to inquiries, requests, and customer service needs;</li>
-        <li>Provide quotes, estimates, appointments, products, or services you request;</li>
-        <li>Communicate with you regarding your inquiry, account, appointment, project, purchase, or service;</li>
-        <li>Send marketing or promotional communications where permitted and where appropriate consent has been obtained;</li>
-        <li>Operate, maintain, secure, and improve our website and services;</li>
-        <li>Understand how visitors use our website;</li>
-        <li>Measure the effectiveness of our advertising and marketing;</li>
-        <li>Prevent fraud, misuse, security incidents, or other harmful activity; and</li>
+        <li>Provide, maintain, and improve the Elmer Services;</li>
+        <li>Authenticate your identity and manage your account sessions;</li>
+        <li>Transcribe your voice recordings and generate content on your behalf;</li>
+        <li>Publish content to connected platforms when you request it;</li>
+        <li>Process subscription payments and manage your subscription entitlement;</li>
+        <li>Understand how the app is used to improve features and fix issues;</li>
+        <li>Respond to support requests and communications;</li>
+        <li>Prevent fraud, misuse, and security incidents; and</li>
         <li>Comply with applicable laws, regulations, and legal obligations.</li>
       </ul>
 
-      <h2>Cookies, Analytics, and Advertising Technologies</h2>
-
-      <p>Our website may use cookies, pixels, tags, local storage, and similar technologies to operate the website, remember preferences, understand website usage, measure advertising performance, and improve our marketing.</p>
-
-      <p>We may use analytics and advertising services provided by third parties, including services such as Google Analytics, Google Ads, Meta/Facebook advertising technologies, and similar platforms. These services may collect information about your device, browser, website activity, and interactions with advertisements. Depending on the services enabled, we and third-party providers may use first-party and third-party cookies or other identifiers to measure website activity, understand audiences, provide advertising, measure advertising performance, and support remarketing or similar advertising activities.</p>
-
-      <p>You may be able to control cookies through your browser settings, device settings, or any consent controls provided on this website. You may also use privacy and advertising controls made available by the applicable advertising or analytics providers. Disabling certain technologies may affect some website functionality.</p>
-
       <h2>How We Share Information</h2>
 
-      <p>We may disclose personal information to service providers and contractors that perform services on our behalf, such as website hosting, customer relationship management, communications, analytics, advertising, payment processing, scheduling, customer support, and other business operations. These providers may access information only as reasonably necessary to perform services for us or as otherwise permitted by law.</p>
+      <p>We do not sell your personal information. We share information only as follows:</p>
 
-      <p>We may also disclose information when required by law, legal process, court order, or governmental request; when necessary to protect our rights, customers, property, or safety; in connection with the investigation of fraud or unlawful activity; or in connection with a merger, acquisition, financing, sale of assets, or similar business transaction.</p>
+      <ul>
+        <li><strong>Third-party platforms you choose to connect</strong> — When you publish through Elmer, we transmit content and credentials to the platform you have selected (Facebook, Instagram, Threads, Google Business Profile, or WordPress) on your behalf.</li>
+        <li><strong>AI and processing providers</strong> — OpenAI receives your audio recordings (for transcription) and content context (for generation). OpenAI's use of this data is subject to <a href="https://openai.com/policies/privacy-policy" rel="noopener noreferrer">OpenAI's privacy policy</a>.</li>
+        <li><strong>Analytics providers</strong> — PostHog receives usage event data as described above.</li>
+        <li><strong>Subscription and billing providers</strong> — RevenueCat, Apple, Google, and Stripe receive information necessary to process and manage your subscription.</li>
+        <li><strong>Service providers</strong> — We use service providers for server hosting, email delivery, and other infrastructure. These providers access information only as necessary to perform services for us.</li>
+        <li><strong>Legal requirements</strong> — We may disclose information when required by law, legal process, or governmental request, or when necessary to protect our rights, users, property, or safety.</li>
+        <li><strong>Business transactions</strong> — Information may be transferred in connection with a merger, acquisition, or sale of assets.</li>
+      </ul>
 
       <h2>Mobile Information and SMS Consent</h2>
 
-      <p><strong>No mobile information will be shared with third parties/affiliates for marketing/promotional purposes. Information sharing to subcontractors in support services, such as customer service, is permitted. All other use case categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</strong></p>
+      <p><strong>No mobile information will be shared with third parties or affiliates for marketing or promotional purposes. Information sharing to subcontractors in support of services, such as customer service, is permitted. All other use-case categories exclude text-messaging originator opt-in data and consent; this information will not be shared with any third parties.</strong></p>
 
-      <p>Your consent to receive text messages is not a condition of purchasing goods or services from us. Where SMS consent is offered, you may choose whether to provide that consent.</p>
+      <p>Your consent to receive text messages is not a condition of purchasing goods or services from us.</p>
 
       <h2>Text Messaging</h2>
 
-      <p>If you consent to receive text messages from Elmer, we may send messages related to your inquiries, appointments, service requests, transactions, account, customer care, or other communications you have requested or consented to receive. If you separately consent to marketing messages, we may also send promotional messages, special offers, or other marketing communications.</p>
+      <p>If you consent to receive text messages from Elmer, we may send messages related to your inquiries, appointments, service requests, transactions, account, customer care, or other communications you have requested or consented to receive. If you separately consent to marketing messages, we may also send promotional messages.</p>
 
-      <p>Message frequency may vary. Message and data rates may apply. You may opt out of text messages at any time by replying <strong>STOP</strong>. For assistance, reply <strong>HELP</strong> or contact us at <a href="mailto:help@getelmer.com">help@getelmer.com</a>.</p>
-
-      <p>Opting out of text messaging does not necessarily prevent us from contacting you through other methods where permitted by law.</p>
+      <p>Message frequency may vary. Message and data rates may apply. You may opt out at any time by replying <strong>STOP</strong>. For assistance, reply <strong>HELP</strong> or contact us at <a href="mailto:help@getelmer.com">help@getelmer.com</a>.</p>
 
       <h2>Data Security</h2>
 
-      <p>We use reasonable administrative, technical, and organizational safeguards designed to protect personal information against unauthorized access, loss, misuse, alteration, or disclosure. However, no method of transmitting information over the Internet or storing information electronically can be guaranteed to be completely secure.</p>
+      <p>We use reasonable administrative, technical, and organizational safeguards designed to protect personal information against unauthorized access, loss, misuse, alteration, or disclosure. OAuth tokens and application passwords for connected platforms are encrypted at rest using AES-256-GCM. Passwords are stored as bcrypt hashes. All connections to our API use HTTPS. No method of transmission over the Internet or electronic storage is completely secure.</p>
 
       <h2>Data Retention</h2>
 
-      <p>We retain personal information for as long as reasonably necessary to fulfill the purposes for which it was collected, provide our services, maintain legitimate business records, resolve disputes, enforce agreements, and satisfy legal, accounting, or regulatory requirements.</p>
+      <p><strong>Mobile device.</strong> Job content (audio, photos, transcripts, generated posts) is stored locally on your device. The app automatically deletes media files for published jobs after 30 days. Unpublished drafts are kept until you delete them manually. You can clear all locally stored data at any time from Settings → Data Management.</p>
+
+      <p><strong>Server.</strong> Your account, business profile, connected platform credentials, and publishing records are stored on our servers for as long as your account is active. Voice recordings are deleted from the server immediately after transcription. Photos are deleted from the server immediately after the publishing request is complete. Publishing records are retained until you delete them through the app or delete your account.</p>
+
+      <p><strong>Previously published content.</strong> Content published to external platforms (Facebook, Instagram, Threads, Google Business Profile, WordPress) remains on those platforms after you delete your Elmer account. You can remove previously published content directly on each platform.</p>
+
+      <p><strong>Transaction records.</strong> Certain billing and transaction records may be retained as required by law or for legitimate accounting and legal purposes even after account deletion.</p>
+
+      <h2>Account Deletion</h2>
+
+      <p>You can delete your Elmer account directly within the app by going to Settings → Data Management → Delete Account. If you have an active subscription, you must cancel it before deleting your account. Account deletion permanently removes your user record, business profile, connected platform credentials, session tokens, and publishing history from our servers. Local data on your device is also deleted as part of this process.</p>
+
+      <p>You may also request account deletion by emailing <a href="mailto:admin@clickfuzz.com">admin@clickfuzz.com</a> with the subject line <strong>Elmer Data Deletion Request</strong>.</p>
 
       <h2>Your Privacy Choices</h2>
 
-      <p>Depending on where you live, applicable privacy laws may provide rights concerning your personal information, which may include the right to request access, correction, deletion, or a copy of certain personal information, or to object to or restrict certain processing.</p>
+      <p>Depending on where you live, applicable privacy laws may provide rights concerning your personal information, which may include the right to request access, correction, deletion, or a copy of certain personal information, or to object to or restrict certain processing. To submit a request, contact us using the information below.</p>
 
-      <p>To submit a privacy-related request, contact us using the information below. We may need to verify your identity before processing certain requests.</p>
-
-      <p>You may unsubscribe from marketing emails by using the unsubscribe mechanism included in those communications. You may opt out of SMS messages by replying STOP.</p>
+      <p>You may unsubscribe from marketing emails by using the unsubscribe mechanism in those communications. You may opt out of SMS messages by replying STOP.</p>
 
       <h2>Third-Party Websites and Services</h2>
 
-      <p>Our website may contain links to websites, platforms, or services operated by third parties. We are not responsible for the privacy practices, security, or content of third-party websites or services. We encourage you to review their privacy policies before providing personal information.</p>
+      <p>Our Services may contain links to or integrations with third-party websites, platforms, or services. We are not responsible for the privacy practices or content of third-party services. We encourage you to review their privacy policies before providing personal information.</p>
 
       <h2>Children's Privacy</h2>
 
-      <p>Our website and services are not directed to children under 13, and we do not knowingly collect personal information from children under 13 through this website. If we learn that we have collected such information without appropriate authorization, we will take reasonable steps to delete it.</p>
+      <p>Our Services are not directed to children under 13, and we do not knowingly collect personal information from children under 13. If we learn that we have collected such information without appropriate authorization, we will take reasonable steps to delete it.</p>
 
       <h2>Changes to This Privacy Policy</h2>
 
-      <p>We may update this Privacy Policy periodically to reflect changes to our practices, technologies, services, or legal requirements. When we update this policy, we may revise the "Last Updated" date above. Your continued use of the website after an updated policy is posted is subject to the updated policy.</p>
+      <p>We may update this Privacy Policy periodically to reflect changes to our practices, technologies, Services, or legal requirements. When we update this policy, we may revise the "Last Updated" date above. Your continued use of the Services after an updated policy is posted is subject to the updated policy.</p>
 
       <h2>Contact Us</h2>
 
       <p>If you have questions about this Privacy Policy or our privacy practices, contact:</p>
 
       <p>
-        <strong>Elmer</strong><br>
+        <strong>ClickFuzz LLC (Elmer)</strong><br>
         Website: <a href="https://getelmer.com">https://getelmer.com</a><br>
         Email: <a href="mailto:help@getelmer.com">help@getelmer.com</a>
       </p>
@@ -159,64 +151,7 @@
   </div>
 </main>
 
-<!-- ════════════════ FOOTER ════════════════ -->
-<footer>
-  <div class="container">
-    <div class="footer-top">
-      <div class="footer-brand">
-        <span class="footer-wordmark">elmer<span class="wordmark-period">.</span></span>
-        <p>
-          The easiest way for local contractors and service businesses to share completed jobs online — and get more eyes on their work.
-        </p>
-      </div>
-      <div class="footer-nav-col">
-        <h4>Navigation</h4>
-        <nav aria-label="Footer navigation">
-          <ul>
-            <li><a href="/#how-it-works">How It Works</a></li>
-            <li><a href="/#platforms">Platforms</a></li>
-            <li><a href="/#features">Why Elmer</a></li>
-            <li><a href="/#contact">Early Access</a></li>
-          </ul>
-        </nav>
-      </div>
-      <div class="footer-nav-col">
-        <h4>Contact</h4>
-        <div class="footer-contact">
-          <a href="mailto:help@getelmer.com">help@getelmer.com</a>
-        </div>
-      </div>
-    </div>
-    <div class="footer-bottom">
-      <p class="footer-copy">&copy; <span id="footer-year"></span> Elmer. All rights reserved.</p>
-      <p class="footer-legal">
-        <a href="/privacy-policy">Privacy Policy</a>
-        <a href="/terms-and-conditions">Terms &amp; Conditions</a>
-      </p>
-    </div>
-  </div>
-</footer>
-
-<script>
-  document.getElementById('footer-year').textContent = new Date().getFullYear();
-
-  const hamburger = document.getElementById('hamburgerBtn');
-  const mobileDrawer = document.getElementById('mobileDrawer');
-  hamburger.addEventListener('click', function() {
-    const open = mobileDrawer.classList.toggle('open');
-    hamburger.classList.toggle('open', open);
-    hamburger.setAttribute('aria-expanded', open.toString());
-    mobileDrawer.setAttribute('aria-hidden', (!open).toString());
-  });
-  mobileDrawer.querySelectorAll('a').forEach(function(link) {
-    link.addEventListener('click', function() {
-      mobileDrawer.classList.remove('open');
-      hamburger.classList.remove('open');
-      hamburger.setAttribute('aria-expanded', 'false');
-      mobileDrawer.setAttribute('aria-hidden', 'true');
-    });
-  });
-</script>
+<!--#include virtual="/_cf/footer.html"-->
 
 </body>
 </html>

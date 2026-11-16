@@ -261,10 +261,10 @@ router.delete('/account', requireAuth, wrap(async (req, res) => {
   const pool = getPool();
 
   const { rows: subRows } = await pool.query(
-    'SELECT status, current_period_end FROM subscriptions WHERE user_id = $1',
+    'SELECT status, current_period_end, provider FROM subscriptions WHERE user_id = $1',
     [req.userId]
   );
-  if (hasAccess(subRows[0])) {
+  if (subRows.some(r => hasAccess(r))) {
     return res.status(409).json({
       error: 'active_subscription',
       message: 'This account has an active subscription. Cancel your subscription before deleting your account.',

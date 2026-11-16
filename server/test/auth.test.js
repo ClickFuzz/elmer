@@ -176,6 +176,77 @@ describe('POST /auth/logout', () => {
 
 // ── DELETE /auth/account ──────────────────────────────────────────────────────
 
+// Seeds a canceled Stripe subscription (status = 'canceled') for the given user.
+async function seedCanceledStripeSubscription(userId) {
+  const pool = getPool();
+  const now  = Date.now();
+  const customerId = `cus_canceled_${userId}`;
+  await pool.query(
+    `INSERT INTO stripe_customers (user_id, customer_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $3)
+     ON CONFLICT (user_id) DO UPDATE SET customer_id = $2, updated_at = $3`,
+    [userId, customerId, now]
+  );
+  await pool.query(
+    `INSERT INTO subscriptions
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
+        current_period_start, current_period_end, trial_start, trial_end,
+        cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
+     VALUES ($1, 'stripe', $2, $2, $3, 'canceled', $4, $5, null, null, false, null, $4, true, $4, $4)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET status = 'canceled', updated_at = $4`,
+    [userId, `sub_canceled_${userId}`, customerId, now, now - 1000]
+  );
+}
+
+// Seeds an active Apple subscription for the given user (simulates a RevenueCat Apple row).
+async function seedActiveAppleSubscription(userId) {
+  const pool = getPool();
+  const now  = Date.now();
+  await pool.query(
+    `INSERT INTO subscriptions
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
+        current_period_start, current_period_end, trial_start, trial_end,
+        cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
+     VALUES ($1, 'apple', $2, null, null, 'active', $3, $4, null, null, false, null, null, false, $3, $3)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET status = 'active', updated_at = $3`,
+    [userId, `apple_sub_${userId}`, now, now + 30 * 24 * 60 * 60 * 1000]
+  );
+}
+
+// Seeds an active Google subscription for the given user.
+async function seedActiveGoogleSubscription(userId) {
+  const pool = getPool();
+  const now  = Date.now();
+  await pool.query(
+    `INSERT INTO subscriptions
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
+        current_period_start, current_period_end, trial_start, trial_end,
+        cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
+     VALUES ($1, 'google', $2, null, null, 'active', $3, $4, null, null, false, null, null, false, $3, $3)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET status = 'active', updated_at = $3`,
+    [userId, `google_sub_${userId}`, now, now + 30 * 24 * 60 * 60 * 1000]
+  );
+}
+
+// Seeds a canceled Apple subscription (expired period end) for the given user.
+async function seedCanceledAppleSubscription(userId) {
+  const pool = getPool();
+  const now  = Date.now();
+  await pool.query(
+    `INSERT INTO subscriptions
+       (user_id, provider, provider_subscription_id,
+        stripe_subscription_id, stripe_customer_id, status,
+        current_period_start, current_period_end, trial_start, trial_end,
+        cancel_at_period_end, cancel_at, canceled_at, trial_used, created_at, updated_at)
+     VALUES ($1, 'apple', $2, null, null, 'canceled', $3, $4, null, null, false, null, $3, false, $3, $3)
+     ON CONFLICT (user_id, provider, provider_subscription_id) DO UPDATE SET status = 'canceled', updated_at = $3`,
+    [userId, `apple_canceled_${userId}`, now, now - 1000]
+  );
+}
+
 describe('DELETE /auth/account', () => {
   it('deletes account when no subscription exists', async () => {
     await register();
@@ -185,7 +256,7 @@ describe('DELETE /auth/account', () => {
     assert.strictEqual(res.body.ok, true);
   });
 
-  it('blocks deletion with 409 when user has an active subscription', async () => {
+  it('blocks deletion with 409 when user has an active Stripe subscription', async () => {
     await register();
     const { body: { token } } = await login();
     const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
@@ -193,6 +264,49 @@ describe('DELETE /auth/account', () => {
     const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
     assert.strictEqual(res.status, 409);
     assert.strictEqual(res.body.error, 'active_subscription');
+  });
+
+  it('allows deletion when the only subscription is canceled', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedCanceledStripeSubscription(userId);
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, true);
+  });
+
+  it('blocks deletion when canceled Stripe row exists alongside active Apple row', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedCanceledStripeSubscription(userId);
+    await seedActiveAppleSubscription(userId);
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.body.error, 'active_subscription');
+  });
+
+  it('blocks deletion when canceled Apple row exists alongside active Google row', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedCanceledAppleSubscription(userId);
+    await seedActiveGoogleSubscription(userId);
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.body.error, 'active_subscription');
+  });
+
+  it('allows deletion when multiple subscription rows all have inactive status', async () => {
+    await register();
+    const { body: { token } } = await login();
+    const { body: { userId } } = await request(app).get('/auth/me').set('Authorization', `Bearer ${token}`);
+    await seedCanceledStripeSubscription(userId);
+    await seedCanceledAppleSubscription(userId);
+    const res = await request(app).delete('/auth/account').set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.ok, true);
   });
 
   it('returns 401 without a token', async () => {
