@@ -264,7 +264,22 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         console.warn('[facebook] could not fetch user ID for deauth mapping:', err.message);
       }
 
-      // Step 4 — Retrieve pages the user manages
+      // Step 4 — Discover pages the user manages via all available paths.
+      //
+      // 4a: GET /me/accounts — pages where the user is a direct admin.
+      // 4b: GET /me/businesses → GET /{biz}/owned_pages + /{biz}/client_pages —
+      //     pages owned by or under a Meta Business Portfolio.
+      //     Requires business_management permission (already requested).
+      //
+      // Both paths are always queried; results are merged and deduplicated by
+      // page ID.  The access_token field on Page is only returned by Meta when
+      // the requesting user holds a direct admin role on that page, regardless of
+      // which discovery path is used.
+      //
+      // A failure in the Business Portfolio path is non-fatal: any pages already
+      // found via /me/accounts are preserved and the OAuth flow continues.
+
+      // 4a — /me/accounts
       const pagesParams = new URLSearchParams({
         access_token: longData.access_token,
         fields:       'id,name,access_token,tasks',
@@ -283,7 +298,99 @@ function createFacebookRouter({ graphFetch = (...args) => fetch(...args) } = {})
         );
       }
 
-      const pages = (pagesData.data ?? []).filter(p => p.id && p.access_token);
+      const directPages = pagesData.data ?? [];
+      console.log(
+        `[facebook] /me/accounts: ${directPages.length} page(s) returned`,
+        directPages.map(p => ({ id: p.id, name: p.name, hasToken: !!p.access_token }))
+      );
+      for (const p of directPages.filter(p => p.id && !p.access_token)) {
+        console.log(
+          `[facebook] page "${p.name}" (${p.id}) returned from /me/accounts without access_token — ` +
+          `may be a Business Portfolio asset; will attempt business path discovery`
+        );
+      }
+
+      // Merge map keyed by page ID; first valid access_token for a given ID wins.
+      const pageMap = new Map();
+      for (const p of directPages) {
+        if (p.id && p.access_token) pageMap.set(p.id, p);
+      }
+
+      // 4b — Business Portfolio pages
+      try {
+        const bizParams = new URLSearchParams({
+          access_token: longData.access_token,
+          fields:       'id,name',
+          limit:        '25',
+        });
+        const bizData = await graphFetch(`${GRAPH_BASE}/me/businesses?${bizParams}`)
+          .then(r => r.json());
+
+        if (bizData.error) {
+          console.warn(
+            `[facebook] /me/businesses error (code ${bizData.error.code}): ${bizData.error.message} — ` +
+            `business portfolio pages will not be discoverable this session`
+          );
+        } else {
+          const businesses = bizData.data ?? [];
+          console.log(
+            `[facebook] /me/businesses: ${businesses.length} business(es) found`,
+            businesses.map(b => ({ id: b.id, name: b.name }))
+          );
+
+          for (const biz of businesses) {
+            for (const edgeLabel of ['owned_pages', 'client_pages']) {
+              try {
+                const edgeParams = new URLSearchParams({
+                  access_token: longData.access_token,
+                  fields:       'id,name,access_token,tasks',
+                  limit:        '25',
+                });
+                const edgeData = await graphFetch(
+                  `${GRAPH_BASE}/${biz.id}/${edgeLabel}?${edgeParams}`
+                ).then(r => r.json());
+
+                if (edgeData.error) {
+                  console.warn(
+                    `[facebook] /${biz.id}/${edgeLabel} error (code ${edgeData.error.code}): ` +
+                    `${edgeData.error.message}`
+                  );
+                  continue;
+                }
+                const bizPages = edgeData.data ?? [];
+                console.log(
+                  `[facebook] /${biz.id}/${edgeLabel}: ${bizPages.length} page(s)`,
+                  bizPages.map(p => ({ id: p.id, name: p.name, hasToken: !!p.access_token }))
+                );
+                for (const p of bizPages) {
+                  if (!p.id) continue;
+                  if (p.access_token) {
+                    if (!pageMap.has(p.id)) pageMap.set(p.id, p);
+                  } else {
+                    console.log(
+                      `[facebook] page "${p.name}" (${p.id}) from /${biz.id}/${edgeLabel} ` +
+                      `has no access_token — user may not hold a direct admin role on this page`
+                    );
+                  }
+                }
+              } catch (edgeErr) {
+                console.warn(`[facebook] /${biz.id}/${edgeLabel} request failed: ${edgeErr.message}`);
+              }
+            }
+          }
+        }
+      } catch (bizErr) {
+        console.warn(
+          '[facebook] business portfolio discovery failed:', bizErr.message,
+          '— continuing with pages found via /me/accounts'
+        );
+      }
+
+      const pages = [...pageMap.values()];
+      console.log(
+        `[facebook] page discovery complete: ${pages.length} usable page(s)`,
+        pages.map(p => ({ id: p.id, name: p.name }))
+      );
 
       if (pages.length === 0) {
         return sendOAuthRedirect(res, `${returnBase}?platform=facebook&error=no_manageable_pages`);

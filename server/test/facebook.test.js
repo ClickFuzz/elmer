@@ -187,6 +187,7 @@ describe('GET /facebook/callback', () => {
         { id: 'page-1', name: 'My Shop',  access_token: 'page_token_1', tasks: ['CREATE_CONTENT'] },
         { id: 'page-2', name: 'Side Biz', access_token: 'page_token_2', tasks: ['CREATE_CONTENT'] },
       ] } },
+      { data: { data: [] } },  // /me/businesses — no business portfolio (direct pages only)
     ]);
 
     const { createFacebookRouter } = require('../routes/facebook');
@@ -224,10 +225,12 @@ describe('GET /facebook/callback', () => {
       { data: { access_token: 'long1' } },
       { data: { id: 'fb-user-reconnect' } },  // /me — first connect
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_first' }] } },
+      { data: { data: [] } },  // /me/businesses — first connect
       { data: { access_token: 'short2' } },
       { data: { access_token: 'long2' } },
       { data: { id: 'fb-user-reconnect' } },  // /me — second connect (same user)
       { data: { data: [{ id: 'page-1', name: 'My Shop', access_token: 'token_second' }] } },
+      { data: { data: [] } },  // /me/businesses — second connect
     ]);
 
     const { createFacebookRouter } = require('../routes/facebook');
@@ -262,7 +265,8 @@ describe('GET /facebook/callback', () => {
       { data: { access_token: 'short_token' } },
       { data: { access_token: 'long_token' } },
       { data: { id: 'fb-user-nopages' } },  // /me — platform_user_id mapping
-      { data: { data: [] } },
+      { data: { data: [] } },               // /me/accounts — empty
+      { data: { data: [] } },               // /me/businesses — also empty
     ]);
 
     const { createFacebookRouter } = require('../routes/facebook');
@@ -303,6 +307,179 @@ describe('GET /facebook/callback', () => {
       res.text.includes('error=insufficient_permissions'),
       `expected insufficient_permissions, got: ${res.text}`
     );
+  });
+
+  // ── Business Portfolio (Meta Business Manager) page discovery ──────────────
+
+  it('discovers pages via Business Portfolio when /me/accounts returns empty', async () => {
+    await setupFreshTestDb();
+
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-biz' } },   // /me
+      { data: { data: [] } },             // /me/accounts — no direct pages
+      { data: { data: [{ id: 'biz-1', name: 'Acme Co' }] } },  // /me/businesses
+      { data: { data: [                   // /biz-1/owned_pages
+        { id: 'page-biz', name: 'Acme Page', access_token: 'biz_token', tasks: ['CREATE_CONTENT'] },
+      ] } },
+      { data: { data: [] } },             // /biz-1/client_pages — empty
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token, userId } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app).get('/facebook/callback').query({ code: 'code_biz', state });
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'), `expected success, got: ${res.text}`);
+    assert.ok(res.text.includes('page_count=1'));
+
+    const { rows } = await getPool().query(
+      `SELECT account_id, account_name, selected FROM connected_platforms
+       WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].account_name, 'Acme Page');
+    assert.strictEqual(rows[0].selected, true);
+  });
+
+  it('discovers pages via client_pages when owned_pages is empty', async () => {
+    await setupFreshTestDb();
+
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-client' } },
+      { data: { data: [] } },              // /me/accounts — empty
+      { data: { data: [{ id: 'biz-2', name: 'Agency' }] } },   // /me/businesses
+      { data: { data: [] } },              // /biz-2/owned_pages — empty
+      { data: { data: [                    // /biz-2/client_pages
+        { id: 'page-client', name: 'Client Page', access_token: 'client_token', tasks: ['CREATE_CONTENT'] },
+      ] } },
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token, userId } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app).get('/facebook/callback').query({ code: 'code_client', state });
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'), `expected success, got: ${res.text}`);
+
+    const { rows } = await getPool().query(
+      `SELECT account_id FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].account_id, 'page-client');
+  });
+
+  it('merges business portfolio pages with direct pages and deduplicates by page ID', async () => {
+    await setupFreshTestDb();
+
+    // page-1 appears in both /me/accounts AND business path.
+    // The /me/accounts token should be used (first token wins in pageMap).
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-merge' } },
+      { data: { data: [                   // /me/accounts — page-1 direct
+        { id: 'page-1', name: 'Direct Page', access_token: 'direct_token', tasks: ['CREATE_CONTENT'] },
+      ] } },
+      { data: { data: [{ id: 'biz-3', name: 'Corp' }] } },  // /me/businesses
+      { data: { data: [                   // /biz-3/owned_pages — page-1 (dup) + page-2 (new)
+        { id: 'page-1', name: 'Direct Page', access_token: 'biz_dup_token', tasks: ['CREATE_CONTENT'] },
+        { id: 'page-2', name: 'Biz Only', access_token: 'biz_only_token', tasks: ['CREATE_CONTENT'] },
+      ] } },
+      { data: { data: [] } },             // /biz-3/client_pages — empty
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token, userId } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app).get('/facebook/callback').query({ code: 'code_merge', state });
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('page_count=2'), `expected page_count=2, got: ${res.text}`);
+
+    const { rows } = await getPool().query(
+      `SELECT account_id, account_name FROM connected_platforms
+       WHERE user_id = $1 AND platform = 'facebook'
+       ORDER BY account_id`,
+      [userId]
+    );
+    assert.strictEqual(rows.length, 2, 'should not create duplicate rows');
+    assert.strictEqual(rows[0].account_id, 'page-1');
+    assert.strictEqual(rows[1].account_id, 'page-2');
+  });
+
+  it('business portfolio path error is non-fatal when /me/accounts found pages', async () => {
+    await setupFreshTestDb();
+
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-bizfail' } },
+      { data: { data: [                   // /me/accounts — has a page
+        { id: 'page-direct', name: 'Direct Page', access_token: 'direct_token', tasks: ['CREATE_CONTENT'] },
+      ] } },
+      { data: { error: { message: 'Permissions error', code: 200 } } },  // /me/businesses error
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token, userId } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app).get('/facebook/callback').query({ code: 'code_bizfail', state });
+
+    // Business path error must not block pages found via /me/accounts
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('success=true'), `expected success, got: ${res.text}`);
+    assert.ok(res.text.includes('page_count=1'));
+
+    const { rows } = await getPool().query(
+      `SELECT account_id FROM connected_platforms WHERE user_id = $1 AND platform = 'facebook'`,
+      [userId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].account_id, 'page-direct');
+  });
+
+  it('no_manageable_pages when all discovered pages lack an access_token', async () => {
+    await setupFreshTestDb();
+
+    const mockGraphFetch = makeGraphMock([
+      { data: { access_token: 'short_token' } },
+      { data: { access_token: 'long_token' } },
+      { data: { id: 'fb-user-notoken' } },
+      { data: { data: [                   // /me/accounts — page without token (business asset)
+        { id: 'page-notok', name: 'No Token Page' },
+      ] } },
+      { data: { data: [{ id: 'biz-4', name: 'Business' }] } },  // /me/businesses
+      { data: { data: [                   // /biz-4/owned_pages — same page, still no token
+        { id: 'page-notok', name: 'No Token Page' },
+      ] } },
+      { data: { data: [] } },             // /biz-4/client_pages
+    ]);
+
+    const { createFacebookRouter } = require('../routes/facebook');
+    const app = createApp({ facebookRouter: createFacebookRouter({ graphFetch: mockGraphFetch }) });
+    const { token } = await registerAndLogin(app);
+    const state = await createFbState(app, token);
+
+    const res = await request(app).get('/facebook/callback').query({ code: 'code_notok', state });
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('error=no_manageable_pages'), `got: ${res.text}`);
   });
 });
 
