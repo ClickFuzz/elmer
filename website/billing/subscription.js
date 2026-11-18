@@ -54,7 +54,7 @@ async function loadSubscription(returnStatus) {
       document.getElementById('greetingTitle').textContent = data.businessName;
     }
 
-    showDashboard(data.subscription, data.hasAccess, data.entitlement);
+    showDashboard(data.subscription, data.hasAccess, data.entitlement, data.anyTrialUsed);
     showReturnBanner(returnStatus, data.hasAccess);
 
     // If returning from a successful checkout, subscription status may not have
@@ -121,24 +121,50 @@ function delay(ms) {
 }
 
 // ── Render dashboard ───────────────────────────────────────────────────────────
-function showDashboard(sub, hasAccess, entitlement) {
+function showDashboard(sub, hasAccess, entitlement, anyTrialUsed) {
   document.getElementById('loadingView').classList.add('hidden');
   document.getElementById('dashboardView').classList.remove('hidden');
 
   renderStatus(sub, hasAccess);
 
-  if (hasAccess || sub) {
-    // Show manage billing for any user who has / had a subscription
+  // Determine which sections to show based on subscription state.
+  // Active/trialing/past_due users → manage billing via Stripe portal.
+  // Canceled, deleted-customer, or never-subscribed → show subscribe offer.
+  const isRecoverableViaPortal = hasAccess ||
+    (sub && ['active', 'trialing', 'past_due'].includes(sub.status));
+
+  if (isRecoverableViaPortal) {
     document.getElementById('manageBillingSection').classList.remove('hidden');
     document.getElementById('trialOfferSection').classList.add('hidden');
   } else {
-    // No subscription at all — show trial / subscribe offer
+    // No active subscription (canceled, expired, or never subscribed).
+    // Show the subscribe offer; update text if the user previously subscribed.
     document.getElementById('trialOfferSection').classList.remove('hidden');
     document.getElementById('manageBillingSection').classList.add('hidden');
+
+    const hadPriorSub = !!sub; // sub exists but is not active/trialing/past_due
+    const trialBadge  = document.getElementById('trialBadge');
+    const priceNote   = document.getElementById('trialPriceNote');
+    const startBtn    = document.getElementById('startTrialBtn');
+
+    if (hadPriorSub || anyTrialUsed) {
+      // Resubscription: trial is not available; show a "Subscribe" call to action.
+      if (trialBadge)  trialBadge.style.display = 'none';
+      if (priceNote)   priceNote.textContent = '$19/month. Cancel anytime.';
+      if (startBtn)    startBtn.textContent   = 'Subscribe Again';
+    } else {
+      // First-time subscriber: restore default trial offer UI.
+      if (trialBadge)  trialBadge.style.display = '';
+      if (priceNote)   priceNote.textContent = 'Free for 14 days, then $19/month. Cancel anytime.';
+      if (startBtn)    startBtn.textContent   = 'Start free trial';
+    }
   }
 
-  // Show download card only when the server confirms active access.
-  const showDownload = !!hasAccess;
+  // Show app download links for active/trialing subscribers.
+  // Also show when status is active/trialing even if hasAccess is momentarily false
+  // due to a stale current_period_end (RC renewal webhook delay).
+  const subIsLive = sub && (sub.status === 'active' || sub.status === 'trialing');
+  const showDownload = hasAccess || subIsLive;
   const downloadSection = document.getElementById('downloadSection');
   if (showDownload) {
     renderDownloadButtons();
@@ -293,6 +319,12 @@ function wireButtons() {
         const data = await res.json();
 
         if (res.status === 404) {
+          if (data.error === 'customer_not_found') {
+            // Stripe customer was deleted. The stale reference has been cleared.
+            // Reload the dashboard — it will now show the "Subscribe Again" button.
+            await loadSubscription(null);
+            return;
+          }
           showAlert(portalAlert,
             'No billing account found. Start a subscription to access billing management.',
             'info');

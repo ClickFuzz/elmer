@@ -93,6 +93,11 @@ let _rcVerifyFetchOverride = null;
 function _setRcVerifyFetchForTest(fn)  { _rcVerifyFetchOverride = fn; }
 function _clearRcVerifyFetchForTest()  { _rcVerifyFetchOverride = null; }
 
+// Injectable Stripe client for portal/checkout error simulation (test isolation only).
+let _stripeOverride = null;
+function _setStripeForTest(mock)  { _stripeOverride = mock; }
+function _clearStripeForTest()    { _stripeOverride = null; }
+
 // ── Entitlement helpers ───────────────────────────────────────────────────────
 
 function hasAccess(sub) {
@@ -420,6 +425,7 @@ async function releaseFreePublicationIfNoSuccess(userId, jobKey) {
 // ── Stripe helpers ────────────────────────────────────────────────────────────
 
 function getStripe() {
+  if (_stripeOverride) return _stripeOverride;
   const key = STRIPE_SECRET_KEY();
   if (!key) throw new Error('[billing] STRIPE_SECRET_KEY is not set');
   // Require Stripe only when used so that tests without the key can still load the module
@@ -624,6 +630,20 @@ async function handleWebhookEvent(event) {
         const userId = await getUserIdByCustomer(sub.customer).catch(() => null);
         if (userId) trackPaymentFailed(userId, { attempt_count: invoice.attempt_count ?? null });
       }
+      break;
+    }
+
+    case 'customer.deleted': {
+      // Stripe customer was deleted from the dashboard. Remove the stale mapping so
+      // that the next checkout creates a fresh customer for the same Elmer user.
+      // Note: Stripe cancels all active subscriptions before firing this event, so
+      // customer.subscription.deleted should already have updated the subscriptions table.
+      const customer = event.data.object;
+      await getPool().query(
+        'DELETE FROM stripe_customers WHERE customer_id = $1',
+        [customer.id]
+      );
+      console.log('[billing] customer.deleted: removed stripe_customers row for', customer.id);
       break;
     }
 
@@ -900,7 +920,7 @@ function createBillingRouter() {
         });
       }
 
-      const customerId = await getOrCreateStripeCustomer(req.userId, req.userEmail);
+      let customerId = await getOrCreateStripeCustomer(req.userId, req.userEmail);
 
       // Determine trial eligibility — trial is blocked if one was previously used on ANY provider,
       // or if the account already has active access via Apple/Google IAP.
@@ -924,8 +944,8 @@ function createBillingRouter() {
         ? `${portalUrl}/subscription?status=cancel`
         : `${appUrl}/billing/checkout-return?status=cancel`;
 
-      const session = await getStripe().checkout.sessions.create({
-        customer:                   customerId,
+      const buildCheckoutParams = (cid) => ({
+        customer:                   cid,
         mode:                       'subscription',
         line_items:                 [{ price: priceId, quantity: 1 }],
         success_url:                successUrl,
@@ -939,7 +959,32 @@ function createBillingRouter() {
         metadata:        { elmer_user_id: String(req.userId) },
         locale:          'en',
         customer_update: { address: 'auto' },
-      }, { idempotencyKey: `checkout_${req.userId}_${Date.now()}` });
+      });
+
+      let session;
+      try {
+        session = await getStripe().checkout.sessions.create(
+          buildCheckoutParams(customerId),
+          { idempotencyKey: `checkout_${req.userId}_${Date.now()}` }
+        );
+      } catch (stripeErr) {
+        // Stale customer: was deleted from Stripe without a customer.deleted webhook.
+        // Remove the stale mapping, create a fresh customer, and retry once.
+        if (stripeErr?.code === 'resource_missing') {
+          await getPool().query(
+            'DELETE FROM stripe_customers WHERE customer_id = $1',
+            [customerId]
+          ).catch(() => {});
+          console.log('[billing] checkout-session: removed stale customer', customerId, '— retrying with new customer');
+          customerId = await getOrCreateStripeCustomer(req.userId, req.userEmail);
+          session = await getStripe().checkout.sessions.create(
+            buildCheckoutParams(customerId),
+            { idempotencyKey: `checkout_${req.userId}_${Date.now()}` }
+          );
+        } else {
+          throw stripeErr;
+        }
+      }
 
       res.json({ checkoutUrl: session.url, sessionId: session.id, trialEligible: !trialUsed });
     } catch (err) {
@@ -952,6 +997,7 @@ function createBillingRouter() {
   router.post('/portal-session', requireAuth, async (req, res) => {
     if (!STRIPE_SECRET_KEY()) return res.status(503).json({ error: 'billing_not_configured' });
 
+    let customerId = null;
     try {
       const { rows } = await getPool().query(
         'SELECT customer_id FROM stripe_customers WHERE user_id = $1',
@@ -961,6 +1007,7 @@ function createBillingRouter() {
         return res.status(404).json({ error: 'no_billing_account' });
       }
 
+      customerId = rows[0].customer_id;
       const isWeb     = req.body.source === 'web';
       const appUrl    = APP_URL();
       const portalUrl = BILLING_PORTAL_URL();
@@ -968,12 +1015,34 @@ function createBillingRouter() {
         ? `${portalUrl}/subscription?status=portal_return`
         : `${appUrl}/billing/checkout-return?status=portal_return`;
       const session = await getStripe().billingPortal.sessions.create({
-        customer:   rows[0].customer_id,
+        customer:   customerId,
         return_url: returnUrl,
       });
 
       res.json({ portalUrl: session.url });
     } catch (err) {
+      // Stripe customer was deleted (dashboard deletion or missed customer.deleted webhook).
+      // Clean up the stale reference so the next checkout creates a fresh customer.
+      if (err?.code === 'resource_missing' && customerId) {
+        const now = Date.now();
+        await getPool().query(
+          'DELETE FROM stripe_customers WHERE customer_id = $1',
+          [customerId]
+        ).catch(() => {});
+        // Also cancel any stale active/trialing/past_due Stripe subscriptions tied to
+        // this customer. Without this, hasAccess() still returns true on the next
+        // /billing/subscription call, so the dashboard re-renders Manage instead of
+        // Subscribe — creating an infinite loop.
+        await getPool().query(
+          `UPDATE subscriptions
+           SET status = 'canceled', canceled_at = $2, updated_at = $2
+           WHERE stripe_customer_id = $1 AND provider = 'stripe'
+             AND status IN ('active', 'trialing', 'past_due')`,
+          [customerId, now]
+        ).catch(() => {});
+        console.log('[billing] portal-session: removed stale stripe_customers row and canceled subscriptions for', customerId);
+        return res.status(404).json({ error: 'customer_not_found' });
+      }
       console.error('[billing] portal-session error:', err);
       res.status(500).json({ error: 'Failed to create portal session' });
     }
@@ -1107,4 +1176,6 @@ module.exports = {
   isSandboxAllowed,
   _setRcVerifyFetchForTest,
   _clearRcVerifyFetchForTest,
+  _setStripeForTest,
+  _clearStripeForTest,
 };

@@ -991,12 +991,12 @@ Run: `node --test website/billing/test/smoke.test.js`
 
 ## Testing
 
-### Backend (569 tests)
+### Backend (615 tests)
 
 ```bash
 cd server
 npm test
-# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js test/meta-callbacks.test.js test/cors.test.js test/web-billing.test.js test/password-reset.test.js
+# node --test test/db.test.js test/auth.test.js test/platforms.test.js test/facebook.test.js test/instagram.test.js test/threads.test.js test/media-utils.test.js test/generation.test.js test/account-isolation.test.js test/wordpress.test.js test/billing.test.js test/google.test.js test/free-publication.test.js test/analytics.test.js test/device.test.js test/security.test.js test/settings.test.js test/testmode.test.js test/meta-callbacks.test.js test/revenuecat.test.js test/rc-sandbox.test.js test/subscription-recovery.test.js
 ```
 
 Tests use `pg-mem` (in-memory PostgreSQL emulation) via `server/test/helpers.js → setupFreshTestDb()`. Each test gets a completely fresh, isolated in-memory database with migrations pre-applied. No real PostgreSQL server or `.env` file is required to run tests.
