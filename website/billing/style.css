@@ -615,6 +615,12 @@ input:disabled {
   line-height: 1.5;
 }
 
+.app-download-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 .app-downloads {
   display: flex;
   gap: 10px;

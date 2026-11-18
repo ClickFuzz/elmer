@@ -36,17 +36,7 @@
     <!-- Stripe return banner (success / cancel / portal_return) -->
     <div id="returnBanner" class="alert alert-hidden" role="status"></div>
 
-    <!-- Active subscription download card (shown only when hasAccess is true) -->
-    <div id="downloadSection" class="download-card hidden">
-      <div class="download-card-header">
-        <div class="download-card-check">✓</div>
-        <div class="download-card-title">Your subscription is active!</div>
-      </div>
-      <p class="download-card-desc">Download Elmer to start creating and publishing your social media posts.</p>
-      <div id="downloadBtnContainer" class="download-btn-container"></div>
-    </div>
-
-    <!-- App info (always visible) -->
+    <!-- App info + active subscription download (download shown only when hasAccess is true) -->
     <div class="section">
       <div class="app-info-top">
         <img src="icon.png" alt="Elmer app icon" class="app-icon">
@@ -54,6 +44,15 @@
           <div class="app-info-name">elmer<span class="wordmark-period">.</span></div>
           <p class="app-info-desc">Capture a job, generate content, and publish to all your platforms.</p>
         </div>
+      </div>
+
+      <div id="downloadSection" class="app-download-section hidden">
+        <div class="download-card-header">
+          <div class="download-card-check">✓</div>
+          <div class="download-card-title">Your subscription is active!</div>
+        </div>
+        <p class="download-card-desc">Download Elmer to start creating and publishing your social media posts.</p>
+        <div id="downloadBtnContainer" class="download-btn-container"></div>
       </div>
     </div>
 
