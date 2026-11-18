@@ -1011,6 +1011,84 @@ Validates file presence, JS syntax, cross-file script/stylesheet references, req
 
 ---
 
+## iOS Build System (GitHub Actions)
+
+GitHub Actions is the **preferred iOS build method for Elmer**. It runs a local EAS build on a macOS runner, consuming no Expo EAS cloud build credits.
+
+> **Do not initiate an EAS cloud build (`eas build` without `--local`) without explicit user approval.** Monthly EAS cloud build credits are limited.
+
+### Workflow file
+
+`.github/workflows/ios-build.yml` — manual trigger only (`workflow_dispatch`).
+
+### How to trigger a build
+
+1. Go to the [Actions tab](https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml)
+2. Click **"iOS Build and Submit to TestFlight"**
+3. Click **Run workflow** → select branch `main` → click **Run workflow**
+
+Optionally fill in the "Release notes" field — it is not used programmatically.
+
+### Required secrets
+
+| Secret | Where to set |
+|---|---|
+| `EXPO_TOKEN` | Repo → Settings → Secrets and variables → Actions |
+
+No other secrets are needed. Signing credentials are pulled from EAS at build time using `EXPO_TOKEN`.
+
+### Build command (exact, as run in CI)
+
+```bash
+eas build --local --platform ios --profile github --non-interactive --output ./elmer.ipa
+```
+
+**`--local` is mandatory.** Omitting it triggers an EAS cloud build and consumes monthly build credits.
+
+### EAS profile (`github` in `eas.json`)
+
+```json
+"github": {
+  "extends": "production",
+  "credentialsSource": "remote"
+}
+```
+
+`credentialsSource: remote` — distribution certificate and provisioning profile are pulled from EAS servers at build time via `EXPO_TOKEN`. No local Keychain, no `.p12` files, no manual certificate management needed on the runner.
+
+### TestFlight submission command (runs after build)
+
+```bash
+eas submit --platform ios --profile production --path ./elmer.ipa --non-interactive
+```
+
+Submission goes through EAS servers → App Store Connect. Apple's processing time varies; expect 10–80 minutes for the submission step.
+
+### IPA artifact
+
+The built IPA is uploaded as a GitHub Actions artifact named `elmer-ios-{run_number}` and retained for 7 days. If submission fails, the artifact can be downloaded and resubmitted without rebuilding.
+
+### Monitoring
+
+Live run status: https://github.com/ClickFuzz/elmer/actions/workflows/ios-build.yml
+
+### Known annotation (non-blocking)
+
+> Node.js 20 is deprecated. GitHub forces these actions to run on Node.js 24 anyway — no action required.
+
+### Verified test
+
+| Field | Value |
+|---|---|
+| Date | 2026-11-18 |
+| Run | https://github.com/ClickFuzz/elmer/actions/runs/44378112196 |
+| Duration | 1h 22m 47s |
+| Build result | ✓ All steps passed |
+| TestFlight submission | ✓ Succeeded |
+| EAS cloud credits consumed | None (`--local` flag used) |
+
+---
+
 ## Railway Deployment
 
 ### Architecture on Railway
