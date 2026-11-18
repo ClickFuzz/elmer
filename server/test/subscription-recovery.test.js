@@ -929,3 +929,157 @@ describe('Missing stripe_customers row + stale active subscription (production g
       'stale Stripe subscription should be canceled');
   });
 });
+
+// ── 10. GET /billing/subscription auto-reconcile on page load ──────────────────
+//
+// Design correction: stale Stripe subscriptions should be reconciled automatically
+// on page load (GET /billing/subscription), not click-triggered.
+// If a user has an active/trialing/past_due Stripe subscription but no
+// stripe_customers row, the Stripe customer was deleted without us receiving the
+// webhook. Cancel those rows immediately so the dashboard shows Subscribe Again.
+//
+// This covers the exact production scenario for clgsplace@gmail.com and
+// joe@homesincda.com: status='active', current_period_end past, no stripe_customers.
+
+describe('GET /billing/subscription — auto-reconcile stale Stripe subscription on page load', () => {
+  it('auto-cancels a stale active Stripe subscription when stripe_customers row is absent', async () => {
+    const token  = await register('autoreconcile@example.com');
+    const userId = await getUserId('autoreconcile@example.com');
+
+    // Stale state: active subscription, NO stripe_customers row.
+    await seedSubscription(userId, 'cus_autoreconcile', { status: 'active' });
+    assert.strictEqual(await getStripeCustomerRow(userId), null, 'no stripe_customers row');
+
+    const res = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.hasAccess, false,
+      'stale Stripe sub must be auto-canceled → hasAccess false');
+    assert.strictEqual(res.body.subscription?.status, 'canceled');
+  });
+
+  it('auto-reconcile also applies to stale trialing subscriptions', async () => {
+    const token  = await register('autoreconcile_trial@example.com');
+    const userId = await getUserId('autoreconcile_trial@example.com');
+
+    await seedSubscription(userId, 'cus_trial_stale', { status: 'trialing' });
+
+    const res = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.hasAccess, false);
+    assert.strictEqual(res.body.subscription?.status, 'canceled');
+  });
+
+  it('auto-reconcile does NOT fire when stripe_customers row is present', async () => {
+    const token  = await register('autoreconcile_valid@example.com');
+    const userId = await getUserId('autoreconcile_valid@example.com');
+
+    await seedStripeCustomer(userId, 'cus_valid_present');
+    await seedSubscription(userId, 'cus_valid_present', { status: 'active' });
+
+    const res = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.hasAccess, true,
+      'subscription must remain active when stripe_customers row is present');
+    assert.strictEqual(res.body.subscription?.status, 'active');
+  });
+
+  it('auto-reconcile does NOT cancel Apple/Google subscriptions', async () => {
+    const token  = await register('autoreconcile_apple@example.com');
+    const userId = await getUserId('autoreconcile_apple@example.com');
+    const now    = Date.now();
+
+    // Active Apple subscription, no Stripe rows, no stripe_customers row.
+    await getPool().query(
+      `INSERT INTO subscriptions
+         (user_id, provider, provider_subscription_id, status,
+          current_period_start, current_period_end, trial_used, created_at, updated_at)
+       VALUES ($1,'apple','apple_autoreconcile_sub','active',$2,$3,true,$4,$4)`,
+      [userId, now, now + 30 * 24 * 60 * 60 * 1000, now]
+    );
+
+    const res = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.hasAccess, true, 'Apple subscription should grant access');
+    assert.strictEqual(res.body.subscription?.status, 'active');
+    assert.strictEqual(res.body.subscription?.provider, 'apple');
+  });
+
+  it('auto-reconcile cancels stale Stripe row but preserves concurrent active Apple row', async () => {
+    const token  = await register('autoreconcile_dual@example.com');
+    const userId = await getUserId('autoreconcile_dual@example.com');
+    const now    = Date.now();
+
+    // Stale Stripe sub: no stripe_customers row
+    await seedSubscription(userId, 'cus_stale_dual', { status: 'active', provider: 'stripe' });
+    // Valid Apple sub (concurrent — V15 allows multiple rows per user)
+    await getPool().query(
+      `INSERT INTO subscriptions
+         (user_id, provider, provider_subscription_id, status,
+          current_period_start, current_period_end, trial_used, created_at, updated_at)
+       VALUES ($1,'apple','apple_dual_sub','active',$2,$3,false,$4,$4)`,
+      [userId, now, now + 30 * 24 * 60 * 60 * 1000, now]
+    );
+
+    const res = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.hasAccess, true, 'Apple sub should still grant access');
+    assert.strictEqual(res.body.subscription?.provider, 'apple');
+
+    const { rows } = await getPool().query(
+      'SELECT status, provider FROM subscriptions WHERE user_id = $1 ORDER BY provider',
+      [userId]
+    );
+    const appleRow  = rows.find(r => r.provider === 'apple');
+    const stripeRow = rows.find(r => r.provider === 'stripe');
+    assert.strictEqual(appleRow?.status,  'active',   'Apple row must remain active');
+    assert.strictEqual(stripeRow?.status, 'canceled', 'stale Stripe row must be canceled');
+  });
+
+  it('after auto-reconcile, checkout-session opens without an active_subscription_exists error', async () => {
+    const token  = await register('autoreconcile_checkout@example.com');
+    const userId = await getUserId('autoreconcile_checkout@example.com');
+
+    // Stale Stripe sub, no customer row
+    await seedSubscription(userId, 'cus_stale_checkout2', { status: 'active' });
+
+    // Page load reconciles the subscription
+    await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    // Subscription is now canceled — checkout must be allowed
+    _setStripeForTest({
+      customers: { create: async () => ({ id: 'cus_fresh_ar' }) },
+      checkout: {
+        sessions: {
+          create: async () => ({ url: 'https://checkout.stripe.com/fake_ar', id: 'cs_ar' }),
+        },
+      },
+    });
+
+    const checkoutRes = await request(app)
+      .post('/billing/checkout-session')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source: 'web' });
+
+    assert.notStrictEqual(checkoutRes.status, 409,
+      'canceled subscription must not block new checkout');
+    assert.strictEqual(checkoutRes.status, 200);
+    assert.ok(checkoutRes.body.checkoutUrl);
+  });
+});

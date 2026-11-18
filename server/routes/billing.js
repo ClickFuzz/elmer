@@ -825,13 +825,58 @@ function createBillingRouter() {
   // GET /billing/subscription — current subscription status for authenticated user
   router.get('/subscription', requireAuth, async (req, res) => {
     try {
-      const { rows } = await getPool().query(
+      let { rows } = await getPool().query(
         `SELECT status, current_period_start, current_period_end,
                 trial_start, trial_end, cancel_at_period_end,
                 cancel_at, canceled_at, trial_used, provider
          FROM subscriptions WHERE user_id = $1`,
         [req.userId]
       );
+
+      // Auto-reconcile stale Stripe subscriptions on page load.
+      // If any Stripe rows show active/trialing but the user has no stripe_customers
+      // row, the Stripe customer was deleted without us receiving the customer.deleted
+      // webhook. Cancel them immediately so the dashboard shows Subscribe Again without
+      // requiring the user to click anything.
+      //
+      // Only active/trialing are targeted — not past_due — because hasAccess() already
+      // enforces the grace-period date check for past_due rows; auto-canceling past_due
+      // would remove legitimate grace-period access.
+      //
+      // Uses (provider = 'stripe' OR provider IS NULL) so rows from before the V14
+      // multi-provider migration (which left provider = NULL on some instances due to
+      // a silent DDL failure in V14's broad try/catch) are caught alongside correctly-
+      // migrated rows.
+      const hasStaleStripe = rows.some(r =>
+        (r.provider === 'stripe' || r.provider == null) &&
+        (r.status === 'active' || r.status === 'trialing')
+      );
+      if (hasStaleStripe) {
+        const { rows: scRows } = await getPool().query(
+          'SELECT 1 FROM stripe_customers WHERE user_id = $1',
+          [req.userId]
+        );
+        if (scRows.length === 0) {
+          const now = Date.now();
+          await getPool().query(
+            `UPDATE subscriptions
+             SET status = 'canceled', canceled_at = $2, updated_at = $2
+             WHERE user_id = $1
+               AND (provider = 'stripe' OR provider IS NULL)
+               AND status IN ('active', 'trialing')`,
+            [req.userId, now]
+          );
+          // Re-fetch so the rest of this handler returns the corrected state.
+          ({ rows } = await getPool().query(
+            `SELECT status, current_period_start, current_period_end,
+                    trial_start, trial_end, cancel_at_period_end,
+                    cancel_at, canceled_at, trial_used, provider
+             FROM subscriptions WHERE user_id = $1`,
+            [req.userId]
+          ));
+          console.log('[billing] auto-reconciled stale Stripe subscription for user', req.userId);
+        }
+      }
 
       // Pick the best display row: active > trialing > past_due > anything else
       const statusPriority = { active: 0, trialing: 1, past_due: 2 };
@@ -1025,7 +1070,8 @@ function createBillingRouter() {
         await getPool().query(
           `UPDATE subscriptions
            SET status = 'canceled', canceled_at = $2, updated_at = $2
-           WHERE user_id = $1 AND provider = 'stripe'
+           WHERE user_id = $1
+             AND (provider = 'stripe' OR provider IS NULL)
              AND status IN ('active', 'trialing', 'past_due')`,
           [req.userId, now]
         ).catch(() => {});
@@ -1054,16 +1100,22 @@ function createBillingRouter() {
           'DELETE FROM stripe_customers WHERE customer_id = $1',
           [customerId]
         ).catch(() => {});
-        // Also cancel any stale active/trialing/past_due Stripe subscriptions tied to
-        // this customer. Without this, hasAccess() still returns true on the next
+        // Also cancel any stale active/trialing/past_due Stripe subscriptions for
+        // this user. Without this, hasAccess() still returns true on the next
         // /billing/subscription call, so the dashboard re-renders Manage instead of
         // Subscribe — creating an infinite loop.
+        // Use user_id (not stripe_customer_id) because stripe_customer_id may differ
+        // from the stripe_customers row or be NULL on pre-V14 rows; requireAuth already
+        // scoped this request to req.userId so user_id is the safe, reliable key.
+        // (provider = 'stripe' OR provider IS NULL) catches rows from before the V14
+        // multi-provider migration where the column was added but left NULL on some instances.
         await getPool().query(
           `UPDATE subscriptions
-           SET status = 'canceled', canceled_at = $2, updated_at = $2
-           WHERE stripe_customer_id = $1 AND provider = 'stripe'
+           SET status = 'canceled', canceled_at = $1, updated_at = $1
+           WHERE user_id = $2
+             AND (provider = 'stripe' OR provider IS NULL)
              AND status IN ('active', 'trialing', 'past_due')`,
-          [customerId, now]
+          [now, req.userId]
         ).catch(() => {});
         console.log('[billing] portal-session: removed stale stripe_customers row and canceled subscriptions for', customerId);
         return res.status(404).json({ error: 'customer_not_found' });
