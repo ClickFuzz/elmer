@@ -238,8 +238,9 @@ describe('POST /billing/portal-session', () => {
     assert.strictEqual(res.status, 503);
   });
 
-  it('returns 404 when no billing account exists for user', async () => {
-    // Set STRIPE_SECRET_KEY temporarily (even an invalid one) so we pass the key check
+  it('returns 404 customer_not_found when no billing account exists for user', async () => {
+    // After the gap fix, a missing stripe_customers row returns customer_not_found
+    // (not no_billing_account) so the frontend reloads and shows Subscribe Again.
     const origKey = process.env.STRIPE_SECRET_KEY;
     process.env.STRIPE_SECRET_KEY = 'sk_test_fake';
     try {
@@ -247,9 +248,8 @@ describe('POST /billing/portal-session', () => {
       const res   = await request(app)
         .post('/billing/portal-session')
         .set('Authorization', `Bearer ${token}`);
-      // No stripe_customer row → 404 before Stripe API call
       assert.strictEqual(res.status, 404);
-      assert.strictEqual(res.body.error, 'no_billing_account');
+      assert.strictEqual(res.body.error, 'customer_not_found');
     } finally {
       if (origKey === undefined) delete process.env.STRIPE_SECRET_KEY;
       else process.env.STRIPE_SECRET_KEY = origKey;

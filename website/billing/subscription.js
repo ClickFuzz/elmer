@@ -319,9 +319,10 @@ function wireButtons() {
         const data = await res.json();
 
         if (res.status === 404) {
-          if (data.error === 'customer_not_found') {
-            // Stripe customer was deleted. The stale reference has been cleared.
-            // Reload the dashboard — it will now show the "Subscribe Again" button.
+          if (data.error === 'customer_not_found' || data.error === 'no_billing_account') {
+            // Stripe customer is deleted or was never created. Any stale subscription
+            // has been reconciled server-side. Reload the dashboard — it will now
+            // show Subscribe Again instead of staying stuck on Manage billing.
             await loadSubscription(null);
             return;
           }

@@ -636,14 +636,25 @@ async function handleWebhookEvent(event) {
     case 'customer.deleted': {
       // Stripe customer was deleted from the dashboard. Remove the stale mapping so
       // that the next checkout creates a fresh customer for the same Elmer user.
-      // Note: Stripe cancels all active subscriptions before firing this event, so
-      // customer.subscription.deleted should already have updated the subscriptions table.
+      // Also cancel any active Stripe subscriptions for this customer. Stripe fires
+      // customer.subscription.deleted separately, but if that event is not enabled
+      // on the webhook endpoint the subscription row would stay active indefinitely,
+      // causing portal-session to return no_billing_account and the dashboard to
+      // remain stuck on "Active / Manage billing" rather than showing Subscribe Again.
       const customer = event.data.object;
+      const now = Date.now();
       await getPool().query(
         'DELETE FROM stripe_customers WHERE customer_id = $1',
         [customer.id]
       );
-      console.log('[billing] customer.deleted: removed stripe_customers row for', customer.id);
+      await getPool().query(
+        `UPDATE subscriptions
+         SET status = 'canceled', canceled_at = $2, updated_at = $2
+         WHERE stripe_customer_id = $1 AND provider = 'stripe'
+           AND status IN ('active', 'trialing', 'past_due')`,
+        [customer.id, now]
+      ).catch(() => {});
+      console.log('[billing] customer.deleted: removed stripe_customers row and reconciled subscriptions for', customer.id);
       break;
     }
 
@@ -1004,7 +1015,21 @@ function createBillingRouter() {
         [req.userId]
       );
       if (rows.length === 0) {
-        return res.status(404).json({ error: 'no_billing_account' });
+        // stripe_customers row is gone — customer was deleted (or never created).
+        // Any Stripe subscription rows still showing active/trialing/past_due are
+        // stale. Cancel them so the next GET /billing/subscription returns
+        // hasAccess=false and the dashboard shows Subscribe instead of Manage.
+        // Return customer_not_found (not no_billing_account) so the frontend
+        // calls loadSubscription() and re-renders immediately.
+        const now = Date.now();
+        await getPool().query(
+          `UPDATE subscriptions
+           SET status = 'canceled', canceled_at = $2, updated_at = $2
+           WHERE user_id = $1 AND provider = 'stripe'
+             AND status IN ('active', 'trialing', 'past_due')`,
+          [req.userId, now]
+        ).catch(() => {});
+        return res.status(404).json({ error: 'customer_not_found' });
       }
 
       customerId = rows[0].customer_id;

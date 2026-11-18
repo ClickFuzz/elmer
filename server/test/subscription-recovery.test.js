@@ -220,12 +220,10 @@ describe('POST /billing/portal-session — deleted customer', () => {
     assert.strictEqual(row, null, 'stale stripe_customers row should be removed');
   });
 
-  it('returns 404 no_billing_account when user has no stripe_customers row', async () => {
+  it('returns 404 customer_not_found when user has no stripe_customers row (gap fix)', async () => {
+    // After the gap fix, a missing stripe_customers row returns customer_not_found
+    // (not no_billing_account) so the frontend calls loadSubscription() and re-renders.
     const token = await register('portal_no_cust@example.com');
-
-    _setStripeForTest({
-      billingPortal: { sessions: { create: async () => ({ url: 'https://portal.stripe.com/' }) } },
-    });
 
     const res = await request(app)
       .post('/billing/portal-session')
@@ -233,7 +231,7 @@ describe('POST /billing/portal-session — deleted customer', () => {
       .send({ source: 'web' });
 
     assert.strictEqual(res.status, 404);
-    assert.strictEqual(res.body.error, 'no_billing_account');
+    assert.strictEqual(res.body.error, 'customer_not_found');
   });
 
   it('returns portalUrl on success', async () => {
@@ -795,5 +793,139 @@ describe('Stale active subscription loop prevention', () => {
     assert.notStrictEqual(checkoutRes.status, 409, 'canceled subscription must not block checkout');
     assert.strictEqual(checkoutRes.status, 200, 'fresh checkout should succeed');
     assert.ok(checkoutRes.body.checkoutUrl, 'checkoutUrl must be present');
+  });
+});
+
+// ── 9. Missing stripe_customers row with stale active subscription (the gap) ───
+//
+// Scenario: Stripe customer was deleted → customer.deleted webhook handler
+// removed the stripe_customers row BUT did not cancel the subscription row
+// (because the old handler relied on customer.subscription.deleted).
+// Now portal-session hits the rows.length === 0 early-exit path.
+// Without the fix this returned no_billing_account without touching the
+// subscription, leaving the dashboard permanently stuck on Active/Manage.
+
+describe('Missing stripe_customers row + stale active subscription (production gap)', () => {
+  it('portal-session reconciles stale subscription and returns customer_not_found when stripe_customers row is missing', async () => {
+    const token  = await register('gap_test@example.com');
+    const userId = await getUserId('gap_test@example.com');
+    const cusId  = 'cus_gap_deleted';
+
+    // Seed only a subscription row — no stripe_customers row (simulates customer.deleted
+    // webhook ran and deleted the row but did not cancel the subscription).
+    await seedSubscription(userId, cusId, { status: 'active' });
+    // Confirm no stripe_customers row exists.
+    const preCustomer = await getStripeCustomerRow(userId);
+    assert.strictEqual(preCustomer, null, 'stripe_customers row should be absent');
+
+    // Confirm the subscription is active before the fix fires.
+    const { rows: preRows } = await getPool().query(
+      'SELECT status FROM subscriptions WHERE user_id = $1', [userId]
+    );
+    assert.strictEqual(preRows[0].status, 'active', 'subscription should be active before fix');
+
+    // No Stripe mock needed — the route should not reach the Stripe API.
+    const res = await request(app)
+      .post('/billing/portal-session')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source: 'web' });
+
+    assert.strictEqual(res.status, 404, 'should return 404');
+    assert.strictEqual(res.body.error, 'customer_not_found',
+      'should return customer_not_found (not no_billing_account) so frontend reloads');
+
+    // Subscription row must now be canceled.
+    const { rows: postRows } = await getPool().query(
+      'SELECT status FROM subscriptions WHERE user_id = $1', [userId]
+    );
+    assert.strictEqual(postRows[0].status, 'canceled',
+      'stale active subscription should be canceled by portal-session fix');
+  });
+
+  it('after reconciliation, GET /billing/subscription returns hasAccess=false (Subscribe Again)', async () => {
+    const token  = await register('gap_reload@example.com');
+    const userId = await getUserId('gap_reload@example.com');
+    const cusId  = 'cus_gap_reload';
+
+    // Stale state: active subscription, no stripe_customers row.
+    await seedSubscription(userId, cusId, { status: 'active' });
+
+    // Trigger portal-session to reconcile.
+    await request(app)
+      .post('/billing/portal-session')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source: 'web' });
+
+    // Simulate frontend reloading subscription state.
+    const subRes = await request(app)
+      .get('/billing/subscription')
+      .set('Authorization', `Bearer ${token}`);
+
+    assert.strictEqual(subRes.status, 200);
+    assert.strictEqual(subRes.body.hasAccess, false,
+      'hasAccess must be false after reconciliation — dashboard should show Subscribe Again');
+    assert.strictEqual(subRes.body.subscription?.status, 'canceled');
+  });
+
+  it('customer.deleted webhook now also cancels stale subscriptions', async () => {
+    const token  = await register('webhook_cancel@example.com');
+    const userId = await getUserId('webhook_cancel@example.com');
+    const cusId  = 'cus_webhook_cancel';
+
+    await seedStripeCustomer(userId, cusId);
+    await seedSubscription(userId, cusId, { status: 'active' });
+
+    // Fire customer.deleted — previously only deleted stripe_customers, left subscription active.
+    await handleWebhookEvent({
+      id:   'evt_customer_deleted_cancel',
+      type: 'customer.deleted',
+      data: { object: { id: cusId } },
+    });
+
+    // stripe_customers row must be gone.
+    const customerRow = await getStripeCustomerRow(userId);
+    assert.strictEqual(customerRow, null, 'stripe_customers row should be removed');
+
+    // Subscription must now be canceled — no longer reliant on customer.subscription.deleted.
+    const { rows } = await getPool().query(
+      'SELECT status FROM subscriptions WHERE user_id = $1', [userId]
+    );
+    assert.strictEqual(rows[0].status, 'canceled',
+      'subscription should be canceled by customer.deleted webhook (not waiting for subscription.deleted)');
+  });
+
+  it('Apple/Google subscriptions are NOT canceled by portal-session stripe_customers gap fix', async () => {
+    const token  = await register('gap_apple@example.com');
+    const userId = await getUserId('gap_apple@example.com');
+    const now    = Date.now();
+
+    // Stale Stripe subscription with no stripe_customers row.
+    await seedSubscription(userId, 'cus_gap_apple', { status: 'active', provider: 'stripe' });
+    // Active Apple subscription (should be untouched).
+    await seedSubscription(userId, null, {
+      provider:                 'apple',
+      provider_subscription_id: 'apple_sub_123',
+      stripe_subscription_id:   null,
+      stripe_customer_id:       null,
+      status:                   'active',
+      current_period_end:       now + 30 * 24 * 60 * 60 * 1000,
+    });
+
+    await request(app)
+      .post('/billing/portal-session')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ source: 'web' });
+
+    const { rows } = await getPool().query(
+      'SELECT status, provider FROM subscriptions WHERE user_id = $1 ORDER BY provider',
+      [userId]
+    );
+    const apple  = rows.find(r => r.provider === 'apple');
+    const stripe = rows.find(r => r.provider === 'stripe');
+
+    assert.strictEqual(apple?.status, 'active',
+      'Apple subscription must NOT be canceled by the Stripe gap fix');
+    assert.strictEqual(stripe?.status, 'canceled',
+      'stale Stripe subscription should be canceled');
   });
 });
